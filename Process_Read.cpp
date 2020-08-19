@@ -36,6 +36,11 @@ void init_All_reads(All_reads* r)
 	r->name_index_size = READ_INIT_NUMBER;
 	r->name_index = (uint64_t*)malloc(sizeof(uint64_t)*r->name_index_size);
 	r->name_index[0] = 0;
+	// meta
+	r->mean = (double*)calloc(r->index_size, sizeof(double));
+	r->std = (double*)calloc(r->index_size, sizeof(double));
+	r->mask_readnorm = (uint8_t*)calloc(r->index_size, sizeof(uint8_t));
+	r->mask_readtype = (uint8_t*)calloc(r->index_size, sizeof(uint8_t));
 }
 
 void destory_All_reads(All_reads* r)
@@ -55,6 +60,11 @@ void destory_All_reads(All_reads* r)
 	free(r->name_index);
 	free(r->read_length);
 	free(r->trio_flag);
+	// meta
+	free(r->mean);
+	free(r->std);
+	free(r->mask_readnorm);
+	free(r->mask_readtype);
 }
 
 void write_All_reads(All_reads* r, char* read_file_name)
@@ -241,6 +251,11 @@ void ha_insert_read_len(All_reads *r, int read_len, int name_len)
 		r->read_length = (uint64_t*)realloc(r->read_length, sizeof(uint64_t) * r->index_size);
 		r->name_index_size = r->name_index_size * 2 + 2;
 		r->name_index = (uint64_t*)realloc(r->name_index, sizeof(uint64_t) * r->name_index_size);
+		// meta
+		r->mean = (double*)realloc(r->mean, sizeof(double)*r->index_size);
+		r->std = (double*)realloc(r->std, sizeof(double)*r->index_size);
+		r->mask_readnorm = (uint8_t*)realloc(r->std, sizeof(uint8_t)*r->index_size);
+		r->mask_readtype = (uint8_t*)realloc(r->std, sizeof(uint8_t)*r->index_size);
 	}
 
 	r->read_length[r->total_reads - 1] = read_len;

@@ -9,6 +9,9 @@
 #include "kseq.h"
 #include "ksort.h"
 #include "htab.h"
+#include "meta_util.h"
+#define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
+#include <inttypes.h>  // debug, for printing uint64
 
 #define YAK_COUNTER_BITS 12
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS)
@@ -836,4 +839,209 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> indexed %ld positions\n", __func__,
 			yak_realtime(), yak_cpu_usage(), (long)pt->tot_pos);
 	return pt;
+}
+
+
+//////////////////////////////////////////////////////////////////////
+//                      meta
+//////////////////////////////////////////////////////////////////////
+KRADIX_SORT_INIT(hamt64, uint64_t, uint64_t, 8)  // sort read's kmer count profile
+
+typedef struct {  // global data structure for pipeline (pl_data_t)
+	yak_copt_t *opt;
+	uint64_t *n_seq;
+	All_reads *rs_in;
+	All_reads *rs_out;
+	UC_Read ucr;
+	kseq_t *ks;
+	ha_ct_t *h;  // counted kmer tables
+	uint16_t *buf;  // yak_ct_t use 12 bits for counting
+	// int flag, create_new, is_store;
+}plmt_data_t;
+
+typedef struct {  // step data structure (st_data_t)
+	plmt_data_t* p;
+	uint64_t n_seq0;
+	int n_seq, m_seq, sum_len, nk;
+	int *len;
+	char **seq;
+}pltmt_step_t;
+
+
+void mark_one_read(All_reads *rs, uint64_t rid, int k, int len, const char *seq, uint16_t *buf, ha_ct_t *h)
+{
+	uint32_t idx = 0;  // index of kmer count in the buffer
+	khint_t key;
+	int i, l;
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < len; ++i) {
+		int c = seq_nt4_table[(uint8_t)seq[i]];
+		if (c < 4) { // not an "N" base
+			x[0] = (x[0] << 1 | (c&1))  & mask;
+			x[1] = (x[1] << 1 | (c>>1)) & mask;
+			x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+			x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+			if (++l >= k){
+					uint64_t hash = yak_hash_long(x);
+					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
+					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS | 1);
+					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+					else buf[idx] = 0;
+					idx++;
+				}
+		} else l = 0, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+	double mean = meanl(buf, idx);
+	double std = stdl(buf, idx, mean);
+	int code = decide_category(mean, std, buf, idx);
+	rs->mask_readtype[rid] = code;
+}
+
+
+void mark_one_read_HPC(All_reads *rs, uint64_t rid, int k, int len, const char *seq, uint16_t *buf, ha_ct_t *h)
+{
+	uint32_t idx = 0;  // index of kmer count in the buffer
+	khint_t key;
+	int i, l, last = -1;
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < len; ++i) {
+		int c = seq_nt4_table[(uint8_t)seq[i]];
+		if (c < 4) { // not an "N" base
+			if (c != last) {
+				x[0] = (x[0] << 1 | (c&1))  & mask;
+				x[1] = (x[1] << 1 | (c>>1)) & mask;
+				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+				if (++l >= k){
+					uint64_t hash = yak_hash_long(x);
+					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
+					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS);
+					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+					else buf[idx] = 0;
+					idx++;
+				}
+				last = c;
+			}
+		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+
+	double mean = meanl(buf, idx);
+	double std = stdl(buf, idx, mean);
+	int code = decide_category(mean, std, buf, idx);
+	/* debug */
+	printf("debug rid:%" PRIu16 "\t", rid);
+	for (uint32_t i=0; i<idx; i++){
+		printf("%d,", buf[i]);
+	}
+	printf("\t%d\n", code);
+	/****************/
+	rs->mask_readtype[rid] = code;
+}
+
+static void *worker_mark_reads(void *data, int step, void *in){  // callback of kt_pipeline
+	plmt_data_t *p = (plmt_data_t*)data;
+	if (step==0){ // step 1: read a block of sequences
+		int ret;
+		pltmt_step_t *s;
+		CALLOC(s, 1);
+		s->p = p;
+		s->n_seq0 = (int)*p->n_seq;
+		while ((ret = kseq_read(p->ks)) >= 0) {
+			int l = p->ks->seq.l;
+			if (*p->n_seq >= 1<<28) {
+				fprintf(stderr, "ERROR: this implementation supports no more than %d reads\n", 1<<28);
+				exit(1);
+			}
+			if (p->rs_out) {
+				assert(*p->n_seq == p->rs_out->total_reads);
+				ha_insert_read_len(p->rs_out, l, p->ks->name.l);
+			}
+			if (s->n_seq == s->m_seq) {
+				s->m_seq = s->m_seq < 16? 16 : s->m_seq + (s->m_seq>>1);
+				REALLOC(s->len, s->m_seq);
+				REALLOC(s->seq, s->m_seq);
+			}
+			MALLOC(s->seq[s->n_seq], l);
+			memcpy(s->seq[s->n_seq], p->ks->seq.s, l);
+			s->len[s->n_seq++] = l;
+			*p->n_seq+=1;
+			s->sum_len += l;
+			s->nk += l >= p->opt->k? l - p->opt->k + 1 : 0;
+			if (s->sum_len >= p->opt->chunk_size){
+				break;
+			}
+		}
+		if (s->sum_len == 0) free(s);
+		else return s;
+	}else if (step==1){  // step2: get kmer profile of each read && mark their status (mask_readtype and mask_readnorm)
+		// readID is s->n_seq0+i
+		pltmt_step_t *s = (pltmt_step_t*)in;
+		int i, n_pre = 1<<p->opt->pre, m;
+		uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*50000);
+		if (!buf) {printf("[error::%s] malloc failed.\n", __func__); exit(1);}
+		// kt_for(p->opt->n_thread, )  // TODO
+		for (i=0; i<s->n_seq; i++){
+			if (p->opt->is_HPC) mark_one_read_HPC(s->p->rs_in, s->n_seq0+i, s->p->opt->k, s->len[i], s->seq[i], buf, s->p->h);
+			else mark_one_read(s->p->rs_in, s->n_seq0+i, s->p->opt->k, s->len[i], s->seq[i], buf, s->p->h);
+			free(s->seq[i]);
+		}
+		free(buf);
+		free(s);
+		return NULL;
+	}
+	return NULL;
+}
+
+void hamt_mark0(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h){
+	init_All_reads(rs);  // reset 
+	int i;
+	uint64_t n_seq = 0;
+	yak_copt_t opt;
+	yak_copt_init(&opt);
+	opt.k = asm_opt->k_mer_length;
+	opt.is_HPC = !(asm_opt->flag&HA_F_NO_HPC);
+	opt.n_thread = asm_opt->thread_num;
+	plmt_data_t plmt;
+	for (i = 0; i < asm_opt->num_reads; ++i){
+		memset(&plmt, 0, sizeof(plmt_data_t));
+		plmt.n_seq = &n_seq;
+		plmt.opt = &opt;
+		plmt.h = h;
+		plmt.rs_in = rs;
+		plmt.rs_out = rs;
+		gzFile fp = 0;
+		if ((fp = gzopen(asm_opt->read_file_names[i], "r")) == 0) {
+			printf("[error::%s] can't open file %s. Abort.\n", __func__, asm_opt->read_file_names[i]);
+			exit(1);
+		}
+		plmt.ks = kseq_init(fp);
+		init_UC_Read(&plmt.ucr);
+		kt_pipeline(2, worker_mark_reads, &plmt, 2);
+	}
+	// printf("n_seq is ");
+	// printf("%" PRIu64 "\n", n_seq);
+	// // debug print
+	// for (uint64_t i=0;i<n_seq; i++){
+	// 	printf("%" PRIu64 "\t", i);
+	// 	printf("%f\t", rs->mean[i]);
+	// 	printf("%f\t%d\n", rs->std[i], rs->mask_readtype[i]);
+	// }
+	
+}
+
+void *hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude){
+    // is_crude: be (not) aware to freq distribution on the read; might override cov (if the overall coverage is too low)
+	
+	// collect kmers frequencies
+	int64_t cnt[YAK_N_COUNTS];
+	ha_ct_t *h;
+	int peak_het;  // placeholder
+	h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN, NULL, NULL, rs); 
+	ha_ct_hist(h, cnt, asm_opt->thread_num);
+	ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);  // plot
+	// hamt_peaks_t peaks = hamt_find_peaks(YAK_N_COUNTS, cnt, 20);
+
+	hamt_mark0(asm_opt, rs, h);
+
+	exit(0);
 }

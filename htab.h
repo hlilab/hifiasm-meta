@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include "Process_Read.h"
 #include "CommandLines.h"
+#include "meta_util.h"
+
+//////////////////meta
+void *hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude);
+///////////////////////////////////
 
 typedef struct {
 	uint64_t x;

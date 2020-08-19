@@ -1477,8 +1477,9 @@ int ha_assemble(void)
 	if (!ovlp_loaded) {
 		// construct hash table for high occurrence k-mers
 		if (!(asm_opt.flag & HA_F_NO_KMER_FLT)) {
-			ha_flt_tab = ha_ft_gen(&asm_opt, &R_INF, &hom_cov);
-			ha_opt_update_cov(&asm_opt, hom_cov);
+            hamt_flt(&asm_opt, &R_INF, 30, 0);  // count kmers and tag reads
+			// ha_flt_tab = ha_ft_gen(&asm_opt, &R_INF, &hom_cov);
+			// ha_opt_update_cov(&asm_opt, hom_cov);
 		}
 		// error correction
 		assert(asm_opt.number_of_round > 0);

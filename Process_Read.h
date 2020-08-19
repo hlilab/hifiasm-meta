@@ -128,6 +128,12 @@ typedef struct
 
     ma_hit_t_alloc* paf;
     ma_hit_t_alloc* reverse_paf;
+
+    ///meta
+    double *mean;
+    double *std;
+    uint8_t* mask_readnorm;  // whether the read is discarded
+    uint8_t* mask_readtype;  // bit flag
 } All_reads;
 
 extern All_reads R_INF;

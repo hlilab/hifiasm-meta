@@ -130,8 +130,9 @@ typedef struct
     ma_hit_t_alloc* reverse_paf;
 
     ///meta
-    double *mean;
-    double *std;
+    uint64_t hamt_stat_buf_size;
+    double* mean;
+    double* std;
     uint8_t* mask_readnorm;  // whether the read is discarded
     uint8_t* mask_readtype;  // bit flag
 } All_reads;
@@ -147,6 +148,7 @@ typedef struct
 } UC_Read;
 
 void init_All_reads(All_reads* r);
+void reset_All_reads(All_reads *r);  // hamt
 void malloc_All_reads(All_reads* r);
 void ha_insert_read_len(All_reads *r, int read_len, int name_len);
 void ha_compress_base(uint8_t* dest, char* src, uint64_t src_l, uint64_t** N_site_lis, uint64_t N_site_occ);

@@ -867,15 +867,21 @@ typedef struct {  // step data structure (st_data_t)
 	char **seq;
 }pltmt_step_t;
 
+static void worker_mark_one_read(void* data, long idx_for, int tid){
+	// !!!!!! based on HPC version but not tested, since non-HPC isn't enabled anywhere !!!!!! //
+	pltmt_step_t *s = (pltmt_step_t*) data;
+	uint64_t rid = s->n_seq0+idx_for;
+	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_for]);
+	if (!buf) {printf("[error::%s] malloc for buffer failed, thread %d, for_idx %ld.\n", __func__, tid, idx_for); exit(1);}
+	int k = s->p->opt->k;
+	ha_ct_t *h = s->p->h;
 
-void mark_one_read(All_reads *rs, uint64_t rid, int k, int len, const char *seq, uint16_t *buf, ha_ct_t *h)
-{
 	uint32_t idx = 0;  // index of kmer count in the buffer
 	khint_t key;
 	int i, l;
 	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
-	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < len; ++i) {
-		int c = seq_nt4_table[(uint8_t)seq[i]];
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_for]; ++i) {
+		int c = seq_nt4_table[(uint8_t)s->seq[idx_for][i]];
 		if (c < 4) { // not an "N" base
 			x[0] = (x[0] << 1 | (c&1))  & mask;
 			x[1] = (x[1] << 1 | (c>>1)) & mask;
@@ -884,7 +890,7 @@ void mark_one_read(All_reads *rs, uint64_t rid, int k, int len, const char *seq,
 			if (++l >= k){
 					uint64_t hash = yak_hash_long(x);
 					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
-					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS | 1);
+					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS);
 					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
 					else buf[idx] = 0;
 					idx++;
@@ -893,19 +899,29 @@ void mark_one_read(All_reads *rs, uint64_t rid, int k, int len, const char *seq,
 	}
 	double mean = meanl(buf, idx);
 	double std = stdl(buf, idx, mean);
-	int code = decide_category(mean, std, buf, idx);
-	rs->mask_readtype[rid] = code;
+	uint8_t code = decide_category(mean, std, buf, idx);
+	s->p->rs_out->mean[rid] = mean;
+	s->p->rs_out->std[rid] = std;
+	s->p->rs_out->mask_readtype[rid] = code;
+	// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
+	free(buf);
+	// sequence will be freed by the caller
 }
 
+static void worker_mark_one_read_HPC(void* data, long idx_for, int tid){
+	pltmt_step_t *s = (pltmt_step_t*) data;
+	uint64_t rid = s->n_seq0+idx_for;
+	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_for]);
+	if (!buf) {printf("[error::%s] malloc for buffer failed, thread %d, for_idx %ld.\n", __func__, tid, idx_for); exit(1);}
+	int k = s->p->opt->k;
+	ha_ct_t *h = s->p->h;
 
-void mark_one_read_HPC(All_reads *rs, uint64_t rid, int k, int len, const char *seq, uint16_t *buf, ha_ct_t *h)
-{
 	uint32_t idx = 0;  // index of kmer count in the buffer
 	khint_t key;
 	int i, l, last = -1;
 	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
-	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < len; ++i) {
-		int c = seq_nt4_table[(uint8_t)seq[i]];
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_for]; ++i) {
+		int c = seq_nt4_table[(uint8_t)s->seq[idx_for][i]];
 		if (c < 4) { // not an "N" base
 			if (c != last) {
 				x[0] = (x[0] << 1 | (c&1))  & mask;
@@ -924,18 +940,23 @@ void mark_one_read_HPC(All_reads *rs, uint64_t rid, int k, int len, const char *
 			}
 		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
 	}
-
 	double mean = meanl(buf, idx);
 	double std = stdl(buf, idx, mean);
-	int code = decide_category(mean, std, buf, idx);
-	/* debug */
-	printf("debug rid:%" PRIu16 "\t", rid);
-	for (uint32_t i=0; i<idx; i++){
-		printf("%d,", buf[i]);
-	}
-	printf("\t%d\n", code);
+	uint8_t code = decide_category(mean, std, buf, idx);
+	/* debug print (legacy) */
+	// printf("debug rid:%" PRIu64 "\t", rid);
+	// for (uint32_t i=0; i<idx; i++){
+	// 	printf("%d,", buf[i]);
+	// }
+	// printf("\t%d\n", code);
 	/****************/
-	rs->mask_readtype[rid] = code;
+	// printf("rid %" PRIu64 "\n", rid); fflush(stdout);
+	s->p->rs_out->mean[rid] = mean;
+	s->p->rs_out->std[rid] = std;
+	s->p->rs_out->mask_readtype[rid] = code;
+	// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
+	free(buf);
+	// sequence will be freed by the caller	
 }
 
 static void *worker_mark_reads(void *data, int step, void *in){  // callback of kt_pipeline
@@ -976,16 +997,15 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 	}else if (step==1){  // step2: get kmer profile of each read && mark their status (mask_readtype and mask_readnorm)
 		// readID is s->n_seq0+i
 		pltmt_step_t *s = (pltmt_step_t*)in;
-		int i, n_pre = 1<<p->opt->pre, m;
-		uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*50000);
-		if (!buf) {printf("[error::%s] malloc failed.\n", __func__); exit(1);}
-		// kt_for(p->opt->n_thread, )  // TODO
-		for (i=0; i<s->n_seq; i++){
-			if (p->opt->is_HPC) mark_one_read_HPC(s->p->rs_in, s->n_seq0+i, s->p->opt->k, s->len[i], s->seq[i], buf, s->p->h);
-			else mark_one_read(s->p->rs_in, s->n_seq0+i, s->p->opt->k, s->len[i], s->seq[i], buf, s->p->h);
-			free(s->seq[i]);
-		}
-		free(buf);
+		if (p->opt->is_HPC)
+			kt_for(p->opt->n_thread-2, worker_mark_one_read_HPC, s, s->n_seq);  // seq[i] is also freed
+		else
+			kt_for(p->opt->n_thread-2, worker_mark_one_read, s, s->n_seq);  // seq[i] is also freed
+		for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
+		free(s->len);
+		free(s->seq);
+		s->seq = 0; 
+		s->len = 0;
 		free(s);
 		return NULL;
 	}
@@ -993,7 +1013,15 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 }
 
 void hamt_mark0(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h){
-	init_All_reads(rs);  // reset 
+	// reset rs (because the very fisrt ha_count inited it) 
+	reset_All_reads(rs); 
+	init_All_reads(rs);
+	rs->mean = (double*)calloc(rs->index_size, sizeof(double));
+	rs->std = (double*)calloc(rs->index_size, sizeof(double));
+	rs->mask_readnorm = (uint8_t*)calloc(rs->index_size, sizeof(uint8_t));
+	rs->mask_readtype = (uint8_t*)calloc(rs->index_size, sizeof(uint8_t));
+
+	// init data structures
 	int i;
 	uint64_t n_seq = 0;
 	yak_copt_t opt;
@@ -1002,7 +1030,8 @@ void hamt_mark0(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h){
 	opt.is_HPC = !(asm_opt->flag&HA_F_NO_HPC);
 	opt.n_thread = asm_opt->thread_num;
 	plmt_data_t plmt;
-	for (i = 0; i < asm_opt->num_reads; ++i){
+	// go
+	for (i = 0; i < asm_opt->num_reads; ++i){  // note that num_reads is the number of input files, not reads
 		memset(&plmt, 0, sizeof(plmt_data_t));
 		plmt.n_seq = &n_seq;
 		plmt.opt = &opt;
@@ -1016,16 +1045,16 @@ void hamt_mark0(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h){
 		}
 		plmt.ks = kseq_init(fp);
 		init_UC_Read(&plmt.ucr);
-		kt_pipeline(2, worker_mark_reads, &plmt, 2);
+		kt_pipeline(opt.n_thread, worker_mark_reads, &plmt, 2);
 	}
-	// printf("n_seq is ");
-	// printf("%" PRIu64 "\n", n_seq);
-	// // debug print
-	// for (uint64_t i=0;i<n_seq; i++){
-	// 	printf("%" PRIu64 "\t", i);
-	// 	printf("%f\t", rs->mean[i]);
-	// 	printf("%f\t%d\n", rs->std[i], rs->mask_readtype[i]);
-	// }
+	// debug print
+	for (uint64_t i=0;i<n_seq; i++){
+		printf("%" PRIu64 "\t", i);
+		printf("%f\t", rs->mean[i]);
+		printf("\t%" PRIu8 "\n", rs->mask_readtype[i]);
+	}
+	// end of debug print
+	fflush(stdout);
 	
 }
 

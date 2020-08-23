@@ -42,19 +42,27 @@ void init_All_reads(All_reads* r)
 	r->std = 0;
 	r->mask_readnorm = 0;
 	r->mask_readtype = 0;
+	r->mean = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
+	r->std = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
+	r->mask_readnorm = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
+	r->mask_readtype = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
 }
 
 void reset_All_reads(All_reads *r){
-	// hamt, reset rs inited by ha_count because I need another round of counting
+	// hamt, reset AND re-init rs (which was inited by ha_count)
+	//       however, don't wipe out mean/std/masks and their counter
+	/*********might be buggy**********
+	 *    do i need memset? 
+	 * (can't do it for r because mean/std/masks need to be preserved; however, memset on individual entries would segfault)
+	 * *********************************/
+    // reset and reallocate
 	r->index_size = READ_INIT_NUMBER;
 	r->name_index_size = READ_INIT_NUMBER;
-	r->hamt_stat_buf_size = READ_INIT_NUMBER;
 	r->total_reads = 0;
 	r->total_reads_bases = 0;
 	r->total_name_length = 0;
 	free(r->read_length); r->read_length = (uint64_t*)malloc(sizeof(uint64_t)*r->index_size);
 	free(r->name_index); r->name_index = (uint64_t*)malloc(sizeof(uint64_t)*r->name_index_size);
-
 }
 
 void destory_All_reads(All_reads* r)
@@ -269,6 +277,8 @@ void ha_insert_read_len(All_reads *r, int read_len, int name_len)
 		r->read_length = (uint64_t*)realloc(r->read_length, sizeof(uint64_t) * r->index_size);
 		r->name_index_size = r->name_index_size * 2 + 2;
 		r->name_index = (uint64_t*)realloc(r->name_index, sizeof(uint64_t) * r->name_index_size);
+	}
+	if (r->hamt_stat_buf_size < r->total_reads + 2){  // because I'm doing multiple passes where only the 1st one will fill the buffers
 		// meta
 		r->hamt_stat_buf_size = r->hamt_stat_buf_size * 2 + 2;
 		if (r->mean)

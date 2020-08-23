@@ -103,7 +103,7 @@ uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  //
     // coverage
     if (mean<30) flag|=HAMT_READCOV_LOW;
     else if (mean<100) flag|=HAMT_READCOV_REASONABLE;
-    else flag|=HAMT_READCOV_LOW;
+    else flag|=HAMT_READCOV_HIGH;
     // divergence
     uint32_t cnt = 0;
     uint32_t max_cnt = 0;
@@ -119,7 +119,7 @@ uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  //
                 cnt = 0;
             }
         }
-        if ((double)max_cnt/l>0.3) flag|=HAMT_READDIV_LONGLOW;
+        if ((double)max_cnt/l>0.3) {flag|=HAMT_READDIV_LONGLOW;}
     }
     if ((std/mean)<0.08 || std<20) flag|=HAMT_READDIV_UNIFORMED;  // very uniformed read (or just rare), 8% is roughly 8/255
     else if ((std/mean)<0.20) flag|=HAMT_READDIV_REASONABLE;  // regular, 20% is roughly 50/255
@@ -127,7 +127,12 @@ uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  //
     return flag;
 }
 
-// int decide_drop(double mean, double std, uint64_t median, uint64_t saturation_threshold){
-// 	if ()
-// }
+int decide_drop( double mean, double std, uint16_t runtime_median, int round, uint8_t initmark){
+    if (initmark==0) return 0;
+	if (round==1){
+        if (runtime_median<100) return 0;
+        if (runtime_median<300 and (initmark&HAMT_READDIV_LONGLOW)) return 0;  // keep long low-coverage read
+    }
+    return 1;
+}
 

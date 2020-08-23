@@ -211,7 +211,7 @@ typedef struct {  // count hashtable
 typedef struct {  // count hashtable
 	int k, pre, n_hash, n_shift;
 	uint64_t tot;
-	ha_ct1_t *h;
+	ha_ct1_t *h;  // ensembled hashtables
 } ha_ct_t;
 
 typedef struct {  // generate histogram

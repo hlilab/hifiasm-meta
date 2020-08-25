@@ -130,8 +130,8 @@ uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  //
 int decide_drop( double mean, double std, uint16_t runtime_median, int round, uint8_t initmark){
     if (initmark==0) return 0;
 	if (round==1){
-        if (runtime_median<100) return 0;
-        if (runtime_median<300 and (initmark&HAMT_READDIV_LONGLOW)) return 0;  // keep long low-coverage read
+        if (runtime_median<50) return 0;  // note to self: 50 or 100, this only reduce like less than 50% reads in real data.
+        if (runtime_median<50 and (initmark&HAMT_READDIV_LONGLOW)) return 0;  // keep long low-coverage read
     }
     return 1;
 }

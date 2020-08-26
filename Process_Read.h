@@ -22,7 +22,8 @@
 ///#define Get_READ(R_INF, ID) R_INF.read + (R_INF.index[ID]>>2) + ID
 #define Get_READ(R_INF, ID) (R_INF).read_sperate[(ID)]
 #define Get_NAME(R_INF, ID) ((R_INF).name + (R_INF).name_index[(ID)])
-
+#define CHECK_BY_NAME(R_INF, NAME, ID) (Get_NAME_LENGTH((R_INF),(ID))==strlen((NAME)) && \
+                                        memcmp((NAME), Get_NAME((R_INF), (ID)), Get_NAME_LENGTH((R_INF),(ID))) == 0)
 
 extern uint8_t seq_nt6_table[256];
 extern char bit_t_seq_table[256][4];
@@ -93,6 +94,7 @@ typedef struct
 	uint32_t new_length;
 } Compressed_Cigar_record;
 
+
 #define AMBIGU 0
 #define FATHER 1
 #define MOTHER 2
@@ -128,6 +130,8 @@ typedef struct
 
     ma_hit_t_alloc* paf;
     ma_hit_t_alloc* reverse_paf;
+
+    ///kvec_t_u64_warp* pb_regions;
 } All_reads;
 
 extern All_reads R_INF;
@@ -139,6 +143,14 @@ typedef struct
 	long long size;
 	long long RID;
 } UC_Read;
+
+typedef struct
+{
+    char** read_name;
+    uint64_t query_num;
+    FILE* fp;
+    pthread_mutex_t OutputMutex;
+} Debug_reads;
 
 void init_All_reads(All_reads* r);
 void malloc_All_reads(All_reads* r);
@@ -154,5 +166,6 @@ void write_All_reads(All_reads* r, char* read_file_name);
 int load_All_reads(All_reads* r, char* read_file_name);
 void destory_All_reads(All_reads* r);
 int destory_read_bin(All_reads* r);
-
+void init_Debug_reads(Debug_reads* x, const char* file);
+void destory_Debug_reads(Debug_reads* x);
 #endif

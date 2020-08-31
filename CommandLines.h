@@ -21,6 +21,10 @@
 
 #define HA_MIN_OV_DIFF       0.02 // min sequence divergence in an overlap
 
+////////////// meta ///////////////
+#define HAMT_COVERAGE 50
+///////////////////////////////////
+
 typedef struct {
 	int flag;
     int num_reads;

@@ -133,7 +133,7 @@ typedef struct
     uint64_t hamt_stat_buf_size;
     double* mean;
     double* std;
-    uint8_t* mask_readnorm;  // whether the read is discarded
+    uint8_t* mask_readnorm;  // bit flag, whether the read is discarded
     uint8_t* mask_readtype;  // bit flag
 } All_reads;
 

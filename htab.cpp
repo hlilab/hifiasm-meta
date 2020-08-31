@@ -487,6 +487,7 @@ KSEQ_INIT(gzFile, gzread)
 #define HAF_RS_WRITE_SEQ 0x8
 #define HAF_RS_READ      0x10
 #define HAF_CREATE_NEW   0x20
+#define HAMTF_FORCE_DONT_INIT 0x40  // meta: override HAF_RS_WRITE_LEN to not allow init_all_reads of ha_count
 
 typedef struct { // global data structure for kt_pipeline()
 	const yak_copt_t *opt;
@@ -499,6 +500,7 @@ typedef struct { // global data structure for kt_pipeline()
 	ha_pt_t *pt;
 	const All_reads *rs_in;
 	All_reads *rs_out;
+	All_reads *rs;  // hamt meta. ALWAYS carry this
 } pl_data_t;
 
 typedef struct { // data structure for each step in kt_pipeline()
@@ -537,6 +539,7 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 {
 	pl_data_t *p = (pl_data_t*)data;
 	if (step == 0) { // step 1: read a block of sequences
+		// printf("worker_count step0\n"); fflush(stdout);
 		int ret;
 		st_data_t *s;
 		CALLOC(s, 1);
@@ -562,6 +565,7 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 					break;
 			}
 		} else {
+			// printf("worker_count step0, will read from file\n"); fflush(stdout);
 			while ((ret = kseq_read(p->ks)) >= 0) {
 				int l = p->ks->seq.l;
 				if (p->n_seq >= 1<<28) {
@@ -573,6 +577,8 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 						assert(p->n_seq == p->rs_out->total_reads);
 						ha_insert_read_len(p->rs_out, l, p->ks->name.l);
 					} else if (p->flag & HAF_RS_WRITE_SEQ) {
+						printf("woker_count loading seq sancheck: name %s, name length %zu; total name length %" PRIu64 "\n", p->ks->name.s, p->ks->name.l, p->rs_out->total_name_length);
+						printf("n_seq: %" PRIu64 ", name index: %" PRIu64 "\n", p->n_seq, p->rs_out->name_index[p->n_seq]); fflush(stdout);
 						int i, n_N;
 						assert(l == (int)p->rs_out->read_length[p->n_seq]);
 						for (i = n_N = 0; i < l; ++i) // count number of ambiguous bases
@@ -596,11 +602,14 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 				if (s->sum_len >= p->opt->chunk_size)
 					break;
 			}
+			// printf("worker_count step0 finished reading from file\n"); fflush(stdout);
 		}
+		// printf("exit step0\n"); fflush(stdout);
 		if (s->sum_len == 0) free(s);
 		else return s;
 	} else if (step == 1) { // step 2: extract k-mers
 		st_data_t *s = (st_data_t*)in;
+		// printf("worker_count step1, n_seq0=%" PRIu64 ", n_seq=%d, buf size=%" PRIu64 "\n", s->n_seq0, s->n_seq, p->rs->hamt_stat_buf_size); fflush(stdout);
 		int i, n_pre = 1<<p->opt->pre, m;
 		// allocate the k-mer buffer
 		CALLOC(s->buf, n_pre);
@@ -610,9 +619,19 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 			if (p->pt) MALLOC(s->buf[i].b, m);
 			else MALLOC(s->buf[i].a, m);
 		}
+		// printf("default buf size:%d", READ_INIT_NUMBER);fflush(stdout);
+		// printf("going to fill linear buffer, current hamt buf size%" PRIu64 "\n", s->p->rs_in->index_size); fflush(stdout);
 		// fill the buffer
 		if (p->opt->w == 1) { // enumerate all k-mers
 			for (i = 0; i < s->n_seq; ++i) {
+				//////////////////  meta   ////////////////////
+				if (s->p->flag & HAMTF_FORCE_DONT_INIT){
+					uint64_t rid = s->n_seq0+i;
+					assert(rid<p->rs->hamt_stat_buf_size);
+					if (p->rs->mask_readnorm[rid]>0) // initial marking hasn't finished; read is marked as dropped
+						{continue;}
+				}
+				//////////////////////////////////////////////
 				if (p->opt->is_HPC)
 					count_seq_buf_HPC(s->buf, p->opt->k, p->opt->pre, s->len[i], s->seq[i]);
 				else
@@ -630,13 +649,31 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 			free(s->mz_buf);
 			// insert minimizers
 			if (p->pt) {
-				for (i = 0; i < s->n_seq; ++i)
+				for (i = 0; i < s->n_seq; ++i){
+					//////////////////  meta   ////////////////////
+					if (p->flag & HAMTF_FORCE_DONT_INIT){
+						uint64_t rid = s->n_seq0+i;
+						// printf("assert!\n"); fflush(stdout);
+						assert(rid<p->rs->hamt_stat_buf_size);
+						if (s->p->rs->mask_readnorm[rid]>0) // initial marking hasn't finished; read is marked as dropped
+							{continue;}
+					}
+					//////////////////////////////////////////////
 					for (j = 0; j < s->mz[i].n; ++j)
 						pt_insert_buf(s->buf, p->opt->pre, &s->mz[i].a[j]);
+				}
 			} else {
-				for (i = 0; i < s->n_seq; ++i)
+				for (i = 0; i < s->n_seq; ++i){
+					//////////////////  meta   ////////////////////
+					if (p->flag & HAMTF_FORCE_DONT_INIT){
+						uint64_t rid = s->n_seq0+i;
+						if (s->p->rs->mask_readnorm[rid]>0) // initial marking hasn't finished; read is marked as dropped
+							{continue;}
+					}
+					//////////////////////////////////////////////
 					for (j = 0; j < s->mz[i].n; ++j)
 						ct_insert_buf(s->buf, p->opt->pre, s->mz[i].a[j].x);
+				}
 			}
 			for (i = 0; i < s->n_seq; ++i) {
 				free(s->mz[i].a);
@@ -644,10 +681,12 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 			}
 			free(s->mz);
 		}
+		// printf("exit step1\n"); fflush(stdout);
 		free(s->seq); free(s->len);
 		s->seq = 0, s->len = 0;
 		return s;
 	} else if (step == 2) { // step 3: insert k-mers to hash table
+		// printf("worker_count step2\n"); fflush(stdout);
 		st_data_t *s = (st_data_t*)in;
 		int i, n = 1<<p->opt->pre;
 		uint64_t n_ins = 0;
@@ -672,6 +711,7 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 
 static ha_ct_t *yak_count(const yak_copt_t *opt, const char *fn, int flag, ha_pt_t *p0, ha_ct_t *c0, const void *flt_tab, All_reads *rs, int64_t *n_seq)
 {
+	printf("entered yak_count\n"); fflush(stdout);
 	int read_rs = (rs && (flag & HAF_RS_READ));
 	pl_data_t pl;
 	gzFile fp = 0;
@@ -686,6 +726,7 @@ static ha_ct_t *yak_count(const yak_copt_t *opt, const char *fn, int flag, ha_pt
 	}
 	if (rs && (flag & (HAF_RS_WRITE_LEN|HAF_RS_WRITE_SEQ)))
 		pl.rs_out = rs;
+	pl.rs = rs;
 	pl.flt_tab = flt_tab;
 	pl.opt = opt;
 	pl.flag = flag;
@@ -718,10 +759,19 @@ ha_ct_t *ha_count(const hifiasm_opt_t *asm_opt, int flag, ha_pt_t *p0, const voi
 	ha_ct_t *h = 0;
 	assert(!(flag & HAF_RS_WRITE_LEN) || !(flag & HAF_RS_WRITE_SEQ)); // not both
 	if (rs) {
-		if (flag & HAF_RS_WRITE_LEN)
-			init_All_reads(rs);
-		else if (flag & HAF_RS_WRITE_SEQ)
+		if (flag & HAF_RS_WRITE_LEN){
+		    if (!(flag & HAMTF_FORCE_DONT_INIT)){
+				init_All_reads(rs);
+			}
+			else{
+				printf("reset because flag\n"); fflush(stdout);
+				reset_All_reads(rs);
+			}
+		}
+		else if (flag & HAF_RS_WRITE_SEQ){
+			printf("ha_count: malloc_all_reads\n");
 			malloc_All_reads(rs);
+		}
 	}
 	yak_copt_init(&opt);
 	opt.k = asm_opt->k_mer_length;
@@ -807,22 +857,25 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 	ha_ct_t *ct;
 	ha_pt_t *pt;
 	if (read_from_store) {
+		printf("ha_pt_gen status: all in mem\n"); fflush(stdout);
 		extra_flag1 = extra_flag2 = HAF_RS_READ;
 	} else if (rs->total_reads == 0) {
+		printf("ha_pt_gen status: none in mem\n"); fflush(stdout);
 		extra_flag1 = HAF_RS_WRITE_LEN;
 		extra_flag2 = HAF_RS_WRITE_SEQ;
 	} else {
+		printf("ha_pt_gen status: knew length, will load seqs in mem\n"); fflush(stdout);
 		extra_flag1 = HAF_RS_WRITE_SEQ;
 		extra_flag2 = HAF_RS_READ;
 	}
-	ct = ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag1, NULL, flt_tab, rs);
+	ct = ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag1|HAMTF_FORCE_DONT_INIT, NULL, flt_tab, rs);
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> counted %ld distinct minimizer k-mers\n", __func__,
 			yak_realtime(), yak_cpu_usage(), (long)ct->tot);
 	ha_ct_hist(ct, cnt, asm_opt->thread_num);
 	fprintf(stderr, "[M::%s] count[%d] = %ld (for sanity check)\n", __func__, YAK_MAX_COUNT, (long)cnt[YAK_MAX_COUNT]);
 	peak_hom = ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);
-	if (hom_cov) *hom_cov = peak_hom;
-	if (het_cov) *het_cov = peak_het;
+	// if (hom_cov) *hom_cov = peak_hom;
+	// if (het_cov) *het_cov = peak_het;
 	if (peak_hom > 0) fprintf(stderr, "[M::%s] peak_hom: %d; peak_het: %d\n", __func__, peak_hom, peak_het);
 	if (flt_tab == 0) {
 		int cutoff = (int)(peak_hom * asm_opt->high_factor);
@@ -834,7 +887,7 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 		for (i = 2, tot_cnt = 0; i <= YAK_MAX_COUNT - 1; ++i) tot_cnt += cnt[i] * i;
 	}
 	pt = ha_pt_gen(ct, asm_opt->thread_num);
-	ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag2, pt, flt_tab, rs);
+	ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag2|HAMTF_FORCE_DONT_INIT, pt, flt_tab, rs);
 	assert((uint64_t)tot_cnt == pt->tot_pos);
 	//ha_pt_sort(pt, asm_opt->thread_num);
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> indexed %ld positions\n", __func__,
@@ -980,9 +1033,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 						b->n++;
 						if (b->n==b->m){
 							b->m = b->m+((b->m)>>1);
-							uint64_t *tmp = (uint64_t*)realloc(b->a, sizeof(uint64_t)*b->m);
-							if (tmp) b->a = tmp;
-							else {fprintf(stderr, "ALLOCATION FAILED\n"); fflush(stdout); exit(1);}
+							b->a = (uint64_t*)realloc(b->a, sizeof(uint64_t)*b->m);
 						}
 					}
 				}
@@ -1003,6 +1054,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 		int code = 0;
 		uint16_t cnt = 0;
 		uint16_t max_cnt = 0;
+		uint16_t median = 0;
 		for (uint16_t i=0; i<idx; i++){  // examine if runtime buffer looks like long low-coverage. 
 			if (buf_norm[i]<=10)
 				cnt+=1;
@@ -1011,7 +1063,6 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 				cnt = 0;
 			}
 		}
-		uint16_t median = 0;
 		if ((double)max_cnt/idx>0.3) {  // If so, ignore other hints and keep the read.
 			code = 0;
 		}else{  // get median and decide
@@ -1020,7 +1071,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 			code = decide_drop(s->p->rs_out->mean[rid], s->p->rs_out->std[rid], median, s->p->round, s->p->rs_out->mask_readtype[rid]);
 		}
 		s->p->rs_out->mask_readnorm[rid] = (uint8_t)code;  // todo: bit flag and add debug info?
-		printf("report\truntime median: %" PRIu16 ", coding: %d\n", median, code);
+		// printf("report\truntime median: %" PRIu16 ", coding: %d\n", median, code);
 	}
 	free(buf);  // sequence will be freed by the caller	
 	free(buf_norm);
@@ -1029,14 +1080,8 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 
 static void *worker_mark_reads(void *data, int step, void *in){  // callback of kt_pipeline
 	plmt_data_t *p = (plmt_data_t*)data;
-	static time_t step0_timer = 0;
-	static time_t step1_timer = 0;
-	static time_t step2_timer = 0;
-	time_t ts, te;
 	if (step==0){ // step 1: read a block of sequences
-		fprintf(stderr, "step0 accumulated time: %jd\n", (intmax_t)step0_timer);
-		time(&ts);  // debug
-		printf("debug\tenter step %d, round %d, total seqs= %" PRIu64 "\n", step, p->round, *p->n_seq); fflush(stdout);
+		// printf("debug\tenter step %d, round %d, total seqs= %" PRIu64 "\n", step, p->round, *p->n_seq); fflush(stdout);
 		int ret;
 		pltmt_step_t *s;
 		CALLOC(s, 1);
@@ -1049,8 +1094,6 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 				s->lnbuf[i].a = (uint64_t*)calloc(15000, sizeof(uint64_t));
 				s->lnbuf[i].n = 0;
 				s->lnbuf[i].m = 15000;
-				// s->lnbuf[i].a[0] = (uint64_t)2;  // n, nb of content
-				// s->lnbuf[i].a[1] = (uint64_t)(15000); // m, capacity
 			}
 		}
 		while ((ret = kseq_read(p->ks)) >= 0) {
@@ -1078,26 +1121,21 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 				break;
 			}
 		}
-		time(&te);  // debug
-		step0_timer += te - ts;
+		// printf("exist 0\n"); fflush(stdout);
 		if (s->sum_len == 0) {
 			// printf("debug\tterminating step0, round=%d, n_seq=%" PRIu64 "\n", p->round, *p->n_seq);fflush(stdout);
 			free(s); 
 		}
 		else return s;
 
-	}else if (step==1){  // step2: (round 0:)get kmer profile of each read && mark their status (mask_readtype and mask_readnorm) || (round 1:) count kmers into linear buffers
-		// readID is s->n_seq0+i
-		fprintf(stderr, "step1 accumulated time: %jd\n", (intmax_t)step0_timer);
-		time(&ts);
+	}else if (step==1){  // step2: (round 0:)get kmer profile of each read && mark their status (mask_readtype and mask_readnorm) || (round 1:) count kmers into linear buffers, then insert into hashtables
+
 		pltmt_step_t *s = (pltmt_step_t*)in;
 		// printf("debug\tstep %d, round %d, n_seq0 %" PRIu64 ", n_seq=%d\n", step, p->round, s->n_seq0, s->n_seq); fflush(stdout);
 		if (p->opt->is_HPC)
 			kt_for(s->p->opt->n_thread, worker_process_one_read_HPC, s, s->n_seq);
 		else
 			kt_for(s->p->opt->n_thread, worker_process_one_read, s, s->n_seq);
-		time(&te);  // debug
-		step1_timer += te - ts;
 		if (s->p->round==0){
 			// printf("debug\tterminating step1, round=%d, n_seq=%" PRIu64 "\n", p->round, *p->n_seq);fflush(stdout);
 			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
@@ -1105,24 +1143,9 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			free(s->seq);
 			s->seq = 0; 
 			s->len = 0;
-			// free(s);
-			return s;
-		}else{
-			return s;
-		}
-
-	} else if (step==2){  // step3: (round 1:) mark masknorm, and insert kmers into diginorm hash table
-		pltmt_step_t *s = (pltmt_step_t*)in;
-		fprintf(stderr, "step2 accumulated time: %jd\n", (intmax_t)step0_timer);
-		time(&ts);
-		if (s->seq==0){
-			assert(p->round==0);
-			// printf("debug\tterminating step2, round=%d, n_seq=%" PRIu64 "\n", p->round, *p->n_seq);fflush(stdout);
 			free(s);
-		}else{
-			// printf("debug\tstep %d, round %d, n_seq0 %" PRIu64 ", step_n_seq=%d\n", step, p->round, s->n_seq0, s->n_seq); fflush(stdout);
+		}else{  // insert the linear buffers
 			assert(s->p->hd);
-			assert(p->round!=0);
 			kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->h->pre);
 			// clean up
 			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
@@ -1133,15 +1156,10 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			// printf("CLEANED SEQS\n"); fflush(stdout);
 			for (int i=0; i<1<<p->h->pre; i++){
 				free(s->lnbuf[i].a);
-				// printf("cleaning lnbuf: freed %" PRIu64 "\n", (uint64_t)i+s->n_seq0);
 				}				
 			free(s->lnbuf);
 			free(s);
-			// printf("CLEANED LNBUF\n"); fflush(stdout);
-			// printf("debug\texit step %d, round %d\n", step, p->round); fflush(stdout);
 		}
-		time(&te);  // debug
-		step2_timer += te - ts;
 	}
 	return 0;
 }
@@ -1198,7 +1216,12 @@ void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h, int roun
 		}
 		plmt.ks = kseq_init(fp);
 		init_UC_Read(&plmt.ucr);
-		kt_pipeline(3, worker_mark_reads, &plmt, 3);
+		kt_pipeline(2, worker_mark_reads, &plmt, 2);
+
+		destory_UC_Read(&plmt.ucr);
+		if (plmt.hd) ha_ct_destroy(plmt.hd);
+		kseq_destroy(plmt.ks);
+		gzclose(fp);
 	}
 	// //debug print
 	// for (uint64_t i=0;i<n_seq; i++){
@@ -1212,21 +1235,18 @@ void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h, int roun
 	
 }
 
-void *hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude){
+void hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude){
     // is_crude: be (not) aware to freq distribution on the read; might override cov (if the overall coverage is too low)
-	
 	// collect kmers frequencies
 	int64_t cnt[YAK_N_COUNTS];
 	ha_ct_t *h;
 	int peak_het;  // placeholder
 	h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN, NULL, NULL, rs); 
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
-	ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);  // plot
+	ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);
 	hamt_mark(asm_opt, rs, h, 0);  // initial pass of marking reads with `decide_category`
-	// ha_ct_t *hd = ha_ct_init(asm_opt->k_mer_length, h->pre, 4, asm_opt->bf_shift);  // 4 is bf_n_hash
 	hamt_mark(asm_opt, rs, h, 1);  // 1st pass of dropping reads
-
-
+	reset_All_reads(rs);
 	/* debug print (legacy) */
 	// for (uint64_t rid=0; rid<rs->total_reads; rid++){
 	// 	printf("rid:%" PRIu64 "\t", rid);
@@ -1234,5 +1254,30 @@ void *hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crud
 	// }
 	/****************/
 
-	exit(0);
+	// exit(0);
+
+}
+
+void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage)
+{   // use arbitrary coverage because there might be no peaks
+	// printf("entered %s\n", __func__); fflush(stdout);
+	yak_ft_t *flt_tab;
+	int64_t cnt[YAK_N_COUNTS];
+	int peak_hom, peak_het, cutoff;
+	ha_ct_t *h;
+	// printf("%s, going to call ha_count\n", __func__); fflush(stdout);
+	h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN|HAMTF_FORCE_DONT_INIT, NULL, NULL, rs);
+	// printf("ok\n"); fflush(stdout);
+	ha_ct_hist(h, cnt, asm_opt->thread_num);
+	peak_hom = ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);  // vanilla hifiasm histogram 
+	if (peak_hom > 0) fprintf(stderr, "[M::%s] peak_hom: %d; peak_het: %d\n", __func__, peak_hom, peak_het);
+	cutoff = (int)(coverage * asm_opt->high_factor);
+	if (cutoff > YAK_MAX_COUNT - 1) cutoff = YAK_MAX_COUNT - 1;
+	ha_ct_shrink(h, cutoff, YAK_MAX_COUNT, asm_opt->thread_num);
+	flt_tab = gen_hh(h);
+	ha_ct_destroy(h);
+	fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> filtered out %ld k-mers occurring %d or more times\n", __func__,
+			yak_realtime(), yak_cpu_usage(), yak_peakrss_in_gb(), (long)kh_size(flt_tab), cutoff);
+	reset_All_reads(rs);
+	return (void*)flt_tab;
 }

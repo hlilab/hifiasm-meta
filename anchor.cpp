@@ -59,12 +59,15 @@ static int ha_ov_type(const overlap_region *r, uint32_t len)
 
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain)
 {
+	// current read won't be a dropped read, this is enforced in `worker_ovec` and its debug ver `worker_ovec_related_reads`.
 	extern void *ha_flt_tab;
 	extern ha_pt_t *ha_idx;
 	uint32_t i, rlen;
 	uint64_t k, l;
-	double low_occ = asm_opt.hom_cov * HA_KMER_GOOD_RATIO;
-	double high_occ = asm_opt.hom_cov * (2.0 - HA_KMER_GOOD_RATIO);
+	// double low_occ = asm_opt.hom_cov * HA_KMER_GOOD_RATIO;
+	// double high_occ = asm_opt.hom_cov * (2.0 - HA_KMER_GOOD_RATIO);
+	double low_occ = 5;  // hamt arbitrary!
+	double high_occ = HAMT_COVERAGE * (2.0 - HA_KMER_GOOD_RATIO);  // hamt arbitrary!
 
 	// prepare
     clear_Candidates_list(cl);

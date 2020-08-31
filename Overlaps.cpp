@@ -9449,9 +9449,9 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
 		ma_utg_t *p = &ug->u.a[i];
         if(p->m == 0) continue;
         sprintf(name, "%s%.6d%c", prefix, i + 1, "lc"[p->circ]);
-		if (print_seq) fprintf(fp, "S\t%s\t%s\tLN:i:%d\trd:i:%u\n", name, p->s? p->s : "*", p->len, 
+		if (print_seq) fprintf(fp, "S\t%s\t%s\tLN:i:%d\tdp:f:%u\n", name, p->s? p->s : "*", p->len,  // note: vanilla hifiasm uses rd:i instead of dp:f. The dp:f was modified for bandage.
         get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
-		else fprintf(fp, "S\t%s\t*\tLN:i:%d\trd:i:%u\n", name, p->len, 
+		else fprintf(fp, "S\t%s\t*\tLN:i:%d\tdp:f:%u\n", name, p->len, 
         get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
         // if (print_seq) fprintf(fp, "S\t%s\t%s\tLN:i:%d\n", name, p->s? p->s : "*", p->len);
 		// else fprintf(fp, "S\t%s\t*\tLN:i:%d\n", name, p->len);

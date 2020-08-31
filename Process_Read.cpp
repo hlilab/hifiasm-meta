@@ -62,7 +62,7 @@ void reset_All_reads(All_reads *r){
 	r->total_reads_bases = 0;
 	r->total_name_length = 0;
 	free(r->read_length); r->read_length = (uint64_t*)malloc(sizeof(uint64_t)*r->index_size);
-	free(r->name_index); r->name_index = (uint64_t*)malloc(sizeof(uint64_t)*r->name_index_size);
+	free(r->name_index); r->name_index = (uint64_t*)malloc(sizeof(uint64_t)*r->name_index_size); r->name_index[0] = 0;  // note to self: MUST init position 0.
 }
 
 void destory_All_reads(All_reads* r)
@@ -292,7 +292,7 @@ void ha_insert_read_len(All_reads *r, int read_len, int name_len)
 	}
 
 	r->read_length[r->total_reads - 1] = read_len;
-	r->name_index[r->total_reads] = r->name_index[r->total_reads - 1] + name_len;
+	r->name_index[r->total_reads] = r->name_index[r->total_reads - 1] + name_len;  // note to self: position zero is inited when allocated or during reset
 }
 
 void malloc_All_reads(All_reads* r)

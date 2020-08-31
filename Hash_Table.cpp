@@ -4,6 +4,8 @@
 #include <pthread.h>
 #include "Hash_Table.h"
 #include "ksort.h"
+#define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
+#include <inttypes.h>  // debug, for printing uint64
 pthread_mutex_t output_mutex;
 
 #define overlap_region_key(a) ((a).y_id)
@@ -569,6 +571,8 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
     long long i = 0;
     uint64_t current_ID;
     uint64_t current_stand;
+    uint64_t hamtsan_nb_skip = 0;
+    uint64_t hamtsan_nb_calc = 0;
 
     if (candidates->length == 0)
     {
@@ -613,6 +617,12 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
             continue;
         }
 
+        if (R_INF->mask_readnorm[current_ID]) {
+            hamtsan_nb_skip++;
+            continue;
+        }
+        hamtsan_nb_calc++;
+
 		chain_DP(candidates->list + sub_region_beg,
 				sub_region_end - sub_region_beg + 1, &(candidates->chainDP), &tmp_region, band_width_threshold,
 				25, Get_READ_LENGTH((*R_INF), tmp_region.x_id), Get_READ_LENGTH((*R_INF), tmp_region.y_id));
@@ -625,6 +635,7 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
     }
 
     destory_fake_cigar(&(tmp_region.f_cigar));
+    // fprintf(stderr, "hamt::verbose::%s\tread %" PRIu64 " skipped %" PRIu64 " candidates, retained %" PRIu64 "candidates.\n", __func__, readID, hamtsan_nb_skip, hamtsan_nb_calc);  // debug
 }
 
 void append_window_list(overlap_region* region, uint64_t x_start, uint64_t x_end, int y_start, int y_end, int error,

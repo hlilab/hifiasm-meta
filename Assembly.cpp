@@ -531,6 +531,10 @@ int64_t ha_ovec_mem(const ha_ovec_buf_t *b)
 
 static void worker_ovec(void *data, long i, int tid)
 {
+    /////////// meta ///////////////
+    if (R_INF.mask_readnorm[i]) return;
+    // (this relies on malloc_all_reads to ensure every location is accessible. I think there's no malloc happening in worker_ovec.)
+    ////////////////////////////////
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 	int fully_cov, abnormal;
 
@@ -567,7 +571,11 @@ static void worker_ovec(void *data, long i, int tid)
 
 static void worker_ovec_related_reads(void *data, long i, int tid)
 {
-	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
+	if (R_INF.mask_readnorm[i]){
+        fprintf(stderr, "hamtDebug: this read is dropped.\n");
+        return;
+    }
+    ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 	int required_read_name_length = strlen(asm_opt.required_read_name);
 	uint64_t k;
 	if (required_read_name_length == (int)Get_NAME_LENGTH((R_INF),i)
@@ -644,30 +652,32 @@ static void worker_ec_save(void *data, long i, int tid)
 	cigar.record = R_INF.second_round_cigar[i].record;
 	cigar.lost_base = R_INF.second_round_cigar[i].lost_base;
 
-	get_corrected_read_from_cigar(&cigar, e->first_round_read, first_round_read_length, e->second_round_read, &second_round_read_length);
+    if (!R_INF.mask_readnorm[i]){  ///// todo: commenting this out will break other hifiasm debug functions....
+        get_corrected_read_from_cigar(&cigar, e->first_round_read, first_round_read_length, e->second_round_read, &second_round_read_length);
 
-	new_read = e->second_round_read;
-	new_read_length = second_round_read_length;
+        new_read = e->second_round_read;
+        new_read_length = second_round_read_length;
 
-	if (asm_opt.roundID != asm_opt.number_of_round - 1)
-	{
-		///need modification
-		reverse_complement(new_read, new_read_length);
-	}
-	else if(asm_opt.number_of_round % 2 == 0)
-	{
-		///need modification
-		reverse_complement(new_read, new_read_length);
-	}
+        if (asm_opt.roundID != asm_opt.number_of_round - 1)
+        {
+            ///need modification
+            reverse_complement(new_read, new_read_length);
+        }
+        else if(asm_opt.number_of_round % 2 == 0)
+        {
+            ///need modification
+            reverse_complement(new_read, new_read_length);
+        }
 
-	N_occ = get_N_occ(new_read, new_read_length);
+        N_occ = get_N_occ(new_read, new_read_length);
 
-	if ((long long)R_INF.read_size[i] < new_read_length) {
-		R_INF.read_size[i] = new_read_length;
-		REALLOC(R_INF.read_sperate[i], R_INF.read_size[i]/4+1);
-	}
-	R_INF.read_length[i] = new_read_length;
-	ha_compress_base(Get_READ(R_INF, i), new_read, new_read_length, &R_INF.N_site[i], N_occ);
+        if ((long long)R_INF.read_size[i] < new_read_length) {
+            R_INF.read_size[i] = new_read_length;
+            REALLOC(R_INF.read_sperate[i], R_INF.read_size[i]/4+1);
+        }
+        R_INF.read_length[i] = new_read_length;
+        ha_compress_base(Get_READ(R_INF, i), new_read, new_read_length, &R_INF.N_site[i], N_occ);
+    }
 }
 
 void Output_corrected_reads()
@@ -693,7 +703,7 @@ void Output_corrected_reads()
     fclose(output_file);
 }
 
-void ha_overlap_and_correct(int round)
+void ha_overlap_and_correct(int round, int coverage)
 {
 	int i, hom_cov, het_cov;
 	ha_ovec_buf_t **b;
@@ -703,9 +713,10 @@ void ha_overlap_and_correct(int round)
 	CALLOC(b, asm_opt.thread_num);
 	for (i = 0; i < asm_opt.thread_num; ++i)
 		b[i] = ha_ovec_init(0, (round == asm_opt.number_of_round - 1));
-	ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, round == 0? 0 : 1, &R_INF, &hom_cov, &het_cov); // build the index
-	if (round == 0 && ha_flt_tab == 0) // then asm_opt.hom_cov hasn't been updated
-		ha_opt_update_cov(&asm_opt, hom_cov);
+    // printf("from %s entering ha_pt_gen\n", __func__); fflush(stdout);
+	ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, round == 0? 0 : 1, &R_INF, &hom_cov, &het_cov); // build the index  // also, reads are loaded
+	// if (round == 0 && ha_flt_tab == 0) // then asm_opt.hom_cov hasn't been updated
+		// ha_opt_update_cov(&asm_opt, hom_cov);
 	if (asm_opt.required_read_name)
 		kt_for(asm_opt.thread_num, worker_ovec_related_reads, b, R_INF.total_reads);
 	else
@@ -976,6 +987,7 @@ void ha_print_ovlp_stat(ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, long long 
 
 	no_l_indel = forward = reverse = exact = strong = weak = 0;
 	for (i = 0; i < readNum; i++) {
+        if (R_INF.mask_readnorm[i]) continue;
 		forward += paf[i].length;
 		reverse += rev_paf[i].length;
 		for (j = 0; j < paf[i].length; j++) {
@@ -1135,6 +1147,7 @@ UC_Read* g_read, UC_Read* overlap_read, uint8_t* c2n)
 
 static void worker_ov_final(void *data, long i, int tid)
 {
+    if (R_INF.mask_readnorm[i]) return;  // meta hamt
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
 	//get_new_candidates(i, &g_read, &overlap_list, &array_list, &l, 0.001, 0);
@@ -1209,6 +1222,7 @@ void debug_affine_gap_alignment(overlap_region_alloc *overlap_list, UC_Read* g_r
 
 static void worker_ov_final_high_het(void *data, long i, int tid)
 {
+    if (R_INF.mask_readnorm[i]) return;  // meta hamt
     ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
     ha_get_new_candidates(b->ab, i, &b->self_read, &b->olist, &b->clist, HIGH_HET_ERROR_RATE, asm_opt.max_n_chain, 1);
@@ -1477,15 +1491,17 @@ int ha_assemble(void)
 	if (!ovlp_loaded) {
 		// construct hash table for high occurrence k-mers
 		if (!(asm_opt.flag & HA_F_NO_KMER_FLT)) {
-            hamt_flt(&asm_opt, &R_INF, 30, 0);  // count kmers and tag reads
-			// ha_flt_tab = ha_ft_gen(&asm_opt, &R_INF, &hom_cov);
+            hamt_flt(&asm_opt, &R_INF, 0, 0);  // count kmers and tag reads
+            printf("exit hamt_flt\n"); fflush(stdout);
+			ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, HAMT_COVERAGE);  // high freq filter on retained reads
+            printf("exit ha_flt_tab\n"); fflush(stdout);
 			// ha_opt_update_cov(&asm_opt, hom_cov);
 		}
 		// error correction
 		assert(asm_opt.number_of_round > 0);
 		for (r = 0; r < asm_opt.number_of_round; ++r) {
 			ha_opt_reset_to_round(&asm_opt, r); // this update asm_opt.roundID and a few other fields
-			ha_overlap_and_correct(r);
+			ha_overlap_and_correct(r, HAMT_COVERAGE);
 			fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> corrected reads for round %d\n", __func__, yak_realtime(),
 					yak_cpu_usage(), yak_peakrss_in_gb(), r + 1);
 			fprintf(stderr, "[M::%s] # bases: %lld; # corrected bases: %lld; # recorrected bases: %lld\n", __func__,

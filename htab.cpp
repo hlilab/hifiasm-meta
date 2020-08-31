@@ -14,9 +14,10 @@
 #include <inttypes.h>  // debug, for printing uint64
 #include <time.h>
 
-#define YAK_COUNTER_BITS 12
-#define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS)
-#define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS)-1)
+#define YAK_COUNTER_BITS 12  // note: do not directly modify this, h->pre is not exposed and needs this value to init
+#define YAK_COUNTER_BITS1 14  // allow up to 16383
+#define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS1)  // used for histogram, so it refers to counter bits, not pre bits
+#define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS1)-1)
 
 const unsigned char seq_nt4_table[256] = { // translate ACGT to 0123
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -119,8 +120,8 @@ int yak_bf_insert(yak_bf_t *b, uint64_t hash)
  * Count hash table *
  ********************/
 
-#define yak_ct_eq(a, b) ((a)>>YAK_COUNTER_BITS == (b)>>YAK_COUNTER_BITS) // lower 8 bits for counts; higher bits for k-mer
-#define yak_ct_hash(a) ((a)>>YAK_COUNTER_BITS)
+#define yak_ct_eq(a, b) ((a)>>YAK_COUNTER_BITS1 == (b)>>YAK_COUNTER_BITS1) // lower bits for counts
+#define yak_ct_hash(a) ((a)>>YAK_COUNTER_BITS1)
 KHASHL_SET_INIT(static klib_unused, yak_ct_t, yak_ct, uint64_t, yak_ct_hash, yak_ct_eq)
 
 typedef struct {
@@ -187,13 +188,13 @@ static int ha_ct_insert_list(ha_ct_t *h, int create_new, int n, const uint64_t *
 			if (g->b)
 				ins = (yak_bf_insert(g->b, x) == h->n_hash);
 			if (ins) {
-				k = yak_ct_put(g->h, x << YAK_COUNTER_BITS | (g->b? 1 : 0), &absent);
+				k = yak_ct_put(g->h, x << YAK_COUNTER_BITS1 | (g->b? 1 : 0), &absent);
 				if (absent) ++n_ins;
 				if ((kh_key(g->h, k)&YAK_MAX_COUNT) < YAK_MAX_COUNT)
 					++kh_key(g->h, k);
 			}
 		} else {
-			k = yak_ct_get(g->h, x<<YAK_COUNTER_BITS);
+			k = yak_ct_get(g->h, x<<YAK_COUNTER_BITS1);
 			if (k != kh_end(g->h) && (kh_key(g->h, k)&YAK_MAX_COUNT) < YAK_MAX_COUNT)
 				++kh_key(g->h, k);
 		}
@@ -309,7 +310,7 @@ static void worker_pt_gen(void *data, long i, int tid) // callback for kt_for()
 		if (kh_exist(g, k)) {
 			int absent;
 			khint_t l;
-			l = yak_pt_put(b->h, kh_key(g, k) >> a->ct->pre << YAK_COUNTER_BITS, &absent);
+			l = yak_pt_put(b->h, kh_key(g, k) >> YAK_COUNTER_BITS1 << YAK_COUNTER_BITS1, &absent);  // l = yak_pt_put(b->h, kh_key(g, k) >> a->ct->pre << YAK_COUNTER_BITS, &absent);
 			kh_val(b->h, l) = b->n;
 			b->n += kh_key(g, k) & YAK_MAX_COUNT;
 		}
@@ -350,7 +351,7 @@ int ha_pt_insert_list(ha_pt_t *h, int n, const ha_mz1_t *a)
 		int n;
 		ha_idxpos_t *p;
 		if ((a[j].x&mask) != (a[0].x&mask)) continue;
-		k = yak_pt_get(g->h, x<<YAK_COUNTER_BITS);
+		k = yak_pt_get(g->h, x<<YAK_COUNTER_BITS1);
 		if (k == kh_end(g->h)) continue;
 		n = kh_key(g->h, k) & YAK_MAX_COUNT;
 		assert(n < YAK_MAX_COUNT);
@@ -399,7 +400,7 @@ const ha_idxpos_t *ha_pt_get(const ha_pt_t *h, uint64_t hash, int *n)
 	khint_t k;
 	const ha_pt1_t *g = &h->h[hash & ((1ULL<<h->pre) - 1)];
 	*n = 0;
-	k = yak_pt_get(g->h, hash >> h->pre << YAK_COUNTER_BITS);
+	k = yak_pt_get(g->h, hash >> h->pre << YAK_COUNTER_BITS1);
 	if (k == kh_end(g->h)) return 0;
 	*n = kh_key(g->h, k) & YAK_MAX_COUNT;
 	return &g->a[kh_val(g->h, k)];
@@ -803,7 +804,7 @@ static yak_ft_t *gen_hh(const ha_ct_t *h)
 		khint_t k;
 		for (k = 0; k < kh_end(ht); ++k) {
 			if (kh_exist(ht, k)) {
-				uint64_t y = kh_key(ht, k) >> h->pre << YAK_COUNTER_BITS | i;
+				uint64_t y = kh_key(ht, k) >> h->pre << YAK_COUNTER_BITS1 | i;
 				int absent;
 				yak_ft_put(hh, y, &absent);
 			}
@@ -888,6 +889,8 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 	}
 	pt = ha_pt_gen(ct, asm_opt->thread_num);
 	ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag2|HAMTF_FORCE_DONT_INIT, pt, flt_tab, rs);
+	fprintf(stderr, "tot_cnt=%" PRIu64 "\n", tot_cnt);
+	fprintf(stderr, "tot_pos=%" PRIu64 "\n", pt->tot_pos);
 	assert((uint64_t)tot_cnt == pt->tot_pos);
 	//ha_pt_sort(pt, asm_opt->thread_num);
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> indexed %ld positions\n", __func__,
@@ -941,7 +944,7 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 	khint_t key;
 	uint64_t san = 0;
 	for (uint32_t i=0; i<n; i++){
-		key = yak_ct_put(h, buf[i]>>s->p->h->pre<<YAK_COUNTER_BITS, &absent);
+		key = yak_ct_put(h, buf[i]>>s->p->h->pre<<YAK_COUNTER_BITS1, &absent);
 		kh_key(h, key)++;
 		if (absent) san++;
 	}
@@ -971,7 +974,7 @@ static void worker_process_one_read(void* data, long idx_for, int tid){
 			if (++l >= k){
 					uint64_t hash = yak_hash_long(x);
 					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
-					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS);
+					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
 					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
 					else buf[idx] = 0;
 					idx++;
@@ -1016,7 +1019,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 					uint64_t hash = yak_hash_long(x);
 					if (s->p->round==0){
 						yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
-						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS);
+						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
 						else buf[idx] = 0;
 						idx++;
@@ -1026,7 +1029,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 						b->a[b->n] = hash;
 						// collect runtime count
 						yak_ct_t *h_ = s->p->hd->h[hash & ((1<<h->pre)-1)].h;
-						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS);
+						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h_)){buf_norm[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
 						else buf_norm[idx] = 0;
 						idx++;
@@ -1172,7 +1175,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 // 	int absent;
 // 	for (key=0; key<kh_end(H); key++){
 // 		if (kh_exist(H, key)){
-// 			uint64_t hash = key>>(plmt->h->pre)<<YAK_COUNTER_BITS;
+// 			uint64_t hash = key>>(plmt->h->pre)<<YAK_COUNTER_BITS1;
 // 			yak_ct_put(g, hash, &absent);
 // 			if (absent) plmt->san_n_insert[i]++;
 // 		}

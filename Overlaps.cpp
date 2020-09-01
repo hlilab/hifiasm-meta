@@ -383,19 +383,13 @@ void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element)
 }
 
 
-long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)
+long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)  // with last bit indicating direction
 {
     long long i;
-    for (i = 0; i < x->length; i++)
-    {
-        if(x->buffer[i].tn == tn 
-        &&
-          ((uint32_t)(x->buffer[i].qns>>32)) == qn)
-        {
+    for (i = 0; i < x->length; i++){
+        if(x->buffer[i].tn == tn && ((uint32_t)(x->buffer[i].qns>>32)) == qn)
             return i;
-        }        
     }
-
     return -1;
 }
 
@@ -403,6 +397,7 @@ long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)
 
 inline void set_reverse_overlap(ma_hit_t* dest, ma_hit_t* source)
 {
+    // dest is either a placeholder, or the slot to be overwirtten
     dest->qns = Get_tn(*source);
     dest->qns = dest->qns << 32;
     dest->qns = dest->qns | Get_ts(*source);
@@ -448,17 +443,16 @@ inline void set_reverse_overlap(ma_hit_t* dest, ma_hit_t* source)
 
 
 void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long num_sources)
-{
+{  // num_sources is fed n_read
     double startTime = Get_T();
 
     long long i, j, index;
     uint32_t qn, tn, is_del = 0;
     long long qLen_0, qLen_1;
     ma_hit_t ele;
-    for (i = 0; i < num_sources; i++)
+    for (i = 0; i < num_sources; i++)  // iterate over vertices
     {
-
-        for (j = 0; j < sources[i].length; j++)
+        for (j = 0; j < sources[i].length; j++)  // iterate of overlaps of this vertex. (.length is Cigar_record's .length)
         {
             qn = Get_qn(sources[i].buffer[j]);
             tn = Get_tn(sources[i].buffer[j]);
@@ -467,11 +461,11 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
 
             ///if(sources[i].buffer[j].del) continue;
 
-            index = get_specific_overlap(&(sources[tn]), tn, qn);
+            index = get_specific_overlap(&(sources[tn]), tn, qn);  // find ovlp of t->q
 
 
             ///if(index != -1 && sources[tn].buffer[index].del == 0)
-            if(index != -1)
+            if(index != -1)  // both t->q and q->t are present
             {
                 is_del = 0;
                 if(sources[i].buffer[j].del || sources[tn].buffer[index].del)
@@ -486,12 +480,12 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
                 {
                     ///qn must be not equal to tn
                     ///make sources[qn] = sources[tn] if qn > tn
-                    if(qn < tn)
+                    if(qn < tn)  // overwrite the entry ordered higher (later)
                     {
                         set_reverse_overlap(&(sources[tn].buffer[index]), &(sources[i].buffer[j]));
                     }
                 }
-                else if(qLen_0 > qLen_1)
+                else if(qLen_0 > qLen_1)  // overwrite the reverse entry
                 {
                     set_reverse_overlap(&(sources[tn].buffer[index]), &(sources[i].buffer[j]));
                 }
@@ -500,7 +494,7 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
                 sources[tn].buffer[index].del = is_del;
             }
             else ///means this edge just occurs in one direction
-            {
+            {  // add the reversed overlap, but also set both to be deleted
                 set_reverse_overlap(&ele, &(sources[i].buffer[j]));
                 sources[i].buffer[j].del = ele.del = 1;
                 add_ma_hit_t_alloc(&(sources[tn]), &ele);
@@ -885,9 +879,7 @@ uint32_t qn, uint32_t tn)
         if(coverage_cut[Get_qn(x->buffer[i])].del) continue;
         if(coverage_cut[Get_tn(x->buffer[i])].del) continue;
 
-        if(Get_tn(x->buffer[i])==tn 
-        &&
-           Get_qn(x->buffer[i])==qn)
+        if(Get_tn(x->buffer[i])==tn && Get_qn(x->buffer[i])==qn)
         {
             return &(x->buffer[i]);
         }        
@@ -1256,7 +1248,7 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
             there are two cases: 
                 1. old_dp = dp + 1 (b.a[j] is qe); 2. old_dp = dp - 1 (b.a[j] is qs);
             if one read has multiple separate sub-regions with coverage >= min_dp, 
-            does miniasm only select the longest one?
+            does miniasm only select the longest one?  // i think yes??????
             **/
             if (old_dp < min_dp && dp >= min_dp) ///old_dp < dp, b.a[j] is qs
             { 
@@ -2051,7 +2043,7 @@ int asg_extend(const asg_t *g, uint32_t v, int max_ext, asg64_v *a)
 
 
 static inline int asg_is_single_edge(const asg_t *g, uint32_t v, uint32_t start_node)
-{
+{// ??????
     
 	/**
 	..............................
@@ -2122,7 +2114,7 @@ int max_hang, int min_ovlp)
     {
         ///if a read has been deleted, should we still add them?
 		asg_seq_set(g, i, coverage_cut[i].e - coverage_cut[i].s, coverage_cut[i].del);
-        g->seq[i].c = coverage_cut[i].c;
+        g->seq[i].c = coverage_cut[i].c;  // i think it should be PRIMARY_LABEL i.e. 0?
 	}
 
     g->seq_vis = (uint8_t*)calloc(g->n_seq*2, sizeof(uint8_t));
@@ -2796,6 +2788,12 @@ uint32_t* endNode, long long* minLen, buf_t* b)
     {
         if(e1 == e2)
         {
+//            O
+//          /   \  
+//    -----O     O------  (the right most one is e1/e2)
+//          \   /         
+//           O 
+//
             (*endNode) = e1;
             (*minLen) = (l1 <= l2)? l1: l2;
             return 1;
@@ -3725,9 +3723,9 @@ void* asg_arc_identify_simple_bubbles_pthread(void* arg)
     {
         if (g->seq[v>>1].del) continue;
 
-        b.b.n = 0;
+        b.b.n = 0;  // b.b is an array of visited vertices (uint32_t)
 
-        if(g->seq_vis[v] != 1)
+        if(g->seq_vis[v] != 1)  // note: init was by calloc, to 0.
         {
             ///if(detect_bubble_with_bubbles(g, v, &w, &l, &b, (uint32_t)-1))
             if(detect_bubble_with_bubbles(g, v, &w, &l, &b, SMALL_BUBBLE_SIZE))
@@ -4078,9 +4076,9 @@ int test_single_node_bubble_directly(asg_t *g, uint32_t v, long long longLen_thr
     }
 
     
-    flag0 = asg_is_single_edge(g, av[0].v, v>>1);
+    flag0 = asg_is_single_edge(g, av[0].v, v>>1);  // count of predecessor of the given vertex
     flag1 = asg_is_single_edge(g, av[1].v, v>>1);
-    if(flag0 != 1 || flag1 != 1)
+    if(flag0 != 1 || flag1 != 1)  // not a simplest start of a bubble
     {
         return 0;
     }
@@ -8208,7 +8206,7 @@ int asg_arc_del_short_diploi_by_suspect_edge(asg_t *g, int max_ext)
 
 //reomve edge between two chromesomes
 //this node must be a single read
-int asg_arc_del_false_node(asg_t *g, int max_ext)
+int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_tip, defaulted to 3
 {
     double startTime = Get_T();
     kvec_t(uint64_t) b;
@@ -15088,10 +15086,10 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
         if(is_drop && g->seq[v>>1].c == ALTER_LABLE) continue;
         if(get_real_length(g, v^1, NULL)<=1) continue;
 
-        n_arc = get_real_length(g, v, NULL);
+        n_arc = get_real_length(g, v, NULL);  // number of targets of v
         if (n_arc != 1) continue;
 
-        for (i = 0; i < nv; i++)
+        for (i = 0; i < nv; i++)  // my note: this loop is probably just for the look: break is looks nicer than nested if-else
         {
             ///actually there is just one un-del edge
             if (!av[i].del)
@@ -15102,7 +15100,7 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
                 {
                     break;
                 }
-                if(flag == LOOP)
+                if(flag == LOOP)  // ??????
                 {
                     break;
                 }
@@ -23127,8 +23125,8 @@ void collect_abnormal_edges(ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, long l
 ///if we don't have this function, we just simply remove all one-direction edges
 ///by utilizing this function, some one-direction edges can be recovered as two-direction edges
 ///trio does not influence this function  
-void try_rescue_overlaps(ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, long long readNum,
-long long rescue_threshold)
+void try_rescue_overlaps(ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, long long readNum, long long rescue_threshold)
+// called as (sources, reverse_sources, n_read, 4);  where n_read if R_INF.total_reads
 {
     double startTime = Get_T();
     long long i, j, revises = 0;
@@ -26802,6 +26800,10 @@ long long max_hang_length, long long clean_round, long long gap_fuzz,
 float min_ovlp_drop_ratio, float max_ovlp_drop_ratio, char* output_file_name, 
 long long bubble_dist, int read_graph, R_to_U* ruIndex, asg_t **sg_ptr, 
 ma_sub_t **coverage_cut_ptr, int debug_g)
+// called as (min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 
+//            max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, output_file_name, 
+//            bubble_dist, read_graph, &ruIndex, &sg, 
+//            &coverage_cut, 0);  where sg is a NULL
 {
 	ma_sub_t *coverage_cut = *coverage_cut_ptr;
 	asg_t *sg = *sg_ptr;
@@ -26809,6 +26811,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     if(debug_g) goto debug_gfa;
 
     ///just for debug
+    // (destroies sg and reset it (no extra malloc))
     renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
 
     ///it's hard to say which function is better       
@@ -27067,13 +27070,15 @@ long long bubble_dist, int read_graph, int write)
         }
     }
     
-    if (asm_opt.write_index_to_disk && write)
+    // output stuff before the graph generating
+    if (asm_opt.write_index_to_disk && write)  // write_index_to_disk is always 1; write is !overlap_loaded
     {
         write_all_data_to_disk(sources, reverse_sources, 
         &R_INF, output_file_name);
     }
 
-    if (!(asm_opt.flag & HA_F_BAN_ASSEMBLY))
+    // generate graph
+    if (!(asm_opt.flag & HA_F_BAN_ASSEMBLY))  // HA_F_BAN_ASSEMBLY is set via debug flag "-e"
     {
         try_rescue_overlaps(sources, reverse_sources, n_read, 4); 
 

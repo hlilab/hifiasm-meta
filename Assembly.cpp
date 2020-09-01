@@ -1515,6 +1515,17 @@ int ha_assemble(void)
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());
 		ha_print_ovlp_stat(R_INF.paf, R_INF.reverse_paf, R_INF.total_reads);
+
+        //////            hamt: crude coverage filtering                   ///////
+        //           ( remove ovlp if two vertices apparently come from different places)
+        // collect kmer count hashtables
+        
+
+
+
+
+        ///////////////////////////////////////////////////////////////////////////
+
 		ha_ft_destroy(ha_flt_tab);
 		if (asm_opt.flag & HA_F_WRITE_PAF) Output_PAF();
 		ha_triobin(&asm_opt);

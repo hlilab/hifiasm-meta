@@ -417,7 +417,7 @@ typedef struct
     int current_operation_length;
     uint32_t* record;
     uint64_t size;
-    uint64_t length;
+    uint64_t length;  // i think it's practically out degree of the corresponding vertex
     uint32_t new_read_length;
 
 
@@ -629,10 +629,10 @@ typedef struct { ///query is the read itself
 	uint64_t qns;
 	uint32_t qe, tn, ts, te;
 	uint32_t ml:31, rev:1;
-	uint32_t bl:31, del:1;
+	uint32_t bl:31, del:1;  // bl is set to qe-qs?
 	uint8_t el;
 	uint8_t no_l_indel;
-} ma_hit_t;
+} ma_hit_t;  // equals to one paf line
 
 typedef struct {
 	ma_hit_t* buffer;
@@ -640,7 +640,7 @@ typedef struct {
     uint32_t length;
 	uint8_t is_fully_corrected;
 	uint8_t is_abnormal;
-} ma_hit_t_alloc;
+} ma_hit_t_alloc;  // paf
 
 typedef struct {
 	uint32_t s:31, del:1, e;
@@ -669,7 +669,7 @@ typedef struct {
 
 typedef struct {
 	uint32_t len:31, del:1;
-	uint8_t c;
+	uint8_t c;  // from coverage_cut
 } asg_seq_t;
 
 typedef struct {
@@ -681,11 +681,11 @@ typedef struct {
 	asg_seq_t *seq;
 	uint64_t *idx;
 
-	uint8_t* seq_vis;
+	uint8_t* seq_vis;  // 1 if the node belongs to a bubble, 2 if it's a cross node (?)
 
 	uint32_t n_F_seq;
 	ma_utg_t* F_seq;
-} asg_t;
+} asg_t;  // built by ma_sg_gen
 
 typedef struct { size_t n, m; uint64_t *a; } asg64_v;
 
@@ -726,7 +726,7 @@ typedef struct {
 } buf_t;
 
 
-typedef struct {
+typedef struct {  // used for removing simple circle unitig
 	kvec_t(uint64_t) Nodes; 
 	kvec_t(uint64_t) Edges; 
 	uint32_t pre_n_seq, seqID; 

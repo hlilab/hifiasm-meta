@@ -3,6 +3,8 @@
 #include <string.h>
 #include <fcntl.h>
 #include "Process_Read.h"
+#define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
+#include <inttypes.h>  // debug, for printing uint64
 
 uint8_t seq_nt6_table[256] = {
     5, 5, 5, 5,  5, 5, 5, 5,  5, 5, 5, 5,  5, 5, 5, 5,
@@ -39,10 +41,12 @@ void init_All_reads(All_reads* r)
 	// meta
 	r->hamt_stat_buf_size = READ_INIT_NUMBER;
 	r->mean = 0;
+	r->median = 0;
 	r->std = 0;
 	r->mask_readnorm = 0;
 	r->mask_readtype = 0;
 	r->mean = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
+	r->median = (uint16_t*)calloc(r->hamt_stat_buf_size, sizeof(uint16_t));
 	r->std = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
 	r->mask_readnorm = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
 	r->mask_readtype = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
@@ -85,6 +89,8 @@ void destory_All_reads(All_reads* r)
 	// meta
 	if (r->mean)
 		free(r->mean);
+	if (r->median)
+		free(r->median);
 	if (r->std)
 		free(r->std);
 	if (r->mask_readnorm)
@@ -137,35 +143,97 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	fwrite(&(asm_opt.hom_cov), sizeof(asm_opt.hom_cov), 1, fp);
 	fwrite(&(asm_opt.het_cov), sizeof(asm_opt.het_cov), 1, fp);
 
-    free(index_name);    
+    // free(index_name);    
 	fflush(fp);
     fclose(fp);
     fprintf(stderr, "Reads has been written.\n");
+
+	///////////////////////////////////////////////////////////
+	//     meta, dump kmer-frequency-based read coverages    //
+	///////////////////////////////////////////////////////////
+
+	fprintf(stderr, "[hamt::%s] Writing per-read coverage info...\n", __func__); 
+
+	// the first part, let it be the same as hifiasm default's bin
+	// note: check them when loading!
+    sprintf(index_name, "%s.mt.bin", read_file_name);
+    fp = fopen(index_name, "w");
+	fwrite(&asm_opt.adapterLen, sizeof(asm_opt.adapterLen), 1, fp);
+    fwrite(&r->index_size, sizeof(r->index_size), 1, fp);
+	fwrite(&r->name_index_size, sizeof(r->name_index_size), 1, fp);
+	fwrite(&r->total_reads, sizeof(r->total_reads), 1, fp);
+	fwrite(&r->total_reads_bases, sizeof(r->total_reads_bases), 1, fp);
+	fwrite(&r->total_name_length, sizeof(r->total_name_length), 1, fp);
+
+	// hamt special
+	i=0;
+	for (i=0; i<r->total_reads; i++){
+		fwrite(r->mean, sizeof(double), r->total_reads, fp);
+		fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
+		fwrite(r->std, sizeof(double), r->total_reads, fp);
+		fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
+		fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
+	}
+	free(index_name);
+	fflush(fp);
+    fclose(fp);
+	fprintf(stderr, "[hamt::%s] Finished writing.\n", __func__); 
 }
 
 int load_All_reads(All_reads* r, char* read_file_name)
 {
+	// hamt note: let missing hamt bin trigger re-indexing, since graph cleaning need kmer-freq-based read coverages
     char* index_name = (char*)malloc(strlen(read_file_name)+15);
+	char* index_name_hamt = (char*)malloc(strlen(read_file_name)+15);
     sprintf(index_name, "%s.bin", read_file_name);
+	sprintf(index_name_hamt, "%s.mt.bin", read_file_name);
     FILE* fp = fopen(index_name, "r");
 	if (!fp) {
 		free(index_name);
+		free(index_name_hamt);
         return 0;
     }
+	FILE* fp_hamt = fopen(index_name_hamt, "r");
+	if (!fp_hamt){
+		free(index_name);
+		free(index_name_hamt);
+		return 0;
+	}
+
 	int local_adapterLen;
+	int local_adapterLen_hamt;
 	int f_flag;
+	int f_flag_hamt;  // not checked. just to silence the warnings
     f_flag = fread(&local_adapterLen, sizeof(local_adapterLen), 1, fp);
+	f_flag_hamt = fread(&local_adapterLen_hamt, sizeof(local_adapterLen_hamt), 1, fp_hamt);
     if(local_adapterLen != asm_opt.adapterLen)
     {
         fprintf(stderr, "the adapterLen of index is: %d, but the adapterLen set by user is: %d\n", 
         local_adapterLen, asm_opt.adapterLen);
 		exit(1);
     }
+	if (local_adapterLen != local_adapterLen_hamt){
+		fprintf(stderr, "bin and mt.bin do not agree on adapterLen. (bin: %d, mt.bin: %d\n", local_adapterLen, local_adapterLen_hamt);
+		exit(1);
+	}
     f_flag += fread(&r->index_size, sizeof(r->index_size), 1, fp);
 	f_flag += fread(&r->name_index_size, sizeof(r->name_index_size), 1, fp);
 	f_flag += fread(&r->total_reads, sizeof(r->total_reads), 1, fp);
 	f_flag += fread(&r->total_reads_bases, sizeof(r->total_reads_bases), 1, fp);
 	f_flag += fread(&r->total_name_length, sizeof(r->total_name_length), 1, fp);
+
+	// load the first part of hamt bin. Numbers need to agree with ha bin.
+	uint64_t san = 0;
+	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+	if (san!=r->index_size) {fprintf(stderr, "bin and mt.bin do not agree on index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->index_size); exit(1);}
+	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+	if (san!=r->name_index_size) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->name_index_size); exit(1);}
+	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+	if (san!=r->total_reads) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads); exit(1);}
+	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+	if (san!=r->total_reads_bases) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads_bases); exit(1);}
+	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+	if (san!=r->total_name_length) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_name_length); exit(1);}
 
 	uint64_t i = 0;
 	uint64_t zero = 0;
@@ -231,7 +299,26 @@ int load_All_reads(All_reads* r, char* read_file_name)
 
     free(index_name);    
     fclose(fp);
-    fprintf(stderr, "Reads has been loaded.\n");
+    fprintf(stderr, "Reads has been loaded. Loading hamt bin...\n");
+
+	///////// hamt load from disk ///////////////
+	r->hamt_stat_buf_size = r->total_reads;
+	r->mean = (double*)malloc(r->total_reads*sizeof(double));
+	r->std = (double*)malloc(r->total_reads*sizeof(double));
+	r->median = (uint16_t*)malloc(r->total_reads*sizeof(uint16_t));
+	r->mask_readnorm = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
+	r->mask_readtype = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
+	
+	f_flag_hamt += fread(r->mean, sizeof(double), r->total_reads, fp_hamt);
+	f_flag_hamt += fread(r->median, sizeof(uint16_t), r->total_reads, fp_hamt);
+	f_flag_hamt += fread(r->std, sizeof(double), r->total_reads, fp_hamt);
+	f_flag_hamt += fread(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp_hamt);
+	f_flag_hamt += fread(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp_hamt);
+	
+	free(index_name_hamt);
+	fclose(fp_hamt);
+	fprintf(stderr, "Loaded hamt bin.\n"); fflush(stderr);
+	//////////////////////////////////////////////
 
 	return 1;
 }
@@ -283,6 +370,8 @@ void ha_insert_read_len(All_reads *r, int read_len, int name_len)
 		r->hamt_stat_buf_size = r->hamt_stat_buf_size * 2 + 2;
 		if (r->mean)
 			r->mean = (double*)realloc(r->mean, sizeof(double) * r->hamt_stat_buf_size);
+		if (r->median)
+			r->median = (uint16_t*)realloc(r->median, sizeof(uint16_t) * r->hamt_stat_buf_size);
 		if (r->std)
 			r->std = (double*)realloc(r->std, sizeof(double) * r->hamt_stat_buf_size);
 		if (r->mask_readnorm)

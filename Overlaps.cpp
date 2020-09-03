@@ -66,6 +66,9 @@ void sort_kvec_t_u64_warp(kvec_t_u64_warp* u_vecs, uint32_t is_descend)
         }
     }
 } 
+///////////////////////////////
+//  assembly graph interface //
+///////////////////////////////
 
 asg_t *asg_init(void)
 {
@@ -98,6 +101,10 @@ void asg_arc_sort(asg_t *g)
 	radix_sort_asg(g->arc, g->arc + g->n_arc);
 }
 
+
+/////////////////////////////
+//   overlap interface     //
+/////////////////////////////
 
 void add_overlaps(ma_hit_t_alloc* source_paf, ma_hit_t_alloc* dest_paf, uint64_t* source_index, long long listLen)
 {
@@ -2788,12 +2795,14 @@ uint32_t* endNode, long long* minLen, buf_t* b)
     {
         if(e1 == e2)
         {
-//            O
-//          /   \  
-//    -----O     O------  (the right most one is e1/e2)
-//          \   /         
-//           O 
-//
+/****************************
+            O
+          /   \  
+    -----O     O------  (the right most one is e1/e2)
+          \   /         
+           O 
+
+****************************/
             (*endNode) = e1;
             (*minLen) = (l1 <= l2)? l1: l2;
             return 1;

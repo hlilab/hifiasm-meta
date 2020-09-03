@@ -19,6 +19,8 @@
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS1)  // used for histogram, so it refers to counter bits, not pre bits
 #define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS1)-1)
 
+#define HAMT_DIG_KMERRESCUE 50
+
 const unsigned char seq_nt4_table[256] = { // translate ACGT to 0123
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
 	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -578,8 +580,8 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 						assert(p->n_seq == p->rs_out->total_reads);
 						ha_insert_read_len(p->rs_out, l, p->ks->name.l);
 					} else if (p->flag & HAF_RS_WRITE_SEQ) {
-						printf("woker_count loading seq sancheck: name %s, name length %zu; total name length %" PRIu64 "\n", p->ks->name.s, p->ks->name.l, p->rs_out->total_name_length);
-						printf("n_seq: %" PRIu64 ", name index: %" PRIu64 "\n", p->n_seq, p->rs_out->name_index[p->n_seq]); fflush(stdout);
+						// printf("woker_count loading seq sancheck: name %s, name length %zu; total name length %" PRIu64 "\n", p->ks->name.s, p->ks->name.l, p->rs_out->total_name_length);
+						// printf("n_seq: %" PRIu64 ", name index: %" PRIu64 "\n", p->n_seq, p->rs_out->name_index[p->n_seq]); fflush(stdout);
 						int i, n_N;
 						assert(l == (int)p->rs_out->read_length[p->n_seq]);
 						for (i = n_N = 0; i < l; ++i) // count number of ambiguous bases
@@ -983,8 +985,11 @@ static void worker_process_one_read(void* data, long idx_for, int tid){
 	}
 	double mean = meanl(buf, idx);
 	double std = stdl(buf, idx, mean);
+	radix_sort_hamt16(buf, buf+idx);
+	uint16_t median = (uint16_t)buf[idx/2];
 	uint8_t code = decide_category(mean, std, buf, idx);
 	s->p->rs_out->mean[rid] = mean;
+	s->p->rs_out->median[rid] = median;
 	s->p->rs_out->std[rid] = std;
 	s->p->rs_out->mask_readtype[rid] = code;
 	// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
@@ -1007,6 +1012,9 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 	int i, l, last = -1;
 	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
 	hamt_ch_buf_t *b = 0;// uint64_t *b = 0;
+
+	int has_wanted_kmers = 0;  // flag of rescue
+
 	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_for]; ++i) {
 		int c = seq_nt4_table[(uint8_t)s->seq[idx_for][i]];
 		if (c < 4) { // not an "N" base
@@ -1038,6 +1046,12 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 							b->m = b->m+((b->m)>>1);
 							b->a = (uint64_t*)realloc(b->a, sizeof(uint64_t)*b->m);
 						}
+						// check whether it's a relatively low-freq (*overall freq) kmer
+						yak_ct_t *h2 = s->p->h->h[hash & ((1<<h->pre)-1)].h;
+						key = yak_ct_get(h2, hash>>h->pre<<YAK_COUNTER_BITS1);
+						if (key!=kh_end(h2)){
+							if ((kh_key(h2, key) & YAK_MAX_COUNT) >= HAMT_DIG_KMERRESCUE) has_wanted_kmers++;
+						}
 					}
 				}
 				last = c;
@@ -1054,7 +1068,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 		s->p->rs_out->mask_readtype[rid] = code;
 		// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
 	}else{  // diginorm
-		int code = 0;
+		int code;
 		uint16_t cnt = 0;
 		uint16_t max_cnt = 0;
 		uint16_t median = 0;
@@ -1066,7 +1080,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 				cnt = 0;
 			}
 		}
-		if ((double)max_cnt/idx>0.3) {  // If so, ignore other hints and keep the read.
+		if (((double)max_cnt/idx)>0.3 || (has_wanted_kmers>=3000)) {  // If so, or there's relative low (overall) freq kmers, ignore other hints and keep the read.
 			code = 0;
 		}else{  // get median and decide
 			radix_sort_hamt16(buf_norm, buf_norm+idx);

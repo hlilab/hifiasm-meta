@@ -10,6 +10,7 @@
 #include "Correct.h"
 #include "htab.h"
 #include "kthread.h"
+#include "meta_util.h"
 
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain);
 void ha_sort_list_by_anchor(overlap_region_alloc *overlap_list);
@@ -1516,13 +1517,12 @@ int ha_assemble(void)
 				yak_cpu_usage(), yak_peakrss_in_gb());
 		ha_print_ovlp_stat(R_INF.paf, R_INF.reverse_paf, R_INF.total_reads);
 
-        //////            hamt: crude coverage filtering                   ///////
-        //           ( remove ovlp if two vertices apparently come from different places)
-        // collect kmer count hashtables
+        ///////////////////////////////////////////////////////////////////////////
+        //////            hamt: crude coverage filtering                   ////////
+        // ( remove ovlp if two vertices apparently come from different places) ///
+        // do not redo kmer counting, use mask_readtype
         
-
-
-
+        hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 20, 2);
 
         ///////////////////////////////////////////////////////////////////////////
 

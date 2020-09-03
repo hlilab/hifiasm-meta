@@ -3,6 +3,10 @@
 #include <stdint.h>
 #include <math.h>
 #include "meta_util.h"
+#include <assert.h>
+#include "Process_Read.h"
+#include "kthread.h"
+#include "CommandLines.h"  // for Get_T()
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
 #define MIN(a,b) ((a)<=(b)?(a):(b))
@@ -142,3 +146,74 @@ int decide_drop( double mean, double std, uint16_t runtime_median, int round, ui
     return 1;
 }
 
+//////////////////* del overlaps *////////////////////
+typedef struct{
+    All_reads *rs;
+    int which_paf;
+    uint64_t *cnt;
+
+    int diff_abs;
+    double diff_fold;
+} ktforbuf_del_by_cov_t;
+
+static void worker_hamt_del_ovlp_by_coverage(void* data, long idx_for, int tid){
+    ktforbuf_del_by_cov_t *s = (ktforbuf_del_by_cov_t*) data;
+    ma_hit_t *h = NULL;
+    ma_hit_t_alloc *x = s->which_paf==0? &(s->rs->paf[idx_for]) : &(s->rs->reverse_paf[idx_for]);
+    uint8_t code_query = s->rs->mask_readtype[idx_for];  // diginorm_coverage bit flag of the query read
+    int median_query = s->rs->median[idx_for];
+    median_query = median_query!=0? median_query : 1;  // just in case for divided by 0
+    uint8_t code_target = 0;
+    int median_target = 0;
+
+    int diff_abs;
+    double diff_fold;
+    int tmp_cnt = 0;
+
+    for (int i = 0; i < x->length; i++){
+        h = &(x->buffer[i]);  // the overlap
+        if(h->del) continue;
+        code_target = s->rs->mask_readtype[h->tn];
+        assert(code_target!=0);
+        if ((code_query & HAMT_READCOV_LOW && code_target & HAMT_READCOV_HIGH) || (code_target & HAMT_READCOV_LOW && code_query & HAMT_READCOV_HIGH)){
+            h->del = 1;
+            tmp_cnt+=1;
+        }else{
+            median_target = s->rs->median[h->tn];
+            median_target = median_target!=0? median_target : 1;  // just in case for divided by 0
+            if (median_query>median_target){
+                diff_abs = median_query - median_target;
+                diff_fold = (double)median_query/median_target;
+            }else{
+                diff_abs = median_target - median_query;
+                diff_fold = (double)median_target/median_query;
+            }
+            if (diff_abs >= s->diff_abs) {h->del = 1; tmp_cnt+=1; continue;}
+            if ((median_query>=8 || median_target >=8) && (diff_fold >= s->diff_fold)) {h->del = 1; tmp_cnt+=1; continue;}
+        }
+    }
+
+    *s->cnt += tmp_cnt;   // not safe but ok?
+}
+
+void hamt_del_ovlp_by_coverage(All_reads *rs, hifiasm_opt_t asm_opt, int diff_abs, double diff_fold){
+    double startTime = Get_T();
+
+    uint64_t cnt_dropped_ovlp_p = 0;
+    uint64_t cnt_dropped_ovlp_r = 0;
+    ktforbuf_del_by_cov_t s;
+    s.rs = rs;
+    s.diff_abs = diff_abs;
+    s.diff_fold = diff_fold;
+
+    s.which_paf = 0;  // use rs->paf
+    s.cnt = &cnt_dropped_ovlp_p;  // sancheck counter
+    kt_for(asm_opt.thread_num, worker_hamt_del_ovlp_by_coverage, &s, rs->total_reads);
+    
+    s.which_paf = 1;  // use rs->reverse_paf
+    s.cnt = &cnt_dropped_ovlp_r;
+    kt_for(asm_opt.thread_num, worker_hamt_del_ovlp_by_coverage, &s, rs->total_reads);
+
+    fprintf(stderr, "[meta_util::%s] took %0.2fs, masked %" PRIu64 " overlaps for paf, %" PRIu64 " for reverse_paf.\n", __func__, Get_T()-startTime, cnt_dropped_ovlp_p, cnt_dropped_ovlp_r);
+
+}

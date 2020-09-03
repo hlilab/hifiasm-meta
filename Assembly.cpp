@@ -1491,11 +1491,12 @@ int ha_assemble(void)
 	}
 	if (!ovlp_loaded) {
 		// construct hash table for high occurrence k-mers
+        // hamt: also collect kmer-based read coverage etc diginorm.
 		if (!(asm_opt.flag & HA_F_NO_KMER_FLT)) {
             hamt_flt(&asm_opt, &R_INF, 0, 0);  // count kmers and tag reads
-            printf("exit hamt_flt\n"); fflush(stdout);
+            fprintf(stderr, "[M::%s] finished hamt_flt.\n", __func__);
 			ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, HAMT_COVERAGE);  // high freq filter on retained reads
-            printf("exit ha_flt_tab\n"); fflush(stdout);
+            fprintf(stderr, "[M::%s] finished hamt_ft_gen.\n", __func__);
 			// ha_opt_update_cov(&asm_opt, hom_cov);
 		}
 		// error correction
@@ -1522,7 +1523,7 @@ int ha_assemble(void)
         // ( remove ovlp if two vertices apparently come from different places) ///
         // do not redo kmer counting, use mask_readtype
         
-        hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 20, 2);
+        // hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 20, 2);
 
         ///////////////////////////////////////////////////////////////////////////
 

@@ -9,6 +9,8 @@
 #include "Hash_Table.h"
 #include "Correct.h"
 #include "Purge_Dups.h"
+#define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
+#include <inttypes.h>  // debug, for printing uint64
 
 uint32_t debug_purge_dup = 0;
 
@@ -27045,6 +27047,51 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	*sg_ptr = sg;
 }
 
+
+///////////////////////////////////// hamt debug etc //////////////////////////////////
+void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
+    fprintf(stderr, "Writing debug asg to disk... \n");
+    double startTime = Get_T();
+    char* index_name = (char*)malloc(strlen(read_file_name)+15);
+    sprintf(index_name, "%s.dbg_asg", read_file_name);
+    FILE* fp = fopen(index_name, "w");
+
+    asg64_v a = {0,0,0};
+	uint32_t n_vtx = sg->n_seq * 2, v, i, cnt = 0;
+    
+    uint32_t nv;
+    asg_arc_t* av;
+
+    // basic info of seqs
+    for (i=0; i<rs->total_reads; i++){
+        if (sg->seq[i].del) continue;
+        fprintf(fp, "s\t%" PRIu32 "\t%f\t%" PRIu16 "\t%f\t%" PRIu8 "\t%" PRIu8 "\n",
+                           i, rs->mean[i], rs->median[i], rs->std[i], rs->mask_readtype[i], rs->mask_readnorm[i]);
+    }
+    
+    // the graph
+	for (v = 0; v < n_vtx; ++v) {
+        if (sg->seq[v>>1].del) continue;
+        nv = asg_arc_n(sg, v);
+	    av = asg_arc_a(sg, v);
+        if (nv==0) continue;
+        for (i=0; i<nv; i++){
+            if (av[i].del) continue;
+            if (sg->seq[av[i].v>>1].del) continue;
+            fprintf(fp, "l\t%" PRIu32 "\t%d\t%" PRIu32 "\t%d\t", v>>1, v&1, av[i].v>>1, av[i].v&1);  // vid, v_strand, wid, w_strand
+            fprintf(fp, "%" PRIu8 "\n", sg->seq_vis[i]);
+        }
+    }
+
+    fflush(fp);
+    fclose(fp);
+    fprintf(stderr, "[M::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////
+
 void build_string_graph_without_clean(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
 long long n_read, uint64_t* readLen, long long mini_overlap_length, 
@@ -27095,6 +27142,8 @@ long long bubble_dist, int read_graph, int write)
         max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
         output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 0);
         
+        write_debug_assembly_graph(sg, &R_INF, output_file_name);
+
         asg_destroy(sg);
         free(coverage_cut);
     }

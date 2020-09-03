@@ -248,6 +248,15 @@ typedef struct {
 	ha_ct_t *h;
 } shrink_aux_t;
 
+typedef struct {
+	int min, max;
+	float diff_ratio;
+	int diff_abs;
+	int coverage_cutoff;  // if min(cov1, ...) is small, use diff_abs only since diff_ratio would exaggerate stuff
+	ha_ct_t *h;
+	All_reads *rs;  // needed to access the read (kmer-based) coverage info
+} hamt_shrink_aux_t;
+
 static void worker_ct_shrink(void *data, long i, int tid) // callback for kt_for()
 {
 	shrink_aux_t *a = (shrink_aux_t*)data;
@@ -276,6 +285,42 @@ static void ha_ct_shrink(ha_ct_t *h, int min, int max, int n_thread)
 	for (i = 0, h->tot = 0; i < 1<<h->pre; ++i)
 		h->tot += kh_size(h->h[i].h);
 }
+
+// static void worker_hamt_ct_shrink(void *data, long i, int tid) // callback for kt_for()
+// {
+// 	hamt_shrink_aux_t *a = (hamt_shrink_aux_t*) data;
+// 	ha_ct_t *h = a->h;
+// 	yak_ct_t *g = h->h[i].h, *f;
+// 	khint_t k;
+// 	f = yak_ct_init();
+// 	yak_ct_resize(f, kh_size(g));
+// 	for (k = 0; k < kh_end(g); ++k) {
+// 		if (kh_exist(g, k)) {
+// 			int absent, c = kh_key(g, k) & YAK_MAX_COUNT;
+// 			if (c >= a->min && c <= a->max)  // frequency ok
+// 				if ()  // check reads - this needs a count hashtable. Does it worth it???
+// 					yak_ct_put(f, kh_key(g, k), &absent);
+// 		}
+// 	}
+// 	yak_ct_destroy(g);
+// 	h->h[i].h = f;
+
+// }
+
+// static void hamt_ct_shrink(ha_ct_t *h, int min, int max, float diff_ratio, int diff_abs, int cutoff, All_reads *rs,int n_thread){
+// 	// remove high freq kmers, AND the kmers that's share between reads of very different abundances
+// 	int i;
+// 	hamt_shrink_aux_t a;
+// 	a.h = h, a.min = min, a.max = max;
+// 	a.diff_abs = diff_abs; a.diff_ratio = diff_ratio; a.coverage_cutoff = cutoff; a.rs = rs;
+// 	assert(diff_ratio>=1);
+// 	assert(diff_abs>=0);
+// 	assert(cutoff>=0);
+// 	assert(rs);
+// 	kt_for(n_thread, worker_hamt_ct_shrink, &a, 1<<h->pre);
+// 	for (i = 0, h->tot = 0; i < 1<<h->pre; ++i)
+// 		h->tot += kh_size(h->h[i].h);
+// }
 
 /***********************
  * Position hash table *
@@ -925,6 +970,8 @@ typedef struct {  // global data structure for pipeline (pl_data_t)
 	int round;
 	ha_ct_t *hd;// "hashtables for read drop": the runtime kmer counts
 	// uint64_t *san_n_insert;// sancheck for migrating h to hd
+
+	uint8_t flag;
 }plmt_data_t;
 
 typedef struct {  // step data structure (st_data_t)
@@ -1081,6 +1128,7 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 			}
 		}
 		if (((double)max_cnt/idx)>0.3 || (has_wanted_kmers>=3000)) {  // If so, or there's relative low (overall) freq kmers, ignore other hints and keep the read.
+		// if (((double)max_cnt/idx)>0.3) {
 			code = 0;
 		}else{  // get median and decide
 			radix_sort_hamt16(buf_norm, buf_norm+idx);
@@ -1277,14 +1325,11 @@ void hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude
 
 void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage)
 {   // use arbitrary coverage because there might be no peaks
-	// printf("entered %s\n", __func__); fflush(stdout);
 	yak_ft_t *flt_tab;
 	int64_t cnt[YAK_N_COUNTS];
 	int peak_hom, peak_het, cutoff;
 	ha_ct_t *h;
-	// printf("%s, going to call ha_count\n", __func__); fflush(stdout);
 	h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN|HAMTF_FORCE_DONT_INIT, NULL, NULL, rs);
-	// printf("ok\n"); fflush(stdout);
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
 	peak_hom = ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);  // vanilla hifiasm histogram 
 	if (peak_hom > 0) fprintf(stderr, "[M::%s] peak_hom: %d; peak_het: %d\n", __func__, peak_hom, peak_het);

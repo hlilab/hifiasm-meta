@@ -166,14 +166,11 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	fwrite(&r->total_name_length, sizeof(r->total_name_length), 1, fp);
 
 	// hamt special
-	i=0;
-	for (i=0; i<r->total_reads; i++){
-		fwrite(r->mean, sizeof(double), r->total_reads, fp);
-		fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
-		fwrite(r->std, sizeof(double), r->total_reads, fp);
-		fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
-		fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
-	}
+	fwrite(r->mean, sizeof(double), r->total_reads, fp);
+	fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
+	fwrite(r->std, sizeof(double), r->total_reads, fp);
+	fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
+	fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
 	free(index_name);
 	fflush(fp);
     fclose(fp);

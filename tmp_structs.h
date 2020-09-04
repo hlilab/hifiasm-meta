@@ -669,7 +669,7 @@ typedef struct {
 
 typedef struct {
 	uint32_t len:31, del:1;
-	uint8_t c;  // from coverage_cut
+	uint8_t c;  // from coverage_cut, marked as ALTER_LABLE if is dropped (i think)
 } asg_seq_t;
 
 typedef struct {
@@ -681,7 +681,7 @@ typedef struct {
 	asg_seq_t *seq;
 	uint64_t *idx;
 
-	uint8_t* seq_vis;  // 1 if the node belongs to a bubble, 2 if it's a cross node (?)
+	uint8_t* seq_vis;  // 0 if all clear. 1 if the node belongs to a bubble, 2 if it's a cross node (?)
 
 	uint32_t n_F_seq;
 	ma_utg_t* F_seq;
@@ -723,7 +723,7 @@ typedef struct {
 	kvec_t(uint32_t) T; // set of tips
 	kvec_t(uint32_t) b; // visited vertices
 	kvec_t(uint32_t) e; // visited edges/arcs
-} buf_t;
+} buf_t;  // note: buffer of graph traversal
 
 
 typedef struct {  // used for removing simple circle unitig

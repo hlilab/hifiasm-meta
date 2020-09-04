@@ -7249,7 +7249,7 @@ void correct_overlap(overlap_region_alloc* overlap_list, All_reads* R_INF,
     recalcate_window_advance(overlap_list, R_INF, g_read, dumy, overlap_read);
     partition_overlaps_advance(overlap_list, R_INF, g_read, overlap_read, dumy, hap, force_repeat);
 
-    if(is_consensus)
+    if(is_consensus)  // always true in default settings
     {
         generate_consensus(overlap_list, R_INF, g_read, dumy, g, DAGCon, current_cigar, second_round);
     }

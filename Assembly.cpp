@@ -325,6 +325,8 @@ int if_exact_match(char* x, long long xLen, char* y, long long yLen, long long x
 
 long long push_final_overlaps(ma_hit_t_alloc* paf, ma_hit_t_alloc* reverse_paf_list, overlap_region_alloc* overlap_list, int flag)
 {
+    // for paf: flag = 1
+    // for reverse_paf: flag = 2
     long long i = 0;
     long long available_overlaps = 0;
     ma_hit_t tmp;
@@ -757,7 +759,8 @@ void ha_overlap_and_correct(int round, int coverage)
 
 void update_overlaps(overlap_region_alloc* overlap_list, ma_hit_t_alloc* paf, 
 UC_Read* g_read, UC_Read* overlap_read, int is_match, int is_exact)
-{
+{  // for paf: is_match=1, is_exact=1
+   // for reverse_paf: is_match=2, is_exact=0
 
     uint64_t inner_j = 0;
     uint64_t j = 0;
@@ -1163,17 +1166,28 @@ static void worker_ov_final(void *data, long i, int tid)
 	 **/
 
 	overlap_region_sort_y_id(b->olist.list, b->olist.length);
-	ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
-	ma_hit_sort_tn(R_INF.reverse_paf[i].buffer, R_INF.reverse_paf[i].length);
+    if (!asm_opt.is_disable_phasing){  // default
+        // paf contains overlaps between reads of the same haplotype, 
+        // reverse_paf contains overlaps otherwise
+        ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
+        ma_hit_sort_tn(R_INF.reverse_paf[i].buffer, R_INF.reverse_paf[i].length);
 
-	update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 1, 1);
-	update_overlaps(&b->olist, &(R_INF.reverse_paf[i]), &b->self_read, &b->ovlp_read, 2, 0);
-	///recover missing exact overlaps
-	update_exact_overlaps(&b->olist, &b->self_read, &b->ovlp_read);
+        update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 1, 1);
+        update_overlaps(&b->olist, &(R_INF.reverse_paf[i]), &b->self_read, &b->ovlp_read, 2, 0);
+        ///recover missing exact overlaps
+        update_exact_overlaps(&b->olist, &b->self_read, &b->ovlp_read);
 
-	///Final_phasing(&overlap_list, &cigarline, &g_read, &overlap_read, c2n);
-	push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
-	push_final_overlaps(&(R_INF.reverse_paf[i]), R_INF.reverse_paf, &b->olist, 2);
+        ///Final_phasing(&overlap_list, &cigarline, &g_read, &overlap_read, c2n);
+        push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
+        push_final_overlaps(&(R_INF.reverse_paf[i]), R_INF.reverse_paf, &b->olist, 2);
+    }else{    // experimental hot fix: force overlaps of reverse_paf into paf
+        ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
+        update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 1, 1);
+        update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 2, 1);
+        update_exact_overlaps(&b->olist, &b->self_read, &b->ovlp_read);
+        push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
+        push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 2);
+    }
 }
 
 

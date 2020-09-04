@@ -2052,7 +2052,9 @@ int asg_extend(const asg_t *g, uint32_t v, int max_ext, asg64_v *a)
 
 
 static inline int asg_is_single_edge(const asg_t *g, uint32_t v, uint32_t start_node)
-{// ??????
+{// ?????? function name does not describe what it'd do?
+ //        (count parent nodes (regardless of deletion state))
+ //        (then why not use asg_arc_n(g, v^1) directly???)
     
 	/**
 	..............................
@@ -6208,17 +6210,15 @@ ma_hit_t_alloc* reverse_sources, long long min_edge_length, R_to_U* ruIndex)
         ///some node could be deleted
         if (nv < 2 || g->seq[v>>1].del) continue;
 
-
-
         n_arc = get_real_length(g, v, NULL);
         if (n_arc < 2) continue;
         v_max = (uint32_t)-1;
 
-        for (i = 0, n_arc = 0; i < nv; i++)
+        for (i = 0, n_arc = 0; i < nv; i++)  // iterates from longest ovlp to the shortest (since sorting v_lv is sorting lu)
         {
             if (!av[i].del)
             {
-                if(v_max == (uint32_t)-1)
+                if(v_max == (uint32_t)-1)  // 1st
                 {
                     v_max = av[i].v;
                     v_maxLen = av[i].ol;
@@ -6815,13 +6815,11 @@ ma_hit_t_alloc* reverse_sources, long long miniedgeLen, R_to_U* ruIndex)
     kvec_t(uint64_t) b;
     memset(&b, 0, sizeof(b));
 
-
     kvec_t(uint32_t) b_f;
     memset(&b_f, 0, sizeof(b_f));
 
     kvec_t(uint32_t) b_r;
     memset(&b_r, 0, sizeof(b_r));
-
 
 	uint32_t v, w, n_vtx = g->n_seq * 2, n_cut = 0;
     uint32_t sink;
@@ -8218,7 +8216,8 @@ int asg_arc_del_short_diploi_by_suspect_edge(asg_t *g, int max_ext)
 //reomve edge between two chromesomes
 //this node must be a single read
 int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_tip, defaulted to 3
-{
+{  // will delete seqs and all their associated arcs
+   // ?????? is this cleaning self-alignment???
     double startTime = Get_T();
     kvec_t(uint64_t) b;
     memset(&b, 0, sizeof(b));
@@ -8256,6 +8255,7 @@ int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_t
         }
 	}
 
+    // each entry is: upper 32 bits overlap length, lower 32 bits which "group" does the target belong to
     radix_sort_arch64(b.a, b.a + b.n);
 
     uint64_t k;
@@ -8272,7 +8272,7 @@ int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_t
 		aw = asg_arc_a(g, w);
 
 
-        ///calculate the longest edge for v and w
+        ///calculate the longest edge for v and w  // ? this block is effectively calling get_real_length...
 		for (i = 0, kv = 0; i < nv; ++i) {
 			if (av[i].del) continue;
 			++kv;
@@ -8287,10 +8287,10 @@ int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_t
 
         ///to see which one is the current edge (from v and w)
 		for (iv = 0; iv < nv; ++iv)
-			if (av[iv].v == (w^1)) break;
+			if (av[iv].v == (w^1)) break;  // loop??????
 		for (iw = 0; iw < nw; ++iw)
 			if (aw[iw].v == (v^1)) break;
-        ///if one edge has been deleted, it should be deleted in both direction
+        ///if one edge has been deleted, it should be deleted in both direction  // ?????? the following line doesn't enforce this though...
         if (av[iv].del && aw[iw].del) continue;
 
         
@@ -14918,7 +14918,8 @@ uint32_t detect_single_path_with_dels_by_length
 
         ///up to here, kv=1
         ///kw must >= 1
-        get_real_length(g, v, &w);
+        get_real_length(g, v, &w);  // my note: therefore it's safe to use &w (when it's supposed to be an array of at least kv long)
+        // check the complimentary arc
         kw = get_real_length(g, w^1, NULL);
         v = w;
         (*endNode) = v;
@@ -14945,6 +14946,7 @@ uint32_t detect_single_path_with_dels_by_length
         {
             return LOOP;
         } 
+        // will stay in this loop & examine more nodes iff the current arc is an 1-to-1 link.
     }
 
     return LONG_TIPS;   
@@ -15078,6 +15080,10 @@ void destory_C_graph(C_graph* g)
 
 long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* coverage_cut, asg_t *g, long long circleLen, int is_drop)
 {
+    // hamt note: my understanding is this function removes the link between
+    //            the previous node of v, and a downstream node of v (the point of the closest bifurcation)
+    //            if present. 
+    //            This function will not remove the link of the seq pointing to itself?
     uint32_t v, w, n_vtx = g->n_seq * 2, n_reduced = 0, convex, flag;
     long long ll/**, coverage**/;
     asg_arc_t *aw;
@@ -15105,13 +15111,13 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
             ///actually there is just one un-del edge
             if (!av[i].del)
             {
-                b.b.n = 0;    
+                b.b.n = 0;    // reset/init? visited vertices
                 flag = detect_single_path_with_dels_by_length(g, v, &convex, &ll, &b, circleLen);
                 if(ll > circleLen || flag == LONG_TIPS)
                 {
                     break;
                 }
-                if(flag == LOOP)  // ??????
+                if(flag == LOOP)  // ?????? a loop formed by one seq?
                 {
                     break;
                 }

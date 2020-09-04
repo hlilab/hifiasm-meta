@@ -210,10 +210,11 @@ void hamt_del_ovlp_by_coverage(All_reads *rs, hifiasm_opt_t asm_opt, int diff_ab
     s.cnt = &cnt_dropped_ovlp_p;  // sancheck counter
     kt_for(asm_opt.thread_num, worker_hamt_del_ovlp_by_coverage, &s, rs->total_reads);
     
-    s.which_paf = 1;  // use rs->reverse_paf
-    s.cnt = &cnt_dropped_ovlp_r;
-    kt_for(asm_opt.thread_num, worker_hamt_del_ovlp_by_coverage, &s, rs->total_reads);
-
+    if (!asm_opt.is_disable_phasing){
+        s.which_paf = 1;  // use rs->reverse_paf
+        s.cnt = &cnt_dropped_ovlp_r;
+        kt_for(asm_opt.thread_num, worker_hamt_del_ovlp_by_coverage, &s, rs->total_reads);
+    }
     fprintf(stderr, "[meta_util::%s] took %0.2fs, masked %" PRIu64 " overlaps for paf, %" PRIu64 " for reverse_paf.\n", __func__, Get_T()-startTime, cnt_dropped_ovlp_p, cnt_dropped_ovlp_r);
 
 }

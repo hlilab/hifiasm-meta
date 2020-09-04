@@ -10,6 +10,7 @@
 #define DEFAULT_OUTPUT "hifiasm.asm"
 
 hifiasm_opt_t asm_opt;
+hifiasm_argcv_t asm_argcv;  // hamt
 
 static ko_longopt_t long_options[] = {
 	{ "version",       ko_no_argument, 300 },
@@ -130,6 +131,10 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->recover_atg_cov_min = -1024;
     asm_opt->recover_atg_cov_max = INT_MAX;
     asm_opt->hom_global_coverage = -1;
+
+    // hamt
+    asm_opt->is_disable_phasing = 0;
+    // end of hamt
 }
 
 void destory_opt(hifiasm_opt_t* asm_opt)
@@ -381,6 +386,9 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
 
     int c;
 
+    asm_argcv.ha_argc = argc;
+    asm_argcv.ha_argv = argv;    
+
     while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu", long_options)) >= 0) {
         if (c == 'h')
         {
@@ -392,6 +400,8 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
 			puts(HA_VERSION);
             return 0;
         }
+        // vanilla: abcdef hi klmnopqrstuvwxyz
+        // hamt   :       g
 		else if (c == 'f') asm_opt->bf_shift = atoi(opt.arg);
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
         else if (c == 'o') asm_opt->output_file_name = opt.arg;
@@ -418,6 +428,9 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'n') asm_opt->max_short_tip = atoll(opt.arg);
         else if (c == 'e') asm_opt->flag |= HA_F_BAN_ASSEMBLY;
         else if (c == 'u') asm_opt->flag |= HA_F_BAN_POST_JOIN;
+        // hamt
+        else if (c == 'g') asm_opt->is_disable_phasing = 1;
+        // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;
 		else if (c == 303) asm_opt->flag |= HA_F_WRITE_EC;

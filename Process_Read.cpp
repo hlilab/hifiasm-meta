@@ -5,6 +5,7 @@
 #include "Process_Read.h"
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
+#include <time.h>  // for writing misc info at the end of the bin file, ref: http://www.cplusplus.com/reference/ctime/localtime/
 
 uint8_t seq_nt6_table[256] = {
     5, 5, 5, 5,  5, 5, 5, 5,  5, 5, 5, 5,  5, 5, 5, 5,
@@ -29,6 +30,8 @@ char bit_t_seq_table[256][4] = {{0}};
 char bit_t_seq_table_rc[256][4] = {{0}};
 char s_H[5] = {'A', 'C', 'G', 'T', 'N'};
 char rc_Table[5] = {'T', 'G', 'C', 'A', 'N'};
+
+extern hifiasm_argcv_t asm_argcv;
 
 void init_All_reads(All_reads* r)
 {
@@ -143,7 +146,27 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	fwrite(&(asm_opt.hom_cov), sizeof(asm_opt.hom_cov), 1, fp);
 	fwrite(&(asm_opt.het_cov), sizeof(asm_opt.het_cov), 1, fp);
 
-    // free(index_name);    
+	//  hamt modification - include misc info at the end of bin files
+	//  TODO: paranoia checksums
+	char* str_cmd = (char*)malloc(1000*sizeof(char));
+	sprintf(str_cmd, "version=%s, ", HA_VERSION);
+	sprintf(str_cmd+strlen(str_cmd), "CMD=");
+	for (i = 0; i < asm_argcv.ha_argc; ++i)
+		sprintf(str_cmd+strlen(str_cmd), " %s", asm_argcv.ha_argv[i]);
+	
+	// get local time
+	time_t rawtime;
+    struct tm * timeinfo;
+    time (&rawtime);
+    timeinfo = localtime (&rawtime);
+	sprintf(str_cmd+strlen(str_cmd), "\n Bin file was created by %s", asctime(timeinfo));  // note: asctime(timeinfo) has a newline. 
+	
+	uint16_t length_of_cmd = (uint16_t)strlen(str_cmd);
+	fprintf(stderr, "wrote cmd of length %d (%s).\n", length_of_cmd, str_cmd);
+	fwrite(&length_of_cmd, sizeof(uint16_t), 1, fp);
+	fwrite(str_cmd, sizeof(char), length_of_cmd, fp);
+	free(str_cmd);
+    // free(index_name);   // freed after hamt dump
 	fflush(fp);
     fclose(fp);
     fprintf(stderr, "Reads has been written.\n");
@@ -228,9 +251,9 @@ int load_All_reads(All_reads* r, char* read_file_name)
 	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
 	if (san!=r->total_reads) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads); exit(1);}
 	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
-	if (san!=r->total_reads_bases) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads_bases); exit(1);}
+	if (san!=r->total_reads_bases) {fprintf(stderr, "bin and mt.bin do not agree on total_reads_bases (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads_bases); exit(1);}
 	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
-	if (san!=r->total_name_length) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_name_length); exit(1);}
+	if (san!=r->total_name_length) {fprintf(stderr, "bin and mt.bin do not agree on total_name_length (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_name_length); exit(1);}
 
 	uint64_t i = 0;
 	uint64_t zero = 0;
@@ -294,9 +317,15 @@ int load_All_reads(All_reads* r, char* read_file_name)
 		r->second_round_cigar[i].lost_base = r->cigars[i].lost_base = NULL;
 	}
 
-    free(index_name);    
+    fprintf(stderr, "Reads has been loaded. Bin file info: ");
+	uint16_t length_of_cmd;
+	fread(&length_of_cmd, sizeof(uint16_t), 1, fp);
+	char* str_cmd = (char*)malloc(length_of_cmd*sizeof(char)+15);
+	fread(str_cmd, sizeof(char), length_of_cmd, fp);
+	fprintf(stderr, "%s\n", str_cmd);
+	free(index_name);    
     fclose(fp);
-    fprintf(stderr, "Reads has been loaded. Loading hamt bin...\n");
+	fprintf(stderr, "Loading hamt bin...\n");
 
 	///////// hamt load from disk ///////////////
 	r->hamt_stat_buf_size = r->total_reads;

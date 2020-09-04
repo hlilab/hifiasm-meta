@@ -79,8 +79,17 @@ typedef struct {
     long long num_recorrected_bases;
 	long long mem_buf;
     long long coverage;
+
+    // hamt
+    int is_disable_phasing;  // experimental, disable reverse_paf (aka reverse_sources) by pushing everything into paf (aka sources).
+    // end of hamt
     
 } hifiasm_opt_t;
+
+typedef struct {
+    int ha_argc;
+    char **ha_argv;
+} hifiasm_argcv_t;  // hamt
 
 extern hifiasm_opt_t asm_opt;
 

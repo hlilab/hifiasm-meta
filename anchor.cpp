@@ -59,6 +59,7 @@ static int ha_ov_type(const overlap_region *r, uint32_t len)
 
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain)
 {
+	// work on one read
 	// current read won't be a dropped read, this is enforced in `worker_ovec` and its debug ver `worker_ovec_related_reads`.
 	extern void *ha_flt_tab;
 	extern ha_pt_t *ha_idx;
@@ -84,8 +85,8 @@ void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_reg
 	}
 	for (i = 0, ab->n_a = 0; i < ab->mz.n; ++i) {
 		int n;
-		ab->seed[i].a = ha_pt_get(ha_idx, ab->mz.a[i].x, &n);
-		ab->seed[i].n = n;
+		ab->seed[i].a = ha_pt_get(ha_idx, ab->mz.a[i].x, &n);  // start idx of the minimizer in the linear buffer
+		ab->seed[i].n = n;  // count of the minimizer
 		ab->seed[i].good = (n > low_occ && n < high_occ);
 		ab->n_a += n;
 	}
@@ -98,8 +99,8 @@ void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_reg
 		int j;
 		ha_mz1_t *z = &ab->mz.a[i];
 		seed1_t *s = &ab->seed[i];
-		for (j = 0; j < s->n; ++j) {
-			const ha_idxpos_t *y = &s->a[j];
+		for (j = 0; j < s->n; ++j) {  // for each occurence of this minimizer
+			const ha_idxpos_t *y = &s->a[j];  // its appearance
 			anchor1_t *an = &ab->a[k++];
 			uint8_t rev = z->rev == y->rev? 0 : 1;
 			an->other_off = y->pos;
@@ -110,11 +111,11 @@ void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_reg
 	}
 
 	// sort anchors
-	radix_sort_ha_an1(ab->a, ab->a + ab->n_a);
+	radix_sort_ha_an1(ab->a, ab->a + ab->n_a);  // sort by srt (targetID-strand-posOnTargetRead)
 	for (k = 1, l = 0; k <= ab->n_a; ++k) {
 		if (k == ab->n_a || ab->a[k].srt != ab->a[l].srt) {
 			if (k - l > 1)
-				radix_sort_ha_an2(ab->a + l, ab->a + k);
+				radix_sort_ha_an2(ab->a + l, ab->a + k);  // sort by posOnSelfRead
 			l = k;
 		}
 	}

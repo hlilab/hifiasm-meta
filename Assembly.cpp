@@ -1467,7 +1467,7 @@ void ha_overlap_final(void)
 	CALLOC(b, asm_opt.thread_num);
 	for (i = 0; i < asm_opt.thread_num; ++i)
 		b[i] = ha_ovec_init(asm_opt.flag & HA_F_HIGH_HET, 1);///b[i] = ha_ovec_init(1, 1);
-	ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, 1, &R_INF, &hom_cov, &het_cov); // build the index
+	ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, 1, &R_INF, &hom_cov, &het_cov); // collect minimizer positions
     if(asm_opt.flag & HA_F_HIGH_HET)
     {
         kt_for(asm_opt.thread_num, worker_ov_final_high_het, b, R_INF.total_reads);

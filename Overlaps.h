@@ -510,7 +510,8 @@ int asg_pop_bubble_primary_trio(ma_ug_t *ug, int max_dist, uint32_t positive_fla
 
 
 inline int get_real_length(asg_t *g, uint32_t v, uint32_t* v_s)
-{  // get the number of not-yet-deleted targets. More expensive than `asg_arc_n` which simply checks index and tells the number of targets (set by the time of indexing).
+{  // get the number of not-yet-deleted targets. 
+   //More expensive than `asg_arc_n` which simply checks index and tells the number of targets (set by the time of indexing).
    // (store them in v_s if not null pointer)
     uint32_t i, kv = 0;
     for (i = 0, kv = 0; i < asg_arc_n(g, v); i++)

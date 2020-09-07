@@ -107,13 +107,13 @@ typedef struct
 //************************
 //       Assembly
 //************************
-typedef struct {  // per thread data structure
+typedef struct {  // per read data structure for ov(ec) workers
 	int is_final, save_ov;
 	// chaining and overlapping related buffers
 	UC_Read self_read, ovlp_read;
-	Candidates_list clist;
+    ha_abuf_t *ab;  // for collecting & sorting. Once done, everything is copied over to clist.
+	Candidates_list clist;  // used to generate olist
 	overlap_region_alloc olist;
-	ha_abuf_t *ab;
 	// error correction related buffers
 	int64_t num_read_base, num_correct_base, num_recorrect_base;
 	Cigar_record cigar1;
@@ -230,6 +230,7 @@ typedef struct {  // shrink a hashtable
 
 typedef struct { // positional hash table
 	yak_pt_t *h;  // an ensemble of hashtables
+    // yak_pt_t can be queried by kh_val, the value marks the start index of the minimizer in the linear buffer ha_idxpos_t *a (the length is marked by kh_key(...)&YAK_MAX_COUNT .)
 	uint64_t n;
 	ha_idxpos_t *a;
 } ha_pt1_t;
@@ -250,13 +251,13 @@ typedef struct { // positional hash table
 //************************
 
 typedef struct { // this struct is not strictly necessary; we can use k_mer_pos instead, with modifications
-	uint64_t srt;  // compressed for soring. upper bits is read ID + strand, like so: an->srt = (uint64_t)y->rid<<33 | (uint64_t)rev<<32 | an->other_off;
+	uint64_t srt;  // compressed for sorting, i.e. target read ID + strand + offset on the target read, like so: an->srt = (uint64_t)y->rid<<33 | (uint64_t)rev<<32 | an->other_off;
 	uint32_t self_off:31, good:1;
-	uint32_t other_off; // pos of the minimizer on the other read
+	uint32_t other_off; // pos of the minimizer (on the target read) (it's ha_idxpos_t's pos)
 } anchor1_t;
 
 typedef struct {
-	int n, good;
+	int n, good;  // n: the count of the minimizer, i.e. the (valid) length of *a .      good: (n > low_occ && n < high_occ)
 	const ha_idxpos_t *a;  // an array of minimize positional info (supplied by `ha_idx`)
 } seed1_t;
 
@@ -718,11 +719,11 @@ typedef struct {
 
 typedef struct {
 	///all information for each node
-	binfo_t *a;
+	binfo_t *a;  // array, vertex info
 	kvec_t(uint32_t) S; // set of vertices without parents, nodes with all incoming edges visited
 	kvec_t(uint32_t) T; // set of tips
-	kvec_t(uint32_t) b; // visited vertices
-	kvec_t(uint32_t) e; // visited edges/arcs
+	kvec_t(uint32_t) b; // visited vertices (contains vertex id)
+	kvec_t(uint32_t) e; // visited edges/arcs (contains idx of the arc in arc linear buffer)
 } buf_t;  // note: buffer of graph traversal
 
 

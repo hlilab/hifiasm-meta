@@ -905,18 +905,18 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 	ha_ct_t *ct;
 	ha_pt_t *pt;
 	if (read_from_store) {
-		printf("ha_pt_gen status: all in mem\n"); fflush(stdout);
+		// printf("ha_pt_gen status: all in mem\n"); fflush(stdout);
 		extra_flag1 = extra_flag2 = HAF_RS_READ;
 	} else if (rs->total_reads == 0) {
-		printf("ha_pt_gen status: none in mem\n"); fflush(stdout);
+		// printf("ha_pt_gen status: none in mem\n"); fflush(stdout);
 		extra_flag1 = HAF_RS_WRITE_LEN;
 		extra_flag2 = HAF_RS_WRITE_SEQ;
 	} else {
-		printf("ha_pt_gen status: knew length, will load seqs in mem\n"); fflush(stdout);
+		// printf("ha_pt_gen status: knew length, will load seqs in mem\n"); fflush(stdout);
 		extra_flag1 = HAF_RS_WRITE_SEQ;
 		extra_flag2 = HAF_RS_READ;
 	}
-	ct = ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag1|HAMTF_FORCE_DONT_INIT, NULL, flt_tab, rs);
+	ct = ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag1|HAMTF_FORCE_DONT_INIT, NULL, flt_tab, rs);  // collect minimizer (aware of high freq filter)
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> counted %ld distinct minimizer k-mers\n", __func__,
 			yak_realtime(), yak_cpu_usage(), (long)ct->tot);
 	ha_ct_hist(ct, cnt, asm_opt->thread_num);
@@ -934,8 +934,8 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 		ha_ct_shrink(ct, 2, YAK_MAX_COUNT - 1, asm_opt->thread_num);
 		for (i = 2, tot_cnt = 0; i <= YAK_MAX_COUNT - 1; ++i) tot_cnt += cnt[i] * i;
 	}
-	pt = ha_pt_gen(ct, asm_opt->thread_num);
-	ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag2|HAMTF_FORCE_DONT_INIT, pt, flt_tab, rs);
+	pt = ha_pt_gen(ct, asm_opt->thread_num); // prepare the slots
+	ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag2|HAMTF_FORCE_DONT_INIT, pt, flt_tab, rs);  // collect positional info
 	fprintf(stderr, "tot_cnt=%" PRIu64 "\n", tot_cnt);
 	fprintf(stderr, "tot_pos=%" PRIu64 "\n", pt->tot_pos);
 	assert((uint64_t)tot_cnt == pt->tot_pos);
@@ -1108,9 +1108,11 @@ static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 	if (s->p->round==0){  // the initial marking
 		double mean = meanl(buf, idx);
 		double std = stdl(buf, idx, mean);
+		radix_sort_hamt16(buf, buf+idx);
+		uint16_t median = (uint16_t)buf[idx/2];
 		uint8_t code = decide_category(mean, std, buf, idx);
-		// printf("rid %" PRIu64 "\n", rid); fflush(stdout);
 		s->p->rs_out->mean[rid] = mean;
+		s->p->rs_out->median[rid] = median;
 		s->p->rs_out->std[rid] = std;
 		s->p->rs_out->mask_readtype[rid] = code;
 		// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);

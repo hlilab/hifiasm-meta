@@ -567,6 +567,8 @@ skip_dp:
 void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_region_alloc* overlap_list, 
                                           uint64_t readID, uint64_t readLength, All_reads* R_INF, double band_width_threshold, int add_beg_end)
 {
+    // readID: self read ID
+    // given candidates, calculate overlap_list.
     overlap_region tmp_region;
     long long i = 0;
     uint64_t current_ID;

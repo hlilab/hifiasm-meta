@@ -2055,35 +2055,7 @@ static inline int asg_is_single_edge(const asg_t *g, uint32_t v, uint32_t start_
 {// ?????? function name does not describe what it'd do?
  //        (count parent nodes (regardless of deletion state))
  //        (then why not use asg_arc_n(g, v^1) directly???)
-    
-	/**
-	..............................
-	.  w1---------------         .
-	.    w2--------------        .
-	.       w3--------------     .--->asg_arc_a(g, v^1)
-	.          w4-------------   .
-	.             w5------------ .
-	..............................
-						v---------------
-						..............................
-						.  w1---------------         .
-						.    w2--------------        .
-						.       w3--------------     .--->asg_arc_a(g, v)
-						.          w4-------------   .
-						.             w5------------ .
-						..............................
-    !!!!!note here the graph has already been cleaned by transitive reduction, so idealy:
 
-        .........................
-        .    w1---------------  .--->asg_arc_a(g, v^1)
-        .........................
-                            v---------------
-                                    .........................
-                                    .    w5---------------  .--->asg_arc_a(g, v)
-                                    .........................
-
-	**/
-	///v^1 is the another direction of v
 	uint32_t nv, nv0 = asg_arc_n(g, v^1);
 	int i;
 	asg_arc_t *av = asg_arc_a(g, v^1);
@@ -2095,7 +2067,7 @@ static inline int asg_is_single_edge(const asg_t *g, uint32_t v, uint32_t start_
         ///if (!av[i].del)
         {
             ++nv;
-            if(av[i].v>>1 == start_node)
+            if(av[i].v>>1 == start_node)  // i think this is always true unless graph is broken??????
             {
                 flag = 1;
             }
@@ -2180,8 +2152,8 @@ int max_hang, int min_ovlp)
 
 
 
-// pop bubbles from vertex v0; the graph MJUST BE symmetric: if u->v present, v'->u' must be present as well
-//note!!!!!!!! here we don't exculde the deleted edges
+///pop bubbles from vertex v0; the graph MJUST BE symmetric: if u->v present, v'->u' must be present as well
+///note!!!!!!!! here we don't exculde the deleted edges
 static uint64_t asg_bub_finder_with_del_advance(asg_t *g, uint32_t v0, int max_dist, buf_t *b)
 {
 	uint32_t i, n_pending = 0;
@@ -2200,7 +2172,9 @@ static uint64_t asg_bub_finder_with_del_advance(asg_t *g, uint32_t v0, int max_d
 	do {
 		///v is a node that all incoming edges have been visited
 		///d is the distance from v0 to v
-		uint32_t v = kv_pop(b->S), d = b->a[v].d, c = b->a[v].c;
+		uint32_t v = kv_pop(b->S);
+        uint32_t d = b->a[v].d;  // "the shortest distance from the initial vertex"
+        uint32_t c = b->a[v].c;  // "max count of positive reads"
 		uint32_t nv = asg_arc_n(g, v);
 		asg_arc_t *av = asg_arc_a(g, v);
 		///why we have this assert?
@@ -2220,7 +2194,7 @@ static uint64_t asg_bub_finder_with_del_advance(asg_t *g, uint32_t v0, int max_d
 			p->ol: overlap length
 			**/
 			uint32_t w = av[i].v, l = (uint32_t)av[i].ul; // v->w with length l
-			binfo_t *t = &b->a[w];
+			binfo_t *t = &b->a[w];  // vertex info of w
 			///that means there is a circle, directly terminate the whole bubble poping
 			if (w == v0)
             {
@@ -2233,7 +2207,7 @@ static uint64_t asg_bub_finder_with_del_advance(asg_t *g, uint32_t v0, int max_d
 			///if (av[i].del) continue;
             /****************************may have bugs********************************/
 
-			///push the edge
+			///push the edge // b->e is "visited edges/arcs"
 			kv_push(uint32_t, b->e, (g->idx[v]>>32) + i);
 
 			///find a too far path? directly terminate the whole bubble poping
@@ -2243,8 +2217,6 @@ static uint64_t asg_bub_finder_with_del_advance(asg_t *g, uint32_t v0, int max_d
                 break; // too far
             } 
             
-
-
 			if (t->s == 0) { // this vertex has never been visited
 				kv_push(uint32_t, b->b, w); // save it for revert
 				///t->p means the in-node of w is v
@@ -2255,7 +2227,8 @@ static uint64_t asg_bub_finder_with_del_advance(asg_t *g, uint32_t v0, int max_d
 				t->r = count_out_with_del(g, w^1);
 				++n_pending;
 			} else { // visited before
-				///c seems the max weight of node
+				///c seems the max weight of node // seems??????
+                // my note: swap parent node & update numbers if the current path is longer than the record
 				if (c + 1 > t->c || (c + 1 == t->c && d + l > t->d)) t->p = v;
 				if (c + 1 > t->c) t->c = c + 1;
 				///update len(v0->w)
@@ -3546,17 +3519,13 @@ uint32_t startNode, uint32_t endNode, int max_dist, buf_t* bub)
 int asg_arc_del_triangular_advance(asg_t *g, long long max_dist)
 {
     double startTime = Get_T();
-    ///the reason is that each read has two direction (query->target, target->query)
 	uint32_t v, n_vtx = g->n_seq * 2, n_reduced = 0, n_reduced_a = 0;
-
 
     if (!g->is_symm) asg_symm(g);
 
-
-    buf_t b;
+    buf_t b;  // bubble popping struct
 	memset(&b, 0, sizeof(buf_t));
 	b.a = (binfo_t*)calloc(n_vtx, sizeof(binfo_t));
-
 
     buf_t bub;
     memset(&bub, 0, sizeof(buf_t));
@@ -3845,14 +3814,11 @@ long long* vLen, long long* wLen, uint32_t* endNode)
             )
         {
             ///walk along first path
+            //  note: pLen1 will be -1 if no single path is available between `asg_arc_a(g, vv)[0].v` and `begNode>>1`
             long long pLen1;
             pLen1 = single_edge_length(g, asg_arc_a(g, vv)[0].v, begNode>>1, 1000);
-
-            ///walk along first path
             long long pLen2;
             pLen2 = single_edge_length(g, asg_arc_a(g, vv)[1].v, begNode>>1, 1000);
-
-
 
             if(pLen1 >= 0 && pLen2 >= 0)
             {
@@ -3969,8 +3935,7 @@ uint32_t startNode, uint32_t endNode)
 
             if(if_node_exist(nodes, length, vEnd>>1) && ((vEnd>>1) != (endNode>>1)))
            {
-               
-               if(Len[0] == 1 && Len[1] != 1)
+               if(Len[0] == 1 && Len[1] != 1)  
                {
                    w = av[0].v;
                    longLen = Len[1];
@@ -4089,8 +4054,8 @@ int test_single_node_bubble_directly(asg_t *g, uint32_t v, long long longLen_thr
     }
 
     
-    flag0 = asg_is_single_edge(g, av[0].v, v>>1);  // count of predecessor of the given vertex
-    flag1 = asg_is_single_edge(g, av[1].v, v>>1);
+    flag0 = asg_is_single_edge(g, av[0].v, v>>1);  // function name does not say what it does; count of predecessor of the given vertex
+    flag1 = asg_is_single_edge(g, av[1].v, v>>1);  // function name does not say what it does; count of predecessor of the given vertex
     if(flag0 != 1 || flag1 != 1)  // not a simplest start of a bubble
     {
         return 0;
@@ -4098,6 +4063,7 @@ int test_single_node_bubble_directly(asg_t *g, uint32_t v, long long longLen_thr
 
     if(check_small_bubble(g, v, av[0].v, av[1].v, &(Len[0]), &(Len[1]), &vEnd))
     {
+        // ~remove the shroter side~
         if(Len[0] == 1 && Len[1] != 1)
         {
             w = av[0].v;
@@ -4148,7 +4114,7 @@ int test_single_node_bubble_directly(asg_t *g, uint32_t v, long long longLen_thr
             }
             /****************************may have bugs********************************/
         }
-        else if(Len[0] == 1 && Len[1] == 1)
+        else if(Len[0] == 1 && Len[1] == 1)  // both sides are equally long: 1 arc away
         {
             flag0 = sources[av[0].v>>1].is_abnormal;
             flag1 = sources[av[1].v>>1].is_abnormal;
@@ -4246,9 +4212,11 @@ int asg_arc_del_single_node_bubble(asg_t *g, long long max_dist)
 }
 
 int asg_arc_del_single_node_directly(asg_t *g, long long longLen_thres, ma_hit_t_alloc* sources)
-{
+{  // pop small bubble
+   // if one side is 1-arc long and the other side appears longer, the short side's node is removed
+   // if both 1-arc long, it depends on alignment
+   // (doesn't process larger/more complex bubbles.)
     double startTime = Get_T();
-    ///the reason is that each read has two direction (query->target, target->query)
 	uint32_t v, n_vtx = g->n_seq * 2, n_reduced = 0;
     for (v = 0; v < n_vtx; ++v) 
     {
@@ -14919,7 +14887,6 @@ uint32_t detect_single_path_with_dels_by_length
         ///up to here, kv=1
         ///kw must >= 1
         get_real_length(g, v, &w);  // my note: therefore it's safe to use &w (when it's supposed to be an array of at least kv long)
-        // check the complimentary arc
         kw = get_real_length(g, w^1, NULL);
         v = w;
         (*endNode) = v;
@@ -15081,9 +15048,10 @@ void destory_C_graph(C_graph* g)
 long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* coverage_cut, asg_t *g, long long circleLen, int is_drop)
 {
     // hamt note: my understanding is this function removes the link between
-    //            the previous node of v, and a downstream node of v (the point of the closest bifurcation)
-    //            if present. 
-    //            This function will not remove the link of the seq pointing to itself?
+    //            the start of the seq, and a downstream seq of it (the point of the closest bifurcation) that overlpas it's start.
+    // more notes: This function will not remove the link of the seq pointing to itself? (because flag==LOOP will skip dropping)
+    //             This function also only cuts the circle if the current seq (w->v) has in_degree>1,
+    //               so anyway we're not losing all circles solely because of this, i think.
     uint32_t v, w, n_vtx = g->n_seq * 2, n_reduced = 0, convex, flag;
     long long ll/**, coverage**/;
     asg_arc_t *aw;
@@ -15099,8 +15067,10 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
         uint32_t i, n_arc = 0, nv = asg_arc_n(g, v);
         asg_arc_t *av = asg_arc_a(g, v);
         ///some node could be deleted
+        // (skip if the seq itself deleted / marked)
         if (g->seq[v>>1].del) continue;
         if(is_drop && g->seq[v>>1].c == ALTER_LABLE) continue;
+        // (skip if has only 1 or no parent)
         if(get_real_length(g, v^1, NULL)<=1) continue;
 
         n_arc = get_real_length(g, v, NULL);  // number of targets of v
@@ -15123,6 +15093,7 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
                 }
                 if(flag != END_TIPS && flag != LONG_TIPS)
                 {
+                    // if reach this point, either the endVertex (aka convex) has at least 2 children, or has at least 2 parents
                     if(v == convex && b.b.n > 1)
                     {
                         convex = b.b.a[b.b.n - 2];
@@ -23307,9 +23278,10 @@ void pre_clean(ma_hit_t_alloc* sources, ma_sub_t* coverage_cut, asg_t *sg, long 
         ///remove very simple circle
         tri_flag += asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
         ///remove isoloated single read
+        // actually this processes small simple bubbles?
         tri_flag += asg_arc_del_single_node_directly(sg, asm_opt.max_short_tip, sources);
 
-        if (!ha_opt_triobin(&asm_opt))
+        if (!ha_opt_triobin(&asm_opt))  // if not given trio binning files
         {
             tri_flag += asg_arc_del_triangular_advance(sg, bubble_dist);
             ///remove the cross at the bubble carefully, just remove inexact cross

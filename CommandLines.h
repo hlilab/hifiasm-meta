@@ -5,7 +5,8 @@
 
 #define HA_VERSION "0.11-r302"
 
-#define VERBOSE 0
+// #define VERBOSE 1
+extern int VERBOSE;  // expose to cli
 
 #define HA_F_NO_HPC          0x1
 #define HA_F_NO_KMER_FLT     0x2

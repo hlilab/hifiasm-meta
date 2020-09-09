@@ -12,6 +12,16 @@
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
 
+// (hifiasm: filter short potential unitigs)
+#define ASG_ET_MERGEABLE 0
+#define ASG_ET_TIP       1
+#define ASG_ET_MULTI_OUT 2
+#define ASG_ET_MULTI_NEI 3
+
+// (hifiasm)
+#define arc_cnt(g, v) ((uint32_t)(g)->idx[(v)])
+#define arc_first(g, v) ((g)->arc[(g)->idx[(v)]>>32])
+
 uint32_t debug_purge_dup = 0;
 
 KDQ_INIT(uint64_t)
@@ -68,9 +78,12 @@ void sort_kvec_t_u64_warp(kvec_t_u64_warp* u_vecs, uint32_t is_descend)
         }
     }
 } 
-///////////////////////////////
-//  assembly graph interface //
-///////////////////////////////
+
+
+
+///////////////////////////////////////////////
+//  assembly graph / arc / overlap interface //
+///////////////////////////////////////////////
 
 asg_t *asg_init(void)
 {
@@ -104,10 +117,6 @@ void asg_arc_sort(asg_t *g)
 }
 
 
-/////////////////////////////
-//   overlap interface     //
-/////////////////////////////
-
 void add_overlaps(ma_hit_t_alloc* source_paf, ma_hit_t_alloc* dest_paf, uint64_t* source_index, long long listLen)
 {
     long long i;
@@ -139,7 +148,6 @@ void remove_overlaps(ma_hit_t_alloc* source_paf, uint64_t* source_index, long lo
     }
     source_paf->length = m;
 }
-
 
 void add_overlaps_from_different_sources(ma_hit_t_alloc* source_paf_list, ma_hit_t_alloc* dest_paf, 
 uint64_t* source_index, long long listLen)
@@ -173,8 +181,6 @@ uint64_t* source_index, long long listLen)
         add_ma_hit_t_alloc(dest_paf, &ele);
     }
 }
-
-
 
 void ma_ug_destroy(ma_ug_t *ug)
 {
@@ -246,8 +252,6 @@ ma_utg_t* asg_F_seq_set(asg_t *g, int iid)
     return &(g->F_seq[index]);
 }
 
-
-
 // hard remove arcs marked as "del"
 void asg_arc_rm(asg_t *g)
 {
@@ -290,10 +294,6 @@ void asg_cleanup(asg_t *g)
 	///index the overlaps in graph with query id
 	if (g->idx == 0) asg_arc_index(g);
 }
-
-
-
-
 
 // delete multi-arcs
 /**
@@ -449,6 +449,9 @@ inline void set_reverse_overlap(ma_hit_t* dest, ma_hit_t* source)
 }
 
 
+/////////////////////////////////
+/////    graph methods   ////////
+/////////////////////////////////
 
 
 void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long num_sources)
@@ -1892,11 +1895,6 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
 /**********************************
  * Filter short potential unitigs *
  **********************************/
-#define ASG_ET_MERGEABLE 0
-#define ASG_ET_TIP       1
-#define ASG_ET_MULTI_OUT 2
-#define ASG_ET_MULTI_NEI 3
-
 static inline int asg_is_utg_end(const asg_t *g, uint32_t v, uint64_t *lw)
 {
     
@@ -8298,8 +8296,8 @@ int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_t
 }
 
 
-#define arc_cnt(g, v) ((uint32_t)(g)->idx[(v)])
-#define arc_first(g, v) ((g)->arc[(g)->idx[(v)]>>32])
+// #define arc_cnt(g, v) ((uint32_t)(g)->idx[(v)])
+// #define arc_first(g, v) ((g)->arc[(g)->idx[(v)]>>32])
 
 ma_ug_t *ma_ug_gen(asg_t *g)
 {
@@ -26780,6 +26778,130 @@ int max_hang, int min_ovlp)
 }
 
 
+///////////////////////////// hamt stuff ///////////////////////////
+static inline int hamt_asgutil_count_remaining_pres(const asg_t *sg, uint32_t v){
+    // practically asg_is_single_edge, whose name i think is confusing??
+    // for all pres, just use asg_arc_n
+    //?????? should i consider sg->seq[v].c as well?
+    int cnt = 0;
+    asg_arc_t *av = asg_arc_a(sg, v^1);
+    uint32_t nv = asg_arc_n(sg, v^1);
+    for (uint32_t i=0; i<nv; i++){
+        if (!av[i].del) cnt++;
+    }
+    return cnt;
+}
+static inline int hamt_asgutil_count_remaining_sufs(const asg_t *sg, uint32_t v){
+    int cnt = 0;
+    asg_arc_t *av = asg_arc_a(sg, v);
+    uint32_t nv = asg_arc_n(sg, v);
+    for (uint32_t i=0; i<nv; i++){
+        if (!av[i].del) cnt++;
+    }
+    return cnt;
+}
+
+int hamt_asgutil_detect_strict_single_long_path(asg_t *sg, uint32_t begNode, uint32_t *endNode, 
+                                                int threshold_nodes, uint64_t threshold_length){
+    // simpler & more aggressive version of detect_single_path* functions.
+    // - exclude any deleted seq or arc
+    // - does not store any path info, only report its type
+    // (set a threshold to zero will disable it)
+    // returns: 0 is nope, 1 is yes, -1 is error
+    if (threshold_nodes==0 && threshold_length==0 && ((!endNode) || ((*endNode)>>1 == begNode>>1))){
+        fprintf(stderr, "[W::%s] no threshold/destination set.\n", __func__);
+        return -1;
+    }
+    uint32_t v = begNode, nv;
+    asg_arc_t *av;
+    int cnt = 0;  // nodes visited
+    uint64_t acc = 0;  // length of seqs visited
+    uint32_t i;
+    while (1){
+        if (cnt>threshold_nodes || acc>threshold_length) break;
+        if (endNode && (v>>1 == (*endNode)>>1)) break;
+        nv = hamt_asgutil_count_remaining_sufs(sg, v);
+        if (nv>1) return 0;  // bifur
+        if (nv==0) return 0;  // short tip, early termination of traversal
+        nv = asg_arc_n(sg, v);
+        av = asg_arc_a(sg, v);
+        if ((v>>1)==(av[0].v>>1)) return 0;  // circle
+
+        cnt++;
+        // acc += (uint32_t)sg->arc[v].ul;
+        // acc += (uint32_t) sg->idx[]
+
+        for (i=0; i<nv; i++)
+            if (!av[i].del) 
+                {v = av[0].v; 
+                acc += (uint32_t) av[0].ul;
+                break;}
+        if (hamt_asgutil_count_remaining_sufs(sg, v^1)!=1) return 0;  // backward bifur 
+    }
+    return 1;
+}
+
+void hamt_asg_arc_del_by_read_cov_diff(asg_t *sg, All_reads *rs, int diff_abs, double diff_ratio, int is_final){
+    // drop an arc if it's
+    //    1) not a single edge
+    //    2) vertices belong to reads of different coverage (measured by median kmer frequency)
+    double startTime = Get_T();
+    int cnt = 0;
+    uint32_t n_vtx = sg->n_seq*2, v, w;
+    uint32_t nv;
+    asg_arc_t *av;
+    uint16_t median_v, median_w, min, abs; double ratio;
+    for (v=0; v<n_vtx; v++){
+        if (sg->seq[v>>1].del || sg->seq[v>>1].c == ALTER_LABLE) continue;  // seq deleted
+        if (asg_is_utg_end(sg, v, 0) == ASG_ET_TIP) continue;  // is a tip
+        nv = asg_arc_n(sg, v);
+        if(nv<2) continue; // not a bifurcation point
+        if (hamt_asgutil_count_remaining_sufs(sg, v)<2) continue;  // not a bifur point after dropping
+        av = asg_arc_a(sg, v);
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].del) continue;
+            w = av[i].v;
+
+            // want to avoid cutting the arc if child node leads to a long nice 
+            uint32_t code = hamt_asgutil_detect_strict_single_long_path(sg, w, NULL, 3, 50000);  // no bifurcation whatsoever within 3 nodes or 50kb
+            if (code>0) continue;
+            if (!is_final){
+                // a more relaxed criteria: if the current arc is single, don't drop (regardless of its downstream)
+                if (hamt_asgutil_count_remaining_sufs(sg, w^1)==1) continue;
+            }
+            // if we reach here, check depth of reads and see if we want to drop the arc
+            // median_v = rs->median[v>>1];
+            // median_w = rs->median[w>>1];
+            // TEMPORARY!! 
+            median_v = (uint16_t) rs->mean[v>>1];
+            median_w = (uint16_t) rs->mean[w>>1];
+            if (median_v>median_w){
+                min = median_w;
+                abs = median_v-median_w;
+                ratio = (double)median_v/median_w;
+            } else {
+                min = median_v;
+                abs = median_w-median_v;
+                ratio = (double)median_w/median_v;
+            }
+            if ((diff_abs!=0 && abs>diff_abs) || (min>=5 && diff_ratio!=0 && ratio>diff_ratio)){
+                // drop the arc (min>=5 for protecting low cov)
+                av[i].del = 1;
+                cnt++;
+            }
+        }
+    }
+    if (cnt>0) {
+		asg_cleanup(sg);
+		asg_symm(sg);
+	}
+    if(VERBOSE >= 1){
+        fprintf(stderr, "[M::%s] cut %d non-single arcs between reads of different coverage (is_final: %d).\n", __func__, cnt, is_final);
+        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+    }
+}
+////////////////////// end of hamt stuff //////////////////////
+
 
 
 void clean_graph(
@@ -26865,7 +26987,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         }
         double drop_ratio = min_ovlp_drop_ratio;
         int i = 0;
-        for (i = 0; i < clean_round; i++, drop_ratio += cut_step)
+        for (i = 0; i < clean_round; i++, drop_ratio += cut_step)  // main clean loop
         {
             if(drop_ratio > max_ovlp_drop_ratio)
             {
@@ -26928,6 +27050,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             asg_arc_del_complex_false_link(sg, 0.6, 0.85, bubble_dist, reverse_sources, asm_opt.max_short_tip);
 
             asg_cut_tip(sg, asm_opt.max_short_tip);
+
+            ///////////////////////// hamt special ////////////////////////////////
+            hamt_asg_arc_del_by_read_cov_diff(sg, &R_INF, 30, (double)4.0, (i==(clean_round-1))?1:0);  
+            ///////////////////////////////////////////////////////////////////////
         }
     }
 
@@ -26959,6 +27085,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     asg_cut_tip(sg, asm_opt.max_short_tip);
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
+
+    hamt_asg_arc_del_by_read_cov_diff(sg, &R_INF, 20, (double)3.0, 1);  
 
     if (asm_opt.flag & HA_F_VERBOSE_GFA)
     {
@@ -27035,7 +27163,7 @@ void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
     FILE* fp = fopen(index_name, "w");
 
     asg64_v a = {0,0,0};
-	uint32_t n_vtx = sg->n_seq * 2, v, i, cnt = 0;
+	uint32_t n_vtx = sg->n_seq * 2, v, i;
     
     uint32_t nv;
     asg_arc_t* av;
@@ -27065,10 +27193,7 @@ void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
     fclose(fp);
     fprintf(stderr, "[M::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
 }
-
-
-
-///////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////end of hamt debug etc/////////////////////////////////////////
 
 void build_string_graph_without_clean(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 

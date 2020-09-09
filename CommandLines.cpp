@@ -6,11 +6,13 @@
 #include <sys/time.h>
 #include "CommandLines.h"
 #include "ketopt.h"
+#include "gitcommit.h"
 
 #define DEFAULT_OUTPUT "hifiasm.asm"
 
 hifiasm_opt_t asm_opt;
 hifiasm_argcv_t asm_argcv;  // hamt
+int VERBOSE = 0; // expose to cli
 
 static ko_longopt_t long_options[] = {
 	{ "version",       ko_no_argument, 300 },
@@ -37,7 +39,7 @@ double Get_T(void)
 
 void Print_H(hifiasm_opt_t* asm_opt)
 {
-    fprintf(stderr, "Usage: hifiasm [options] <in_1.fq> <in_2.fq> <...>\n");
+    fprintf(stderr, "Usage: hifiasm %s (hamt prv commit: %s) \n", HA_VERSION, GIT_COMMIT);
     fprintf(stderr, "Options:\n");
 	fprintf(stderr, "  Input/Output:\n");
     fprintf(stderr, "    -o STR      prefix of output files [%s]\n", asm_opt->output_file_name);
@@ -389,7 +391,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
     asm_argcv.ha_argc = argc;
     asm_argcv.ha_argv = argv;    
 
-    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu", long_options)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:gV", long_options)) >= 0) {
         if (c == 'h')
         {
             Print_H(asm_opt);
@@ -402,6 +404,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         }
         // vanilla: abcdef hi klmnopqrstuvwxyz
         // hamt   :       g
+        // new    :                      V
 		else if (c == 'f') asm_opt->bf_shift = atoi(opt.arg);
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
         else if (c == 'o') asm_opt->output_file_name = opt.arg;
@@ -430,6 +433,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'u') asm_opt->flag |= HA_F_BAN_POST_JOIN;
         // hamt
         else if (c == 'g') asm_opt->is_disable_phasing = 1;
+        else if (c == 'V') VERBOSE = 1;
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

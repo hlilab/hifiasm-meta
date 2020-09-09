@@ -8,7 +8,7 @@ OBJS=		CommandLines.o Process_Read.o Assembly.o Hash_Table.o \
 			POA.o Correct.o Levenshtein_distance.o Overlaps.o Trio.o kthread.o Purge_Dups.o \
 			htab.o hist.o sketch.o anchor.o extract.o sys.o ksw2_extz2_sse.o \
 			meta_util.o
-EXE=		hifiasm_mt_test
+EXE=		hifiasm_mt_test_sep7
 LIBS=		-lz -lpthread -lm #-fsanitize=address
 
 ifneq ($(asan),)

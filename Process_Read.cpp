@@ -160,7 +160,7 @@ void write_All_reads(All_reads* r, char* read_file_name)
     struct tm * timeinfo;
     time (&rawtime);
     timeinfo = localtime (&rawtime);
-	sprintf(str_cmd+strlen(str_cmd), "\n Bin file was created by %s", asctime(timeinfo));  // note: asctime(timeinfo) has a newline. 
+	sprintf(str_cmd+strlen(str_cmd), "\nBin file was created by %s", asctime(timeinfo));  // note: asctime(timeinfo) has a newline. 
 
 	// also include the previous git commit id
 	sprintf(str_cmd+strlen(str_cmd), "Previous git commit hash is: %s .\n", GIT_COMMIT);
@@ -323,12 +323,18 @@ int load_All_reads(All_reads* r, char* read_file_name)
 
     fprintf(stderr, "Reads has been loaded. Bin file info: ");
 	uint16_t length_of_cmd;
-	fread(&length_of_cmd, sizeof(uint16_t), 1, fp);
-	char* str_cmd = (char*)malloc(length_of_cmd*sizeof(char)+15);
-	fread(str_cmd, sizeof(char), length_of_cmd, fp);
-	fprintf(stderr, "%s\n", str_cmd);
+	size_t ret = fread(&length_of_cmd, sizeof(uint16_t), 1, fp);
+	if (ret==1){
+		char* str_cmd = (char*)malloc(length_of_cmd+15);
+		fread(str_cmd, sizeof(char), length_of_cmd, fp);
+		str_cmd[length_of_cmd] = '\0';
+		fprintf(stderr, "%s\n", str_cmd);
+		free(str_cmd);
+	} else {
+		fprintf(stderr, "(bin file info not available).\n");
+	}
 	free(index_name);    
-    fclose(fp);
+	fclose(fp);
 	fprintf(stderr, "Loading hamt bin...\n");
 
 	///////// hamt load from disk ///////////////

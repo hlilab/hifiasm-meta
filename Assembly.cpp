@@ -1535,9 +1535,7 @@ int ha_assemble(void)
         ///////////////////////////////////////////////////////////////////////////
         //////            hamt: crude coverage filtering                   ////////
         // ( remove ovlp if two vertices apparently come from different places) ///
-        // do not redo kmer counting, use mask_readtype
-        
-        // hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 20, 2);
+        hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 100, 10);
 
         ///////////////////////////////////////////////////////////////////////////
 

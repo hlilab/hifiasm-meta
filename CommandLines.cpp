@@ -27,6 +27,8 @@ static ko_longopt_t long_options[] = {
     { "purge-cov",     ko_required_argument, 309 },
     { "pri-range",     ko_required_argument, 310 },
     { "high-het",      ko_no_argument, 311 },
+    // hamt debug/probing modules
+    { "read-kmer-profile", ko_no_argument, 400},
 	{ 0, 0, 0 }
 };
 
@@ -136,6 +138,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
 
     // hamt
     asm_opt->is_disable_phasing = 0;
+    asm_opt->mode_read_kmer_profile = 0;
     // end of hamt
 }
 
@@ -434,6 +437,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         // hamt
         else if (c == 'g') asm_opt->is_disable_phasing = 1;
         else if (c == 'V') VERBOSE = 1;
+        else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for every read.\n");} 
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

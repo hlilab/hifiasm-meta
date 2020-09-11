@@ -1,0 +1,1 @@
+int hamt_rkp(void);

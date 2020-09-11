@@ -69,6 +69,7 @@ void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_reg
 	// double high_occ = asm_opt.hom_cov * (2.0 - HA_KMER_GOOD_RATIO);
 	double low_occ = 5;  // hamt arbitrary!
 	double high_occ = HAMT_COVERAGE * (2.0 - HA_KMER_GOOD_RATIO);  // hamt arbitrary!
+	// double low_occ = 0;  double high_occ = 1<<12-1; // debug
 
 	// prepare
     clear_Candidates_list(cl);

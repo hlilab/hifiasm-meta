@@ -5,6 +5,7 @@
 #include "Assembly.h"
 #include "Levenshtein_distance.h"
 #include "htab.h"
+// #include "debug_modules.h"
 
 int main(int argc, char *argv[])
 {
@@ -12,6 +13,12 @@ int main(int argc, char *argv[])
 	yak_reset_realtime();
     init_opt(&asm_opt);
     if (!CommandLine_process(argc, argv, &asm_opt)) return 1;
+
+	if (asm_opt.mode_read_kmer_profile){
+		ret = hamt_read_kmer_profile(&asm_opt, &R_INF);
+		return ret;
+	}
+
 	ret = ha_assemble();
     destory_opt(&asm_opt);
 	fprintf(stderr, "[M::%s] Version: %s\n", __func__, HA_VERSION);

@@ -759,7 +759,6 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 
 static ha_ct_t *yak_count(const yak_copt_t *opt, const char *fn, int flag, ha_pt_t *p0, ha_ct_t *c0, const void *flt_tab, All_reads *rs, int64_t *n_seq)
 {
-	printf("entered yak_count\n"); fflush(stdout);
 	int read_rs = (rs && (flag & HAF_RS_READ));
 	pl_data_t pl;
 	gzFile fp = 0;
@@ -1344,4 +1343,236 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 			yak_realtime(), yak_cpu_usage(), yak_peakrss_in_gb(), (long)kh_size(flt_tab), cutoff);
 	reset_All_reads(rs);
 	return (void*)flt_tab;
+}
+
+
+
+/////////////////////////////////////////////////////////////
+////            meta debug util                            //
+/////////////////////////////////////////////////////////////
+
+typedef struct{
+	int n, m;
+	uint16_t *a;
+}debugrkp_linearbuf_t;
+
+typedef struct {  // global data structure for pipeline (pl_data_t)
+	yak_copt_t *opt;
+	uint64_t *n_seq;
+	All_reads *rs_in;
+	All_reads *rs_out;
+	kseq_t *ks;
+	ha_ct_t *h;  // counted kmer tables (equals to the h from 1st call of ha_count in vanilla hifiasm)
+	// char *filename_out;
+	FILE *fp_out;
+}debugrkp_plmt_data_t;
+
+typedef struct {  // step data structure (st_data_t)
+	debugrkp_plmt_data_t* p;
+	uint64_t n_seq0;
+	int n_seq, m_seq, sum_len, nk;
+	int *len;
+	char **seq;
+	char **qname; int *qnamelen;
+	debugrkp_linearbuf_t *lnbuf;  // $n_seq linear buffers
+}debugrkp_pltmt_step_t;
+
+
+static void worker_get_one_read_kmer_profile_noHPC(void* data, long idx_for, int tid) // insert k-mers in $seq to linear buffer $buf
+{
+	debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*) data;
+	int i, l;
+	int k = s->p->opt->k;
+	char *seq = s->seq[idx_for];
+	int len = s->len[idx_for];
+	ha_ct_t *h = s->p->h;
+	debugrkp_linearbuf_t *lnbuf = &s->lnbuf[idx_for];
+
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	uint64_t hash;
+	uint16_t count;
+	khint_t key;
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < len; ++i) {
+		int c = seq_nt4_table[(uint8_t)seq[i]];
+		if (c < 4) { // not an "N" base
+			x[0] = (x[0] << 1 | (c&1))  & mask;
+			x[1] = (x[1] << 1 | (c>>1)) & mask;
+			x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+			x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+			if (++l >= k){
+					hash = yak_hash_long(x);
+					yak_ct_t *h_ = h->h[hash&((1<<YAK_COUNTER_BITS)-1)].h;
+					key = yak_ct_get(h_, hash>>YAK_COUNTER_BITS<<YAK_COUNTER_BITS1);
+					if (key==kh_end(h_)) continue;
+					count = kh_key(h_, key) & YAK_MAX_COUNT;
+					if ((lnbuf->n+5)>=(lnbuf->m)){
+						lnbuf->m += lnbuf->m>>1;
+						REALLOC(lnbuf->a, lnbuf->m);
+					}
+					lnbuf->a[lnbuf->n] = count;
+					lnbuf->n++;
+				}
+		} else l = 0, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+}
+
+static void worker_get_one_read_kmer_profile_HPC(void* data, long idx_for, int tid) // insert k-mers in $seq to linear buffer $buf
+{// ch_buf_t *buf, int k, int p, int len, const char *seq
+	debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*) data;
+	int i, l, last = -1;
+	int k = s->p->opt->k;
+	char *seq = s->seq[idx_for];
+	int len = s->len[idx_for];
+	ha_ct_t *h = s->p->h;
+	debugrkp_linearbuf_t *lnbuf = &s->lnbuf[idx_for];
+	khint_t key;
+
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	uint64_t hash;
+	uint16_t count;
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < len; ++i) {
+		int c = seq_nt4_table[(uint8_t)seq[i]];
+		if (c < 4) { // not an "N" base
+			if (c != last) {
+				x[0] = (x[0] << 1 | (c&1))  & mask;
+				x[1] = (x[1] << 1 | (c>>1)) & mask;
+				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+				if (++l >= k){
+					hash = yak_hash_long(x);
+					yak_ct_t *h_ = h->h[hash&((1<<YAK_COUNTER_BITS)-1)].h;
+					key = yak_ct_get(h_, hash>>YAK_COUNTER_BITS<<YAK_COUNTER_BITS1);
+					if (key==kh_end(h_)) continue;
+					count = kh_key(h_, key) & YAK_MAX_COUNT;
+					if ((lnbuf->n+5)>=(lnbuf->m)){
+						lnbuf->m += lnbuf->m>>1;
+						REALLOC(lnbuf->a, lnbuf->m);
+					}
+					lnbuf->a[lnbuf->n] = count;
+					lnbuf->n++;
+				}
+				last = c;
+			}
+		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+}
+
+static void *worker_read_kmer_profile(void *data, int step, void *in){  // callback of kt_pipeline
+	debugrkp_plmt_data_t *p = (debugrkp_plmt_data_t*)data;
+	if (step==0){ // step 1: read a block of sequences
+		int ret;
+		debugrkp_pltmt_step_t *s;
+		CALLOC(s, 1);
+		s->p = p;
+		s->n_seq0 = *p->n_seq;
+		s->lnbuf = 0;
+
+		s->lnbuf = (debugrkp_linearbuf_t*)calloc(1500, sizeof(debugrkp_linearbuf_t));
+		for (int i=0; i<1500; i++){
+			s->lnbuf[i].a = (uint16_t*)calloc(15000, sizeof(uint16_t));
+			s->lnbuf[i].n = 0;
+			s->lnbuf[i].m = 15000;
+		}
+
+		while ((ret = kseq_read(p->ks)) >= 0) {
+			int l = p->ks->seq.l;
+			if (*p->n_seq >= 1<<28) {
+				fprintf(stderr, "WARNING: too many reads, will continue but mind that the data won't fit in hifiasm\n");
+			}
+			if (p->rs_out) {
+				assert(*p->n_seq == p->rs_out->total_reads);
+				ha_insert_read_len(p->rs_out, l, p->ks->name.l);
+			}
+			if (s->n_seq == s->m_seq) {
+				s->m_seq = s->m_seq < 16? 16 : s->m_seq + (s->m_seq>>1);
+				REALLOC(s->len, s->m_seq);
+				REALLOC(s->qnamelen, s->m_seq);
+				REALLOC(s->seq, s->m_seq);
+				REALLOC(s->qname, s->m_seq);
+			}
+			MALLOC(s->seq[s->n_seq], l);
+			memcpy(s->seq[s->n_seq], p->ks->seq.s, l);
+			MALLOC(s->qname[s->n_seq], p->ks->name.l+5);
+			memcpy(s->qname[s->n_seq], p->ks->name.s, p->ks->name.l);
+			s->qname[s->n_seq][p->ks->name.l] = '\0';
+			s->qnamelen[s->n_seq] = p->ks->name.l;
+			s->len[s->n_seq] = l;
+			s->n_seq++;
+			*p->n_seq+=1;
+			s->sum_len += l;
+			s->nk += l >= p->opt->k? l - p->opt->k + 1 : 0;
+
+			// if (s->sum_len >= p->opt->chunk_size){
+			if (s->n_seq==1500){
+				break;
+			}
+			if (s->n_seq>1500){fprintf(stderr, "?\n"); fflush(stderr); exit(1);}
+		}
+		if (s->sum_len == 0) {
+			free(s); 
+		}
+		else return s;
+
+	}else if (step==1){  // step2 get profile
+		debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*)in;
+		if (p->opt->is_HPC)
+			kt_for(s->p->opt->n_thread, worker_get_one_read_kmer_profile_HPC, s, s->n_seq);
+		else
+			kt_for(s->p->opt->n_thread, worker_get_one_read_kmer_profile_noHPC, s, s->n_seq);
+		return s;
+	}else if(step==2){  // write to disk
+		debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*)in;
+		int i;
+		for (int j=0; j<s->n_seq; j++){
+			fprintf(s->p->fp_out, "%s\t", s->qname[j]);
+			for (i=0; i<s->lnbuf->m; i++){
+				fprintf(s->p->fp_out, "%" PRIu16 ",", s->lnbuf[j].a[i]);
+			}
+			fprintf(s->p->fp_out, "\n");
+			free(s->lnbuf[j].a);
+		}
+		free(s->lnbuf);
+		for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
+		for (int i=0; i<s->n_seq; i++){free(s->qname[i]);}
+		free(s->len); free(s->qnamelen);
+		free(s->seq); free(s->qname);
+		free(s);
+	}
+	return 0;
+}
+
+
+int hamt_read_kmer_profile(hifiasm_opt_t *asm_opt, All_reads *rs){
+	ha_ct_t *h;
+	h = ha_count(asm_opt, HAF_COUNT_ALL, NULL, NULL, rs);
+	reset_All_reads(rs);
+
+	debugrkp_plmt_data_t pl;
+	gzFile fp = 0;
+	pl.h = h;
+	pl.rs_in = rs;
+	pl.rs_out = rs;
+	char *filename_out = (char*)malloc(500);  // just in case there's a super long path name
+
+	yak_copt_t opt;
+	yak_copt_init(&opt);
+	opt.k = asm_opt->k_mer_length;
+	opt.is_HPC = !(asm_opt->flag&HA_F_NO_HPC);
+	opt.n_thread = asm_opt->thread_num;
+	pl.opt = &opt;
+	uint64_t n_seq = 0;
+	pl.n_seq = &n_seq;
+
+	for (int i=0; i<asm_opt->num_reads; i++){
+		if ((fp = gzopen(asm_opt->read_file_names[i], "r")) == 0) return 0;
+		sprintf(filename_out, "%s.kmerprofile", asm_opt->read_file_names[i]);
+		pl.fp_out = fopen(filename_out, "w");
+		pl.ks = kseq_init(fp);
+		kt_pipeline(3, worker_read_kmer_profile, &pl, 3);	
+		kseq_destroy(pl.ks);
+		fflush(pl.fp_out);
+		fclose(pl.fp_out);	
+	}
+	free(filename_out);
+	return 0;
 }

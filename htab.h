@@ -9,6 +9,7 @@
 //////////////////meta
 void hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude);
 void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage);
+int hamt_read_kmer_profile(hifiasm_opt_t *asm_opt, All_reads *rs);  // debug
 ///////////////////////////////////
 
 typedef struct {

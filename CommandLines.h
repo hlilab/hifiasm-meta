@@ -83,6 +83,7 @@ typedef struct {
 
     // hamt
     int is_disable_phasing;  // experimental, disable reverse_paf (aka reverse_sources) by pushing everything into paf (aka sources).
+    int mode_read_kmer_profile;
     // end of hamt
     
 } hifiasm_opt_t;

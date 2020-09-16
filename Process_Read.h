@@ -136,6 +136,7 @@ typedef struct
     uint16_t* median;
     uint8_t* mask_readnorm;  // bit flag, whether the read is discarded
     uint8_t* mask_readtype;  // bit flag
+    uint64_t *statpack;
 } All_reads;
 
 extern All_reads R_INF;

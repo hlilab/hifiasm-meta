@@ -84,6 +84,9 @@ typedef struct {
     // hamt
     int is_disable_phasing;  // experimental, disable reverse_paf (aka reverse_sources) by pushing everything into paf (aka sources).
     int mode_read_kmer_profile;
+    int mode_readset_kmer_count;
+    int mode_diginorm_kmer_cov;
+    int readselection_sort_order;  // experimental, 1 for smallestFirst, 2 for largestFirst, 0 to force disable it (note that we still go through loading all reads + sorting, just don't use the info when annotation mask_readnorm)
     // end of hamt
     
 } hifiasm_opt_t;

@@ -15,8 +15,14 @@ int main(int argc, char *argv[])
     if (!CommandLine_process(argc, argv, &asm_opt)) return 1;
 
 	if (asm_opt.mode_read_kmer_profile){
-		ret = hamt_read_kmer_profile(&asm_opt, &R_INF);
-		return ret;
+		hamt_read_kmer_profile(&asm_opt, &R_INF);
+		return 0;
+	}else if (asm_opt.mode_readset_kmer_count){
+		hamt_printout_ha_count(&asm_opt, &R_INF);
+		return 0;
+	}else if (asm_opt.mode_diginorm_kmer_cov){
+		hamt_readselection_kmer_completeness(&asm_opt, &R_INF);
+		return 0;
 	}
 
 	ret = ha_assemble();

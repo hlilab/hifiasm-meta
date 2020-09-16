@@ -4086,6 +4086,7 @@ long long get_specific_contig_length(asg_t *g, uint8_t *del)
         totalLen += len;
     }
     //kdq_destroy(uint64_t, q);
+    free(mark);
     return totalLen;
 }
 

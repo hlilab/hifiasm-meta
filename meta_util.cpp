@@ -101,11 +101,10 @@ double stdl(const uint16_t *counts, uint32_t l, double mean){
 #define HAMT_READDIV_REASONABLE 0x40
 #define HAMT_READDIV_HIGH 0x80
 
-#define HAMT_INIT_KEEP 0x1
-#define HAMT_NORMAL_KEEP 0x2
-#define HAMT_SPECIAL_KEEP 0x4
-#define HAMT_NORMAL_DISCARD 0x8
-#define HAMT_SPECIAL_DISCARD 0x10
+#define HAMT_DISCARD 0x1
+#define HAMT_VIA_MEDIAN 0x2
+#define HAMT_VIA_LONGLOW 0x4
+#define HAMT_VIA_KMER 0x8
 
 uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  // used for the initial pass
     // buf is UNSORTED kmer count along the read, and l is the length of buf
@@ -139,11 +138,9 @@ uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  //
 
 int decide_drop( double mean, double std, uint16_t runtime_median, int round, uint8_t initmark){
     // todo: bit flag
-	if (round>0){
-        if (runtime_median<50) return 0;  // note to self: 50 or 100, this only reduce like less than 50% reads in real data.
-        if (runtime_median<100 and (initmark&HAMT_READDIV_LONGLOW)) return 0;  // keep long low-coverage read
-    }
-    return 1;
+    if (runtime_median<50) return HAMT_VIA_MEDIAN;  // note to self: 50 or 100, this only reduce like less than 50% reads in real data.
+    if (runtime_median<100 and (initmark&HAMT_READDIV_LONGLOW)) return HAMT_VIA_LONGLOW;  // keep long low-coverage read
+    return HAMT_DISCARD;
 }
 
 //////////////////* del overlaps *////////////////////

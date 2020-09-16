@@ -42,6 +42,8 @@ void init_All_reads(All_reads* r)
 	r->name_index_size = READ_INIT_NUMBER;
 	r->name_index = (uint64_t*)malloc(sizeof(uint64_t)*r->name_index_size);
 	r->name_index[0] = 0;
+	// // safety
+	// r->name = 0;
 	// meta
 	r->hamt_stat_buf_size = READ_INIT_NUMBER;
 	r->mean = 0;
@@ -54,6 +56,8 @@ void init_All_reads(All_reads* r)
 	r->std = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
 	r->mask_readnorm = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
 	r->mask_readtype = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
+	// meta exp
+	r->statpack = 0;
 }
 
 void reset_All_reads(All_reads *r){
@@ -101,6 +105,8 @@ void destory_All_reads(All_reads* r)
 		free(r->mask_readnorm);
 	if (r->mask_readtype)
 		free(r->mask_readtype);
+	if (r->statpack)
+		free(r->statpack);
 }
 
 void write_All_reads(All_reads* r, char* read_file_name)

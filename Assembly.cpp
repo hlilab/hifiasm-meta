@@ -535,7 +535,7 @@ int64_t ha_ovec_mem(const ha_ovec_buf_t *b)
 static void worker_ovec(void *data, long i, int tid)
 {
     /////////// meta ///////////////
-    if (R_INF.mask_readnorm[i]) return;
+    if (R_INF.mask_readnorm[i] & 1) return;
     // (this relies on malloc_all_reads to ensure every location is accessible. I think there's no malloc happening in worker_ovec.)
     ////////////////////////////////
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
@@ -574,7 +574,7 @@ static void worker_ovec(void *data, long i, int tid)
 
 static void worker_ovec_related_reads(void *data, long i, int tid)
 {
-	if (R_INF.mask_readnorm[i]){
+	if (R_INF.mask_readnorm[i] & 1){
         fprintf(stderr, "hamtDebug: this read is dropped.\n");
         return;
     }
@@ -655,7 +655,7 @@ static void worker_ec_save(void *data, long i, int tid)
 	cigar.record = R_INF.second_round_cigar[i].record;
 	cigar.lost_base = R_INF.second_round_cigar[i].lost_base;
 
-    if (!R_INF.mask_readnorm[i]){  ///// todo: commenting this out will break other hifiasm debug functions....
+    if (!(R_INF.mask_readnorm[i] & 1)){  ///// todo: commenting this out will break other hifiasm debug functions....
         get_corrected_read_from_cigar(&cigar, e->first_round_read, first_round_read_length, e->second_round_read, &second_round_read_length);
 
         new_read = e->second_round_read;
@@ -716,8 +716,8 @@ void ha_overlap_and_correct(int round, int coverage)
 	CALLOC(b, asm_opt.thread_num);
 	for (i = 0; i < asm_opt.thread_num; ++i)
 		b[i] = ha_ovec_init(0, (round == asm_opt.number_of_round - 1));
-    // printf("from %s entering ha_pt_gen\n", __func__); fflush(stdout);
-	ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, round == 0? 0 : 1, &R_INF, &hom_cov, &het_cov); // build the index  // also, reads are loaded
+	// ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, round == 0? 0 : 1, &R_INF, &hom_cov, &het_cov); // build the index  // also, reads are loaded
+    ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, 1, &R_INF, &hom_cov, &het_cov); // EXPERIMENTAL
 	// if (round == 0 && ha_flt_tab == 0) // then asm_opt.hom_cov hasn't been updated
 		// ha_opt_update_cov(&asm_opt, hom_cov);
 	if (asm_opt.required_read_name)
@@ -991,7 +991,7 @@ void ha_print_ovlp_stat(ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, long long 
 
 	no_l_indel = forward = reverse = exact = strong = weak = 0;
 	for (i = 0; i < readNum; i++) {
-        if (R_INF.mask_readnorm[i]) continue;
+        if (R_INF.mask_readnorm[i] & 1) continue;
 		forward += paf[i].length;
 		reverse += rev_paf[i].length;
 		for (j = 0; j < paf[i].length; j++) {
@@ -1151,7 +1151,7 @@ UC_Read* g_read, UC_Read* overlap_read, uint8_t* c2n)
 
 static void worker_ov_final(void *data, long i, int tid)
 {
-    if (R_INF.mask_readnorm[i]) return;  // meta hamt
+    if (R_INF.mask_readnorm[i] & 1) return;  // meta hamt
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
 	//get_new_candidates(i, &g_read, &overlap_list, &array_list, &l, 0.001, 0);
@@ -1237,7 +1237,7 @@ void debug_affine_gap_alignment(overlap_region_alloc *overlap_list, UC_Read* g_r
 
 static void worker_ov_final_high_het(void *data, long i, int tid)
 {
-    if (R_INF.mask_readnorm[i]) return;  // meta hamt
+    if (R_INF.mask_readnorm[i] & 1) return;  // meta hamt
     ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
     ha_get_new_candidates(b->ab, i, &b->self_read, &b->olist, &b->clist, HIGH_HET_ERROR_RATE, asm_opt.max_n_chain, 1);
@@ -1502,17 +1502,23 @@ int ha_assemble(void)
 		if (asm_opt.flag & HA_F_WRITE_EC) Output_corrected_reads();
 		if (asm_opt.flag & HA_F_WRITE_PAF) Output_PAF();
         if (asm_opt.het_cov == -1024) hap_recalculate_peaks(asm_opt.output_file_name), ovlp_loaded = 2;
+
+        debug_printstat_read_status(&R_INF);
 	}
 	if (!ovlp_loaded) {
 		// construct hash table for high occurrence k-mers
         // hamt: also collect kmer-based read coverage etc diginorm.
 		if (!(asm_opt.flag & HA_F_NO_KMER_FLT)) {
-            hamt_flt(&asm_opt, &R_INF, 0, 0);  // count kmers and tag reads
-            fprintf(stderr, "[M::%s] finished hamt_flt.\n", __func__);
-			ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, HAMT_COVERAGE);  // high freq filter on retained reads
-            fprintf(stderr, "[M::%s] finished hamt_ft_gen.\n", __func__);
+            // hamt_flt(&asm_opt, &R_INF, 0, 0);  // count kmers and tag reads
+            hamt_flt_withsorting(&asm_opt, &R_INF);
+            fprintf(stderr, "[M::%s] selected reads.\n", __func__);
+			ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, HAMT_COVERAGE, 1, 0);  // high freq filter on retained reads
+            fprintf(stderr, "[M::%s] generated flt tab.\n", __func__);
 			// ha_opt_update_cov(&asm_opt, hom_cov);
 		}
+
+        debug_printstat_read_status(&R_INF);
+
 		// error correction
 		assert(asm_opt.number_of_round > 0);
 		for (r = 0; r < asm_opt.number_of_round; ++r) {
@@ -1535,8 +1541,7 @@ int ha_assemble(void)
         ///////////////////////////////////////////////////////////////////////////
         //////            hamt: crude coverage filtering                   ////////
         // ( remove ovlp if two vertices apparently come from different places) ///
-        hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 100, 10);
-
+        // hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 100, 10);
         ///////////////////////////////////////////////////////////////////////////
 
 		ha_ft_destroy(ha_flt_tab);

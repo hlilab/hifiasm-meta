@@ -8349,17 +8349,16 @@ ma_ug_t *ma_ug_gen(asg_t *g)
 			l = asg_arc_len(arc_first(g, w));
 			kdq_push(uint64_t, q, (uint64_t)w<<32 | l);
 			end = x^1, len += l;
-			// w = x;
-			if (x == v) {break; flag_circ = 1;}
+			if (x == v) {flag_circ = 1; break;}  // keep current w, which will be the end vertex (use w^1)
             w = x;
 		}
-		if (start != (end^1) || kdq_size(q) == 0 || flag_circ) { // linear unitig
+		if (start != (end^1) || kdq_size(q) == 0) { // linear unitig
 			///length of seq, instead of edge
 			l = g->seq[end>>1].len;
 			kdq_push(uint64_t, q, (uint64_t)(end^1)<<32 | l);
 			len += l;
 		} else { // circular unitig
-			start = v; end = w^1; flag_circ = 1; // start = end = UINT32_MAX;
+			start = v; end = w^1; /*flag_circ = 1*/; // start = end = UINT32_MAX;
 			goto add_unitig; // then it is not necessary to do the backward
 		}
 		// backward
@@ -8382,8 +8381,7 @@ ma_ug_t *ma_ug_gen(asg_t *g)
 		}
 add_unitig:
 		// if (start != UINT32_MAX) mark[start] = mark[end] = 1;
-        if (flag_circ) ;
-        else mark[start] = mark[end] = 1;
+        mark[start] = mark[end] = 1;
 		kv_pushp(ma_utg_t, ug->u, &p);
 		p->s = 0, p->start = start, p->end = end, p->len = len, p->n = kdq_size(q), p->circ = /*(start == UINT32_MAX)*/ flag_circ;
 		p->m = p->n;
@@ -8427,7 +8425,7 @@ add_unitig:
 	}
 
     // add arcs for circular utg
-    // (essential the same as above & could've been merged, but i'm not sure whether the collect start/end part will be correct in every case??????)
+    // (the same as above)
     for (v = 0; v < n_vtx; ++v) mark[v] = -1;  // recycle `mark`
 	for (i = 0; i < ug->u.n; ++i) {  // collect start/end
 		if (!ug->u.a[i].circ) continue;
@@ -26995,6 +26993,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
         sprintf(unlean_name, "%s.unclean", output_file_name);
         output_read_graph(sg, coverage_cut, unlean_name, n_read);
+        output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
         free(unlean_name);
     }
 
@@ -27081,8 +27080,16 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             asg_cut_tip(sg, asm_opt.max_short_tip);
 
             ///////////////////////// hamt special ////////////////////////////////
-            hamt_asg_arc_del_by_read_cov_diff(sg, &R_INF, 30, (double)4.0, (i==(clean_round-1))?1:0);  
+            // hamt_asg_arc_del_by_read_cov_diff(sg, &R_INF, 30, (double)4.0, (i==(clean_round-1))?1:0);  
             ///////////////////////////////////////////////////////////////////////
+
+            if(VERBOSE >= 1){  // debug: write temp graph
+                char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+                sprintf(unlean_name, "%s.afterRound%d", output_file_name, i);
+                output_read_graph(sg, coverage_cut, unlean_name, n_read);
+                output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+                free(unlean_name);
+            }
         }
     }
 
@@ -27090,7 +27097,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     {
         fprintf(stderr, "\n\n**********final clean**********\n");
     }
-
 
     pre_clean(sources, coverage_cut, sg, bubble_dist);
 
@@ -27221,6 +27227,7 @@ void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
     fflush(fp);
     fclose(fp);
     fprintf(stderr, "[M::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
+    free(index_name);
 }
 /////////////////////////////end of hamt debug etc/////////////////////////////////////////
 

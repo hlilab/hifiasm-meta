@@ -28,7 +28,10 @@ static ko_longopt_t long_options[] = {
     { "pri-range",     ko_required_argument, 310 },
     { "high-het",      ko_no_argument, 311 },
     // hamt debug/probing modules
-    { "read-kmer-profile", ko_no_argument, 400},
+    { "read-kmer-profile", ko_no_argument, 400},  // write per-read kmer frequency profiles
+    { "readset-kmer-count", ko_no_argument, 401},  // write ha_count (kmers appear less than 5 times will be omitted)
+    // { "readset-simple-downsample", ko_no_argument, 402},  // remove confidently super prevalent reads to provide a smaller readset to play around
+    { "readselection-kmer-coverage", ko_no_argument, 403},  // test read selection heuristic
 	{ 0, 0, 0 }
 };
 
@@ -139,6 +142,8 @@ void init_opt(hifiasm_opt_t* asm_opt)
     // hamt
     asm_opt->is_disable_phasing = 0;
     asm_opt->mode_read_kmer_profile = 0;
+    asm_opt->mode_readset_kmer_count = 0;
+    asm_opt->readselection_sort_order = 1;  // smallest first
     // end of hamt
 }
 
@@ -406,7 +411,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             return 0;
         }
         // vanilla: abcdef hi klmnopqrstuvwxyz
-        // hamt   :       g
+        // hamt   :       g          R
         // new    :                      V
 		else if (c == 'f') asm_opt->bf_shift = atoi(opt.arg);
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
@@ -436,8 +441,11 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'u') asm_opt->flag |= HA_F_BAN_POST_JOIN;
         // hamt
         else if (c == 'g') asm_opt->is_disable_phasing = 1;
-        else if (c == 'V') VERBOSE = 1;
+        else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
+        else if (c == 'R') {asm_opt->readselection_sort_order = atoi(opt.arg); fprintf(stderr, "NOTICE: read selection order set to %d.\n", atoi(opt.arg));}
         else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for every read.\n");} 
+        else if (c == 401) {asm_opt->mode_readset_kmer_count = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for the dataset.\n");}
+        else if (c == 403) {asm_opt->mode_diginorm_kmer_cov = 1; fprintf(stderr, "DEBUG MODE: test kmer completeness of the curretn read selection heuristic.\n");}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

@@ -19,7 +19,7 @@
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS1)  // used for histogram, so it refers to counter bits, not pre bits
 #define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS1)-1)
 
-#define HAMT_DIG_KMERRESCUE 50
+#define HAMT_DIG_KMERRESCUE 30
 
 const unsigned char seq_nt4_table[256] = { // translate ACGT to 0123
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -986,7 +986,7 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 	uint64_t san = 0;
 	for (uint32_t i=0; i<n; i++){
 		key = yak_ct_put(h, buf[i]>>s->p->h->pre<<YAK_COUNTER_BITS1, &absent);
-		if (kh_key(h, key)<YAK_MAX_COUNT) kh_key(h, key)++;
+		if ((kh_key(h, key)&YAK_MAX_COUNT)<YAK_MAX_COUNT) kh_key(h, key)++;
 		if (absent) san++;
 	}
 	// fprintf(stderr, "%s::%ld: inserted %" PRIu64 " kmers.\n", __func__, idx_for, san);fflush(stderr);
@@ -1071,7 +1071,7 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
 				if (++l >= k){
 					uint64_t hash = yak_hash_long(x);
-					if (s->p->round==0){
+					if (s->p->round==0){  // collect for all-reads kmer count hashtable
 						yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
 						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
@@ -1087,15 +1087,15 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 							assert(b->a);
 						}
 						b->a[b->n] = hash;
+						b->n++;
 						// collect runtime count
-						yak_ct_t *h_ = s->p->hd->h[hash & ((1<<h->pre)-1)].h;
+						yak_ct_t *h_ = s->p->hd->h[hash & ((1<<h->pre)-1)].h;  // runtime count hashtable
 						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h_)){buf_norm[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
 						else buf_norm[idx] = 1;  // because bf
 						idx++;
-						b->n++;
 						// check whether it's a relatively low-freq (*overall freq) kmer
-						yak_ct_t *h2 = s->p->h->h[hash & ((1<<h->pre)-1)].h;
+						yak_ct_t *h2 = s->p->h->h[hash & ((1<<h->pre)-1)].h;  // all-reads count hashtable
 						key = yak_ct_get(h2, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h2)){
 							if (((kh_key(h2, key) & YAK_MAX_COUNT) <= HAMT_DIG_KMERRESCUE) && ((kh_key(h2, key) & YAK_MAX_COUNT) > 3)) has_wanted_kmers++;
@@ -1122,26 +1122,28 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 		uint16_t cnt = 0;
 		uint16_t max_cnt = 0;
 		uint16_t median = 0;
-		int grace_counter = 60; // exp, allow temporary drop; 60 because k=51
-		for (uint16_t i=0; i<idx; i++){  // examine if runtime buffer looks like long low-coverage. 
-			if (buf_norm[i]<=10){
-				cnt+=1;
-				grace_counter = 60;
-			} else if (buf_norm[i]>30){
-				if (grace_counter==0){
-					if (cnt>max_cnt) max_cnt = cnt;
-					cnt = 0;
-				}else{ grace_counter--; cnt++;}
-			}
-		}
-		// if (s->p->round==99) has_wanted_kmers = 0;  // exp overloading!
-		if (((double)max_cnt/idx)>0.2) {  // If so, or there's relative low (overall) freq kmers, ignore other hints and keep the read.
-			code = HAMT_VIA_LONGLOW;
-		} else if ((double)has_wanted_kmers/idx>=0.2){
+		// int grace_counter = 60; // exp, allow temporary drop; 60 because k=51
+		// for (uint16_t i=0; i<idx; i++){  // examine if runtime buffer looks like long low-coverage. 
+		// 	if (buf_norm[i]<=10){
+		// 		cnt+=1;
+		// 		grace_counter = 60;
+		// 	} else if (buf_norm[i]>30){
+		// 		if (grace_counter==0){
+		// 			if (cnt>max_cnt) max_cnt = cnt;
+		// 			cnt = 0;
+		// 		}else{ grace_counter--; cnt++;}
+		// 	}
+		// }
+		// if (((double)max_cnt/idx)>0.2) {  // If so, or there's relative low (overall) freq kmers, ignore other hints and keep the read.
+		// 	code = HAMT_VIA_LONGLOW;
+		// }
+		if ((double)has_wanted_kmers/idx>=0.2){
 			code = HAMT_VIA_KMER;
-		} else if (1){  // get median and decide
+		}
+		else if (1){  // get median and decide
 			radix_sort_hamt16(buf_norm, buf_norm+idx);
 			median = (uint16_t)buf_norm[idx/2];
+			fprintf(stdout, "r#%" PRIu64 "\t", rid);
 			code = decide_drop(s->p->rs_out->mean[rid], s->p->rs_out->std[rid], median, s->p->round, s->p->rs_out->mask_readtype[rid]);
 		}
 		s->p->rs_out->mask_readnorm[rid] = code;  // todo: bit flag and add debug info?
@@ -1211,7 +1213,6 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 				// worker_process_one_read(s, s->n_seq);
 		}
 		if (s->p->round==0){
-			// printf("debug\tterminating step1, round=%d, n_seq=%" PRIu64 "\n", p->round, *p->n_seq);fflush(stdout);
 			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
 			free(s->len);
 			free(s->seq);
@@ -1227,7 +1228,6 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			free(s->seq);
 			s->seq = 0; 
 			s->len = 0;
-			// printf("CLEANED SEQS\n"); fflush(stdout);
 			for (int i=0; i<1<<p->h->pre; i++){
 				free(s->lnbuf[i].a);
 				}				
@@ -1363,10 +1363,12 @@ void debug_printstat_read_status(All_reads *rs){
 			else if (rs->mask_readnorm[i] & HAMT_VIA_KMER) bcs_kmer++;
 			else if (1) san_error++;
 		}
+		// printf("r#%d\t%" PRIu16 "\t%" PRIu8 "\n",i, rs->median[i], rs->mask_readnorm[i]);
 	}
 	fprintf(stderr, "[DEBUGhamt::%s] total reads: %d, dropped %d.\n", __func__, (int)rs->total_reads, drp);
-	fprintf(stderr, "[DEBUGhamt::%s] retained via median: %d, via longlow: %d, via infrequent kmers %d.", __func__, bcs_median, bcs_longlow, bcs_kmer);
+	fprintf(stderr, "[DEBUGhamt::%s] retained via median: %d, via longlow: %d, via infrequent kmers %d.\n", __func__, bcs_median, bcs_longlow, bcs_kmer);
 	fflush(stderr);
+	// exit(0);
 }
 
 typedef struct{
@@ -1756,6 +1758,10 @@ static void *worker_mark_reads_withsoring(void *data, int step, void *in){  // c
 			else
 				{fprintf(stderr, "NON-HPC IS NOT IMPLEMENTED IN THE TEST PHASE (because stuffs are changing)! \n"); exit(1);}
 				// worker_process_one_read(s, s->n_seq);
+		}
+		int san = 0;
+		for (int i=0; i<1<<p->h->pre; i++){
+			san+=s->lnbuf[i].n;
 		}
 		// update runtime hashtable
 		assert(s->p->hd);

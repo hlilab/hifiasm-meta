@@ -136,11 +136,15 @@ uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  //
     return flag;
 }
 
-int decide_drop( double mean, double std, uint16_t runtime_median, int round, uint8_t initmark){
-    // todo: bit flag
-    if (runtime_median<50) return HAMT_VIA_MEDIAN;  // note to self: 50 or 100, this only reduce like less than 50% reads in real data.
-    if (runtime_median<100 and (initmark&HAMT_READDIV_LONGLOW)) return HAMT_VIA_LONGLOW;  // keep long low-coverage read
-    return HAMT_DISCARD;
+uint8_t decide_drop( double mean, double std, uint16_t runtime_median, int round, uint8_t initmark){
+    uint8_t code = 0;
+    if (runtime_median<50) code = HAMT_VIA_MEDIAN;  // note to self: 50 or 100, this only reduce like less than 50% reads in real data.
+    else if (runtime_median<100 and (initmark&HAMT_READDIV_LONGLOW)) code= HAMT_VIA_LONGLOW;  // keep long low-coverage read
+    else if (1) code = HAMT_DISCARD;
+    // fprintf(stdout, "decide_drop: h_mean=%f, h_std=%f, runtime_median=%" PRIu16 ", ", mean, std, runtime_median);
+    // fprintf(stdout, "code=%" PRIu8 "\n", code);
+    return code;
+
 }
 
 //////////////////* del overlaps *////////////////////

@@ -1045,7 +1045,7 @@ static void worker_process_one_read(void* data, long idx_for, int tid){
 void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 	uint64_t rid;
 	if (s->p->round!=99)
-		rid = s->n_seq0+idx_seq;
+		{rid = s->n_seq0+idx_seq; assert(s->p->asm_opt->readselection_sort_order==0);}
 	else  // exp
 		rid = s->RIDs[idx_seq];
 	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // bufer used in the 0th round
@@ -1098,7 +1098,7 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 						yak_ct_t *h2 = s->p->h->h[hash & ((1<<h->pre)-1)].h;
 						key = yak_ct_get(h2, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h2)){
-							if ((kh_key(h2, key) & YAK_MAX_COUNT) >= HAMT_DIG_KMERRESCUE) has_wanted_kmers++;
+							if (((kh_key(h2, key) & YAK_MAX_COUNT) <= HAMT_DIG_KMERRESCUE) && ((kh_key(h2, key) & YAK_MAX_COUNT) > 3)) has_wanted_kmers++;
 						}
 					}
 				}

@@ -1044,10 +1044,10 @@ static void worker_process_one_read(void* data, long idx_for, int tid){
 // static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 	uint64_t rid;
-	if (s->p->round!=99)
-		{rid = s->n_seq0+idx_seq; assert(s->p->asm_opt->readselection_sort_order==0);}
+	if (s->p->asm_opt->readselection_sort_order==0 || s->p->round==0)
+		{rid = s->n_seq0+idx_seq;}
 	else  // exp
-		rid = s->RIDs[idx_seq];
+		{rid = s->RIDs[idx_seq];}
 	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // bufer used in the 0th round
 	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // bufer used in the 1st+ round
 	int k = s->p->opt->k;
@@ -1274,6 +1274,7 @@ void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h, int roun
 		plmt.rs_out = rs;
 		plmt.round = round;
 		plmt.hd = 0;
+		plmt.asm_opt = asm_opt;
 		if (plmt.round!=0){
 			plmt.hd = ha_ct_init(plmt.opt->k, plmt.h->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
 			assert(h);
@@ -1813,7 +1814,7 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	plmt.h = h;
 	plmt.rs_in = rs;
 	plmt.rs_out = rs;
-	plmt.round = 99;  // overloading `round` for experiments!!
+	plmt.round = 1;
 	plmt.hd = ha_ct_init(plmt.opt->k, plmt.h->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
 	plmt.asm_opt = asm_opt;
 	assert(h);
@@ -1859,7 +1860,7 @@ int hamt_readselection_kmer_completeness(hifiasm_opt_t *asm_opt, All_reads *rs){
 	plmt.h = h;
 	plmt.rs_in = rs;
 	plmt.rs_out = rs;
-	plmt.round = 99;  // overloading `round` for experiments!!
+	plmt.round = 1;  // overloading `round` for experiments!!
 	plmt.hd = ha_ct_init(plmt.opt->k, plmt.h->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
 	init_UC_Read(&plmt.ucr);
 	kt_pipeline(2, worker_mark_reads_withsoring, &plmt, 2);

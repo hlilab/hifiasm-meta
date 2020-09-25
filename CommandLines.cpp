@@ -16,9 +16,9 @@ int VERBOSE = 0; // expose to cli
 
 static ko_longopt_t long_options[] = {
 	{ "version",       ko_no_argument, 300 },
-	{ "dbg-gfa",       ko_no_argument, 301 },
+	{ "dbg-gfa",       ko_no_argument, 301 },  // write assembly graph bin files
 	{ "write-paf",     ko_no_argument, 302 },
-	{ "write-ec",      ko_no_argument, 303 },
+	{ "write-ec",      ko_no_argument, 303 },  // write error-corrected reads
 	{ "skip-triobin",  ko_no_argument, 304 },
 	{ "max-od-ec",     ko_no_argument, 305 },
 	{ "max-od-final",  ko_no_argument, 306 },
@@ -32,6 +32,8 @@ static ko_longopt_t long_options[] = {
     { "readset-kmer-count", ko_no_argument, 401},  // write ha_count (kmers appear less than 5 times will be omitted)
     // { "readset-simple-downsample", ko_no_argument, 402},  // remove confidently super prevalent reads to provide a smaller readset to play around
     { "readselection-kmer-coverage", ko_no_argument, 403},  // test read selection heuristic
+    { "diginorm-coverage", ko_required_argument, 404},  // expose it
+    { "preovec-coverage", ko_required_argument, 405},
 	{ 0, 0, 0 }
 };
 
@@ -144,6 +146,9 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->mode_read_kmer_profile = 0;
     asm_opt->mode_readset_kmer_count = 0;
     asm_opt->readselection_sort_order = 1;  // smallest first
+    asm_opt->bin_base_name = 0;
+    asm_opt->diginorm_coverage = 100;
+    asm_opt->preovec_coverage = 150;
     // end of hamt
 }
 
@@ -399,7 +404,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
     asm_argcv.ha_argc = argc;
     asm_argcv.ha_argv = argv;    
 
-    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:gVR:", long_options)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:gVR:XB:S", long_options)) >= 0) {
         if (c == 'h')
         {
             Print_H(asm_opt);
@@ -411,11 +416,15 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             return 0;
         }
         // vanilla: abcdef hi klmnopqrstuvwxyz
-        // hamt   :       g          R
-        // new    :                      V
+        // vanilla:    D F      MNOP
+        // hamt   :       g          
+        // new    :                  RS  V X
 		else if (c == 'f') asm_opt->bf_shift = atoi(opt.arg);
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
-        else if (c == 'o') asm_opt->output_file_name = opt.arg;
+        else if (c == 'o') {
+            asm_opt->output_file_name = opt.arg;
+            if (asm_opt->bin_base_name==0) asm_opt->bin_base_name = opt.arg;
+        }
         else if (c == 'r') asm_opt->number_of_round = atoi(opt.arg);
         else if (c == 'k') asm_opt->k_mer_length = atoi(opt.arg);
         else if (c == 'i') asm_opt->load_index_from_disk = 0; 
@@ -443,9 +452,14 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'g') asm_opt->is_disable_phasing = 1;
         else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
         else if (c == 'R') {asm_opt->readselection_sort_order = atoi(opt.arg); fprintf(stderr, "NOTICE: read selection order set to %d.\n", atoi(opt.arg));}
+        else if (c == 'X') {asm_opt->is_disable_diginorm = 1; fprintf(stderr, "NOTICE: read selection DISABLED (not ha, still using the arbitrary low_occ.)\n");}
+        else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "NOTICE: using bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name
+        else if (c == 'S') {asm_opt->is_preovec_readselection = 1; fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");}
         else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for every read.\n");} 
         else if (c == 401) {asm_opt->mode_readset_kmer_count = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for the dataset.\n");}
         else if (c == 403) {asm_opt->mode_diginorm_kmer_cov = 1; fprintf(stderr, "DEBUG MODE: test kmer completeness of the curretn read selection heuristic.\n");}
+        else if (c == 404) {asm_opt->diginorm_coverage = atoi(opt.arg);}
+        else if (c == 405) {asm_opt->preovec_coverage = atoi(opt.arg);}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

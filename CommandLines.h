@@ -23,7 +23,7 @@ extern int VERBOSE;  // expose to cli
 #define HA_MIN_OV_DIFF       0.02 // min sequence divergence in an overlap
 
 ////////////// meta ///////////////
-#define HAMT_COVERAGE 50
+// #define HAMT_COVERAGE 150
 ///////////////////////////////////
 
 typedef struct {
@@ -87,6 +87,11 @@ typedef struct {
     int mode_readset_kmer_count;
     int mode_diginorm_kmer_cov;
     int readselection_sort_order;  // experimental, 1 for smallestFirst, 2 for largestFirst, 0 to force disable it (note that we still go through loading all reads + sorting, just don't use the info when annotation mask_readnorm)
+    int is_disable_diginorm;
+    char *bin_base_name;
+    int is_preovec_readselection;  // experimental, disable diginorm (but still collects everything) and do minimum read selection before ovec
+    int diginorm_coverage;
+    int preovec_coverage;
     // end of hamt
     
 } hifiasm_opt_t;

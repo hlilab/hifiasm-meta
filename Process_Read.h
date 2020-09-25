@@ -136,7 +136,8 @@ typedef struct
     uint16_t* median;
     uint8_t* mask_readnorm;  // bit flag, whether the read is discarded
     uint8_t* mask_readtype;  // bit flag
-    uint64_t *statpack;
+    uint64_t *statpack;  // packed: median--reversed_std--rid
+    uint64_t *nb_target_reads;  // experimental! guessed number of candiates, for triggering read selection
 } All_reads;
 
 extern All_reads R_INF;

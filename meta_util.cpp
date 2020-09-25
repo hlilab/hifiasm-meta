@@ -109,18 +109,18 @@ double stdl(const uint16_t *counts, uint32_t l, double mean){
 uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  // used for the initial pass
     // buf is UNSORTED kmer count along the read, and l is the length of buf
     uint8_t flag = 0;
+    int low_threshold = asm_opt.diginorm_coverage/2 >50? 50 : asm_opt.diginorm_coverage/2;
     // coverage
-    if (mean<30) flag|=HAMT_READCOV_LOW;
-    else if (mean<100) flag|=HAMT_READCOV_REASONABLE;
+    if (mean<low_threshold) flag|=HAMT_READCOV_LOW;
+    else if (mean<asm_opt.diginorm_coverage) flag|=HAMT_READCOV_REASONABLE;
     else flag|=HAMT_READCOV_HIGH;
     // divergence
     uint32_t cnt = 0;
     uint32_t max_cnt = 0;
     double flt_low = MAX(mean*0.1, 1); 
     double flt_break = MAX(mean*0.3, 1);
-    if (mean>=30){  // read kmers are reasonable prevalent
+    if (mean>=low_threshold){  // read kmers are reasonable prevalent
         for (uint32_t i=0; i<l-1; i++){
-            // buf_diff[i] = (double)(buf[i+1]-buf[i])/buf[i+1];
             if (buf[i]<=flt_low)
                 cnt+=1;
             else if (buf[i]>flt_break){
@@ -138,13 +138,10 @@ uint8_t decide_category(double mean, double std, uint16_t *buf, uint32_t l){  //
 
 uint8_t decide_drop( double mean, double std, uint16_t runtime_median, int round, uint8_t initmark){
     uint8_t code = 0;
-    if (runtime_median<50) code = HAMT_VIA_MEDIAN;  // note to self: 50 or 100, this only reduce like less than 50% reads in real data.
-    else if (runtime_median<100 and (initmark&HAMT_READDIV_LONGLOW)) code= HAMT_VIA_LONGLOW;  // keep long low-coverage read
+    if (runtime_median<asm_opt.diginorm_coverage) code = HAMT_VIA_MEDIAN;  // note to self: 50 or 100, this only reduce like less than 50% reads in real data.
+    else if (runtime_median<asm_opt.diginorm_coverage*2 and (initmark&HAMT_READDIV_LONGLOW)) code= HAMT_VIA_LONGLOW;  // keep long low-coverage read
     else if (1) code = HAMT_DISCARD;
-    // fprintf(stdout, "decide_drop: h_mean=%f, h_std=%f, runtime_median=%" PRIu16 ", ", mean, std, runtime_median);
-    // fprintf(stdout, "code=%" PRIu8 "\n", code);
     return code;
-
 }
 
 //////////////////* del overlaps *////////////////////

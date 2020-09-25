@@ -8,13 +8,15 @@
 
 //////////////////meta
 void hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude);
-void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage, int has_read, int let_reset);
+void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage, int has_read, int let_reset, int be_more_permissive);
 int hamt_read_kmer_profile(hifiasm_opt_t *asm_opt, All_reads *rs);  // debug
 int hamt_printout_ha_count(hifiasm_opt_t *asm_opt, All_reads *rs);  // debug
 void debug_printstat_read_status(All_reads *rs); // debug
 int hamt_readselection_kmer_completeness(hifiasm_opt_t *asm_opt, All_reads *rs); // debug
 
 void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
+void hamt_flt_no_read_selection(hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
+void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
 ///////////////////////////////////
 
 typedef struct {

@@ -7,6 +7,7 @@
 #include <inttypes.h>  // debug, for printing uint64
 #include <time.h>  // for writing misc info at the end of the bin file, ref: http://www.cplusplus.com/reference/ctime/localtime/
 #include "gitcommit.h"  // GIT_COMMIT
+#include <assert.h>
 
 uint8_t seq_nt6_table[256] = {
     5, 5, 5, 5,  5, 5, 5, 5,  5, 5, 5, 5,  5, 5, 5, 5,
@@ -212,7 +213,10 @@ void write_All_reads(All_reads* r, char* read_file_name)
 
 int load_All_reads(All_reads* r, char* read_file_name)
 {
-	// hamt note: let missing hamt bin trigger re-indexing, since graph cleaning need kmer-freq-based read coverages
+	// hamt note: Let missing hamt bin trigger re-indexing (if is_disable_diginorm not set), 
+	//              since graph cleaning need kmer-freq-based read coverages.
+	//            Tolerate the lack of hamt bin if is_disable_diginorm is set. 
+	//              Set mask to 0 length and let htab.cpp and Assembly.cpp handle the allocation & annotation.
     char* index_name = (char*)malloc(strlen(read_file_name)+15);
 	char* index_name_hamt = (char*)malloc(strlen(read_file_name)+15);
     sprintf(index_name, "%s.bin", read_file_name);
@@ -224,7 +228,7 @@ int load_All_reads(All_reads* r, char* read_file_name)
         return 0;
     }
 	FILE* fp_hamt = fopen(index_name_hamt, "r");
-	if (!fp_hamt){
+	if (!fp_hamt && (!asm_opt.is_disable_diginorm)){
 		free(index_name);
 		free(index_name_hamt);
 		return 0;
@@ -235,16 +239,18 @@ int load_All_reads(All_reads* r, char* read_file_name)
 	int f_flag;
 	int f_flag_hamt;  // not checked. just to silence the warnings
     f_flag = fread(&local_adapterLen, sizeof(local_adapterLen), 1, fp);
-	f_flag_hamt = fread(&local_adapterLen_hamt, sizeof(local_adapterLen_hamt), 1, fp_hamt);
     if(local_adapterLen != asm_opt.adapterLen)
     {
         fprintf(stderr, "the adapterLen of index is: %d, but the adapterLen set by user is: %d\n", 
         local_adapterLen, asm_opt.adapterLen);
 		exit(1);
     }
-	if (local_adapterLen != local_adapterLen_hamt){
-		fprintf(stderr, "bin and mt.bin do not agree on adapterLen. (bin: %d, mt.bin: %d\n", local_adapterLen, local_adapterLen_hamt);
-		exit(1);
+	if (fp_hamt){
+		f_flag_hamt = fread(&local_adapterLen_hamt, sizeof(local_adapterLen_hamt), 1, fp_hamt);
+		if (local_adapterLen != local_adapterLen_hamt){
+			fprintf(stderr, "bin and mt.bin do not agree on adapterLen. (bin: %d, mt.bin: %d\n", local_adapterLen, local_adapterLen_hamt);
+			exit(1);
+		}
 	}
     f_flag += fread(&r->index_size, sizeof(r->index_size), 1, fp);
 	f_flag += fread(&r->name_index_size, sizeof(r->name_index_size), 1, fp);
@@ -254,16 +260,18 @@ int load_All_reads(All_reads* r, char* read_file_name)
 
 	// load the first part of hamt bin. Numbers need to agree with ha bin.
 	uint64_t san = 0;
-	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
-	if (san!=r->index_size) {fprintf(stderr, "bin and mt.bin do not agree on index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->index_size); exit(1);}
-	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
-	if (san!=r->name_index_size) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->name_index_size); exit(1);}
-	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
-	if (san!=r->total_reads) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads); exit(1);}
-	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
-	if (san!=r->total_reads_bases) {fprintf(stderr, "bin and mt.bin do not agree on total_reads_bases (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads_bases); exit(1);}
-	f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
-	if (san!=r->total_name_length) {fprintf(stderr, "bin and mt.bin do not agree on total_name_length (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_name_length); exit(1);}
+	if (fp_hamt){
+		f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+		if (san!=r->index_size) {fprintf(stderr, "bin and mt.bin do not agree on index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->index_size); exit(1);}
+		f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+		if (san!=r->name_index_size) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->name_index_size); exit(1);}
+		f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+		if (san!=r->total_reads) {fprintf(stderr, "bin and mt.bin do not agree on name_index_size (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads); exit(1);}
+		f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+		if (san!=r->total_reads_bases) {fprintf(stderr, "bin and mt.bin do not agree on total_reads_bases (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_reads_bases); exit(1);}
+		f_flag_hamt += fread(&san, sizeof(san), 1, fp_hamt);
+		if (san!=r->total_name_length) {fprintf(stderr, "bin and mt.bin do not agree on total_name_length (%" PRIu64 " vs %" PRIu64 ").\n", san, r->total_name_length); exit(1);}
+	}
 
 	uint64_t i = 0;
 	uint64_t zero = 0;
@@ -344,22 +352,45 @@ int load_All_reads(All_reads* r, char* read_file_name)
 	fprintf(stderr, "Loading hamt bin...\n");
 
 	///////// hamt load from disk ///////////////
-	r->hamt_stat_buf_size = r->total_reads;
-	r->mean = (double*)malloc(r->total_reads*sizeof(double));
-	r->std = (double*)malloc(r->total_reads*sizeof(double));
-	r->median = (uint16_t*)malloc(r->total_reads*sizeof(uint16_t));
-	r->mask_readnorm = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
-	r->mask_readtype = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
-	
-	f_flag_hamt += fread(r->mean, sizeof(double), r->total_reads, fp_hamt);
-	f_flag_hamt += fread(r->median, sizeof(uint16_t), r->total_reads, fp_hamt);
-	f_flag_hamt += fread(r->std, sizeof(double), r->total_reads, fp_hamt);
-	f_flag_hamt += fread(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp_hamt);
-	f_flag_hamt += fread(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp_hamt);
-	
-	free(index_name_hamt);
-	fclose(fp_hamt);
-	fprintf(stderr, "Loaded hamt bin.\n"); fflush(stderr);
+	if (fp_hamt){
+		r->hamt_stat_buf_size = r->total_reads;
+		r->mean = (double*)malloc(r->total_reads*sizeof(double));
+		r->std = (double*)malloc(r->total_reads*sizeof(double));
+		r->median = (uint16_t*)malloc(r->total_reads*sizeof(uint16_t));
+		r->mask_readnorm = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
+		r->mask_readtype = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
+		
+		f_flag_hamt += fread(r->mean, sizeof(double), r->total_reads, fp_hamt);
+		f_flag_hamt += fread(r->median, sizeof(uint16_t), r->total_reads, fp_hamt);
+		f_flag_hamt += fread(r->std, sizeof(double), r->total_reads, fp_hamt);
+		f_flag_hamt += fread(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp_hamt);
+		f_flag_hamt += fread(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp_hamt);
+		
+		free(index_name_hamt);
+		fprintf(stderr, "Loaded hamt bin.\n"); fflush(stderr);
+	} 
+	if (asm_opt.is_disable_diginorm){// no bin file, or ignoring bin file's read mask
+		if (fp_hamt){
+			r->mask_readnorm = (uint8_t*)realloc(r->mask_readnorm, r->total_reads*sizeof(uint8_t));
+			memset(r->mask_readnorm, 0, r->hamt_stat_buf_size * sizeof(uint8_t));
+			fclose(fp_hamt);
+			fprintf(stderr, "Loaded hamt bin, but also forced mask_readnorm to all zero because read selection is disabled.\n"); fflush(stderr);
+		}else{
+			r->mean = (double*)malloc(r->index_size*sizeof(double));
+			r->std = (double*)malloc(r->index_size*sizeof(double));
+			r->median = (uint16_t*)malloc(r->index_size*sizeof(uint16_t));
+			r->mask_readnorm = (uint8_t*)malloc(r->index_size * sizeof(uint8_t));
+			r->mask_readtype = (uint8_t*)malloc(r->index_size * sizeof(uint8_t));
+
+			memset(r->mean, 40.0, r->index_size*sizeof(double));  // just in case graph cleaning uses kmer freq info.
+			memset(r->std, 0, r->index_size*sizeof(double));
+			memset(r->median, 40, r->index_size*sizeof(uint16_t));
+			memset(r->mask_readnorm, 0, r->index_size*sizeof(uint8_t));
+			memset(r->mask_readtype, 0, r->index_size*sizeof(uint8_t));
+
+			fprintf(stderr, "No hamt bin && disabled read selection, inited mask_readnorm all to 0.\n");fflush(stderr);
+		}
+	}
 	//////////////////////////////////////////////
 
 	return 1;

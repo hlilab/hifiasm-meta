@@ -637,7 +637,7 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
     }
 
     destory_fake_cigar(&(tmp_region.f_cigar));
-    if (VERBOSE>1)
+    if (VERBOSE>2)
         fprintf(stderr, "[DEBUGhamtV::%s] read #%" PRIu64 " skipped %" PRIu64 " candidates, retained %" PRIu64 "candidates.\n", __func__, readID, hamtsan_nb_skip, hamtsan_nb_calc);  // debug
 }
 

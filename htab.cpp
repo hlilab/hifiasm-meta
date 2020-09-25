@@ -19,7 +19,7 @@
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS1)  // used for histogram, so it refers to counter bits, not pre bits
 #define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS1)-1)
 
-#define HAMT_DIG_KMERRESCUE 30
+// #define HAMT_DIG_KMERRESCUE 30
 
 const unsigned char seq_nt4_table[256] = { // translate ACGT to 0123
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -536,6 +536,7 @@ KSEQ_INIT(gzFile, gzread)
 #define HAF_RS_READ      0x10
 #define HAF_CREATE_NEW   0x20
 #define HAMTF_FORCE_DONT_INIT 0x40  // meta: override HAF_RS_WRITE_LEN to not allow init_all_reads of ha_count
+#define HAMTF_HAS_MARKS 0x80
 
 typedef struct { // global data structure for kt_pipeline()
 	const yak_copt_t *opt;
@@ -664,7 +665,8 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 		if (p->opt->w == 1) { // enumerate all k-mers
 			for (i = 0; i < s->n_seq; ++i) {
 				//////////////////  meta   ////////////////////
-				if (s->p->flag & HAMTF_FORCE_DONT_INIT){
+				// if (s->p->flag & HAMTF_FORCE_DONT_INIT){
+				if (p->flag & HAMTF_HAS_MARKS){
 					uint64_t rid = s->n_seq0+i;
 					assert(rid<p->rs->hamt_stat_buf_size);
 					if (p->rs->mask_readnorm[rid] & 1) // initial marking hasn't finished; read is marked as dropped
@@ -690,9 +692,9 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 			if (p->pt) {
 				for (i = 0; i < s->n_seq; ++i){
 					//////////////////  meta   ////////////////////
-					if (p->flag & HAMTF_FORCE_DONT_INIT){
+					// if (p->flag & HAMTF_FORCE_DONT_INIT){
+					if (p->flag & HAMTF_HAS_MARKS){
 						uint64_t rid = s->n_seq0+i;
-						// printf("assert!\n"); fflush(stdout);
 						assert(rid<p->rs->hamt_stat_buf_size);
 						if (s->p->rs->mask_readnorm[rid] & 1) // initial marking hasn't finished; read is marked as dropped
 							{continue;}
@@ -704,7 +706,8 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 			} else {
 				for (i = 0; i < s->n_seq; ++i){
 					//////////////////  meta   ////////////////////
-					if (p->flag & HAMTF_FORCE_DONT_INIT){
+					// if (p->flag & HAMTF_FORCE_DONT_INIT){
+					if (p->flag & HAMTF_HAS_MARKS){
 						uint64_t rid = s->n_seq0+i;
 						if (s->p->rs->mask_readnorm[rid] & 1) // initial marking hasn't finished; read is marked as dropped
 							{continue;}
@@ -1043,6 +1046,7 @@ static void worker_process_one_read(void* data, long idx_for, int tid){
 
 // static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
+	int low_threshold = asm_opt.diginorm_coverage/5<30 ? 30 : asm_opt.diginorm_coverage/5;  // pretty arbitrary.
 	uint64_t rid;
 	if (s->p->asm_opt->readselection_sort_order==0 || s->p->round==0)
 		{rid = s->n_seq0+idx_seq;}
@@ -1098,7 +1102,7 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 						yak_ct_t *h2 = s->p->h->h[hash & ((1<<h->pre)-1)].h;  // all-reads count hashtable
 						key = yak_ct_get(h2, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h2)){
-							if (((kh_key(h2, key) & YAK_MAX_COUNT) <= HAMT_DIG_KMERRESCUE) && ((kh_key(h2, key) & YAK_MAX_COUNT) > 3)) has_wanted_kmers++;
+							if (((kh_key(h2, key) & YAK_MAX_COUNT) <= low_threshold) && ((kh_key(h2, key) & YAK_MAX_COUNT) > 3)) has_wanted_kmers++;
 						}
 					}
 				}
@@ -1143,7 +1147,7 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 		else if (1){  // get median and decide
 			radix_sort_hamt16(buf_norm, buf_norm+idx);
 			median = (uint16_t)buf_norm[idx/2];
-			fprintf(stdout, "r#%" PRIu64 "\t", rid);
+			// fprintf(stdout, "r#%" PRIu64 "\t", rid);
 			code = decide_drop(s->p->rs_out->mean[rid], s->p->rs_out->std[rid], median, s->p->round, s->p->rs_out->mask_readtype[rid]);
 		}
 		s->p->rs_out->mask_readnorm[rid] = code;  // todo: bit flag and add debug info?
@@ -1323,20 +1327,25 @@ void hamt_flt(const hifiasm_opt_t *asm_opt, All_reads *rs, int cov, int is_crude
 
 }
 
-void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage, int has_reads, int let_reset)
+void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage, int has_reads, int let_reset, int be_more_permissive)
 {   // use arbitrary coverage because there might be no peaks
 	yak_ft_t *flt_tab;
 	int64_t cnt[YAK_N_COUNTS];
 	int peak_hom, peak_het, cutoff;
 	ha_ct_t *h;
 	if (!has_reads)
-		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN|HAMTF_FORCE_DONT_INIT, NULL, NULL, rs);
+		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN|HAMTF_FORCE_DONT_INIT|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS since we've done diginorm / the array is initialized
 	else
-		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_READ, NULL, NULL, rs);
+		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_READ|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS since we've done diginorm / the array is initialized
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
 	peak_hom = ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);  // vanilla hifiasm histogram 
 	if (peak_hom > 0) fprintf(stderr, "[M::%s] peak_hom: %d; peak_het: %d\n", __func__, peak_hom, peak_het);
-	cutoff = (int)(coverage * asm_opt->high_factor);
+	
+	if (asm_opt->is_preovec_readselection){
+		cutoff = (int)(coverage *2 * asm_opt->high_factor);
+	}else{
+		cutoff = (int)(coverage * asm_opt->high_factor);
+	}
 	if (cutoff > YAK_MAX_COUNT - 1) cutoff = YAK_MAX_COUNT - 1;
 	ha_ct_shrink(h, cutoff, YAK_MAX_COUNT, asm_opt->thread_num);
 	flt_tab = gen_hh(h);
@@ -1355,7 +1364,7 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 
 void debug_printstat_read_status(All_reads *rs){
 	int drp = 0, bcs_median=0, bcs_longlow=0, bcs_kmer=0, san_error = 0;
-	for (int i=0; i< rs->total_reads; i++){
+	for (int i=0; i< (int)rs->total_reads; i++){
 		if (rs->mask_readnorm[i] & 1) drp++;
 		else{
 			if (rs->mask_readnorm[i] & HAMT_VIA_MEDIAN) bcs_median++;
@@ -1724,6 +1733,9 @@ static void *worker_mark_reads_withsoring(void *data, int step, void *in){  // c
 				readID = (uint64_t) ((uint32_t)p->rs_in->statpack[*p->n_seq]);  // touch rarer reads first
 			}else if (p->asm_opt->readselection_sort_order==2){  // use sorting order, largest first
 				readID = (uint64_t) ((uint32_t)p->rs_in->statpack[p->rs_in->total_reads - 1 - *p->n_seq]);  // touch more prevalent reads first
+			}else{
+				fprintf(stderr, "error at readID, unexpected asm_opt switch?\n"); fflush(stderr);
+				exit(1);
 			}
 			s->RIDs[s->n_seq] = readID;  // since we can't rely on n_seq0+idx_for
 			recover_UC_Read(&p->ucr, p->rs_in, readID);
@@ -1800,34 +1812,40 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	assert(rs->statpack);
 	fprintf(stderr, "malloc-ed\n"); fflush(stderr);
 	for (uint32_t i=0; i<rs->total_reads; i++){
-		rs->statpack[i] = ((uint64_t) rs->median[i]<<48) | (((uint64_t) (rs->std[i] + .499))<<32) | i;  // std won't exceed 14 bits, therefore safe to cast
+		// std packed this way is for read selection: when median kmer freq ties, drop the smoother ones first
+		rs->statpack[i] = ((uint64_t) rs->median[i]<<48) | (((uint64_t) (YAK_MAX_COUNT -1 -rs->std[i] + .499))<<32) | i;  // std won't exceed 14 bits, therefore safe to cast
 	}
 	fprintf(stderr, "packed\n"); fflush(stderr);
 	radix_sort_hamt64(rs->statpack, rs->statpack+rs->total_reads);
 	fprintf(stderr, "sorted. Entering read selection\n"); fflush(stderr);
 	
 	// read selection
-	uint64_t n_seq = 0;
-	yak_copt_t opt;
-	yak_copt_init(&opt);
-	opt.k = asm_opt->k_mer_length;
-	opt.is_HPC = !(asm_opt->flag&HA_F_NO_HPC);
-	opt.n_thread = asm_opt->thread_num;
-	plmt_data_t plmt;
-	memset(&plmt, 0, sizeof(plmt_data_t));
-	plmt.n_seq = &n_seq;
-	plmt.opt = &opt;
-	plmt.h = h;
-	plmt.rs_in = rs;
-	plmt.rs_out = rs;
-	plmt.round = 1;
-	plmt.hd = ha_ct_init(plmt.opt->k, plmt.h->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
-	plmt.asm_opt = asm_opt;
-	assert(h);
-	init_UC_Read(&plmt.ucr);
-	kt_pipeline(2, worker_mark_reads_withsoring, &plmt, 2);
-	destory_UC_Read(&plmt.ucr);
-	if (plmt.hd) ha_ct_destroy(plmt.hd);
+	if (!asm_opt->is_preovec_readselection){
+		uint64_t n_seq = 0;
+		yak_copt_t opt;
+		yak_copt_init(&opt);
+		opt.k = asm_opt->k_mer_length;
+		opt.is_HPC = !(asm_opt->flag&HA_F_NO_HPC);
+		opt.n_thread = asm_opt->thread_num;
+		plmt_data_t plmt;
+		memset(&plmt, 0, sizeof(plmt_data_t));
+		plmt.n_seq = &n_seq;
+		plmt.opt = &opt;
+		plmt.h = h;
+		plmt.rs_in = rs;
+		plmt.rs_out = rs;
+		plmt.round = 1;
+		plmt.hd = ha_ct_init(plmt.opt->k, plmt.h->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
+		plmt.asm_opt = asm_opt;
+		assert(h);
+		init_UC_Read(&plmt.ucr);
+		kt_pipeline(2, worker_mark_reads_withsoring, &plmt, 2);
+		destory_UC_Read(&plmt.ucr);
+		if (plmt.hd) ha_ct_destroy(plmt.hd);
+	}else{
+		memset(rs->mask_readnorm, 0, rs->total_reads);
+		fprintf(stderr, "debug: diginorm collected stats. Skipping diginorm read selection because `is_preovec_readselection`.\n");
+	}
 	
 }
 
@@ -1913,4 +1931,31 @@ int hamt_readselection_kmer_completeness(hifiasm_opt_t *asm_opt, All_reads *rs){
 	free(missing);
 	free(name);
 	return 0;
+}
+
+void hamt_flt_no_read_selection(hifiasm_opt_t *asm_opt, All_reads *rs){
+	assert(asm_opt->is_disable_diginorm);
+	init_All_reads(rs);
+	exp_load_raw_reads(asm_opt, rs, 0);  // load sequences
+
+	memset(rs->mask_readnorm, 0, rs->hamt_stat_buf_size * sizeof(uint8_t));  
+	memset(rs->mask_readtype, 0, rs->hamt_stat_buf_size * sizeof(uint8_t));  
+	memset(rs->mean, 0, rs->hamt_stat_buf_size * sizeof(double));  
+	memset(rs->median, 0, rs->hamt_stat_buf_size * sizeof(uint16_t));  
+	memset(rs->std, 0, rs->hamt_stat_buf_size * sizeof(double));  
+}
+
+void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_reads *rs){
+	// NOTE: overwrite loaded read selection status doesn't do a thing, since bin files are generated after ovec
+	// check if all reads are set to be preserved
+
+	assert(asm_opt->is_disable_diginorm);
+	assert(rs->hamt_stat_buf_size >= rs->total_reads);
+	assert(rs->index_size >= rs->total_reads);
+	for (int i=0; i<rs->total_reads; i++){
+		if (rs->mask_readnorm[i] & 1){
+			fprintf(stderr, "[E::%s] set to keep all reads, but in bin file read #%d was discarded. Aborting.\n", __func__, i);
+			exit(1);
+		}
+	}
 }

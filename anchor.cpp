@@ -57,6 +57,76 @@ static int ha_ov_type(const overlap_region *r, uint32_t len)
 	else return r->x_pos_s == 0? 0 : 1;
 }
 
+void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs){
+	// work on one read
+	// (immitate ha_get_new_candidates, but only count how many candidates are within consideration.)
+	// (used for read selection)
+	// get & sort seeds, guess how many alignments will be needed
+
+	extern void *ha_flt_tab;
+	extern ha_pt_t *ha_idx;
+	uint32_t i, rlen;
+	uint64_t k, l;
+	double low_occ = 5;
+	double high_occ = 500;
+
+	// containers
+	ha_mz1_v mz = {0, 0, 0};  // an array of minimizers
+	mz.a = (ha_mz1_t*)calloc(16, sizeof(ha_mz1_t));
+	mz.m = 16;
+	seed1_t *seed; // slots corresponding to the anchors
+	anchor1_t *a;
+
+	// get the list of anchors
+	ha_sketch(ucr->seq, ucr->length, asm_opt.mz_win, asm_opt.k_mer_length, 0, !(asm_opt.flag & HA_F_NO_HPC), &mz, ha_flt_tab);
+	seed = (seed1_t*)malloc(sizeof(seed1_t) * mz.m);
+	int n_a = 0;
+	for (i = 0, n_a = 0; i < mz.n; ++i) {
+		int n;
+		seed[i].a = ha_pt_get(ha_idx, mz.a[i].x, &n);  // start idx of the minimizer in the linear buffer
+		seed[i].n = n;  // count of the minimizer
+		seed[i].good = (n > low_occ && n < high_occ);
+		n_a += n;
+	}
+	a = (anchor1_t*)malloc(n_a * sizeof(anchor1_t));
+	for (i = 0, k = 0; i < mz.n; ++i) {
+		int j;
+		ha_mz1_t *z = &mz.a[i];
+		seed1_t *s = &seed[i];
+		for (j = 0; j < s->n; ++j) {  // for each occurence of this minimizer
+			const ha_idxpos_t *y = &s->a[j];  // its appearance
+			anchor1_t *an = &a[k++];
+			uint8_t rev = z->rev == y->rev? 0 : 1;
+			an->other_off = y->pos;
+			an->self_off = rev? ucr->length - 1 - (z->pos + 1 - z->span) : z->pos;
+			an->good = s->good;
+			an->srt = (uint64_t)y->rid<<33 | (uint64_t)rev<<32 | an->other_off;
+		}
+	}
+	// fprintf(stdout, "n_a@%d=%d, k==%d\n", (int)rid, n_a, k);
+
+	// sort anchors + count
+	uint64_t nb_candidates = 0;
+	radix_sort_ha_an1(a, a+n_a);  // sort by srt (targetID-strand-posOnTargetRead)
+	for (k = 1, l = 0; k <= n_a; ++k) {
+		// if (k == n_a || a[k].srt != a[l].srt) {
+		if (k==n_a || ((a[k].srt>>33) != (a[l].srt>>33)) ){
+			if (k - l > 100)
+				nb_candidates++;  // we have 1<<28-1 reads at most, this won't overflow
+			l = k;
+		}
+	}
+	// fprintf(stdout, "debug\t%d\t%d\n", (int)rid, (int)nb_candidates);
+
+	rs->nb_target_reads[rid] = nb_candidates<<32 | ((uint64_t)rid);
+
+	// clean up
+	free(a);
+	free(mz.a);
+	free(seed);
+
+}
+
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain)
 {
 	// work on one read
@@ -68,7 +138,8 @@ void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_reg
 	// double low_occ = asm_opt.hom_cov * HA_KMER_GOOD_RATIO;
 	// double high_occ = asm_opt.hom_cov * (2.0 - HA_KMER_GOOD_RATIO);
 	double low_occ = 5;  // hamt arbitrary!
-	double high_occ = HAMT_COVERAGE * (2.0 - HA_KMER_GOOD_RATIO);  // hamt arbitrary!
+	// double high_occ = HAMT_COVERAGE * (2.0 - HA_KMER_GOOD_RATIO);  // hamt arbitrary!
+	double high_occ = 100;
 	// double low_occ = 0;  double high_occ = 1<<12-1; // debug
 
 	// prepare
@@ -122,6 +193,7 @@ void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_reg
 	}
 
 	// copy over to _cl_
+	// (cl for Candidate List)
 	if (ab->m_a >= (uint64_t)cl->size) {
 		cl->size = ab->m_a;
 		REALLOC(cl->list, cl->size);

@@ -60,16 +60,14 @@ void init_All_reads(All_reads* r)
 	r->mask_readtype = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
 	// meta exp
 	r->statpack = 0;
+	r->is_all_in_mem = 0;
+	r->is_has_lengths = 0;
+	r->is_has_nothing = 1;
 }
 
 void reset_All_reads(All_reads *r){
 	// hamt, reset AND re-init rs (which was inited by ha_count)
 	//       however, don't wipe out mean/std/masks and their counter
-	/*********might be buggy**********
-	 *    do i need memset? 
-	 * (can't do it for r because mean/std/masks need to be preserved; however, memset on individual entries would segfault)
-	 * *********************************/
-    // reset and reallocate
 	r->index_size = READ_INIT_NUMBER;
 	r->name_index_size = READ_INIT_NUMBER;
 	r->total_reads = 0;
@@ -77,6 +75,7 @@ void reset_All_reads(All_reads *r){
 	r->total_name_length = 0;
 	free(r->read_length); r->read_length = (uint64_t*)malloc(sizeof(uint64_t)*r->index_size);
 	free(r->name_index); r->name_index = (uint64_t*)malloc(sizeof(uint64_t)*r->name_index_size); r->name_index[0] = 0;  // note to self: MUST init position 0.
+	r->is_all_in_mem = r->is_has_lengths = 0; r->is_has_nothing = 1;
 }
 
 void destory_All_reads(All_reads* r)
@@ -218,9 +217,10 @@ void write_All_reads(All_reads* r, char* read_file_name)
 int load_All_reads(All_reads* r, char* read_file_name)
 {
 	// hamt note: Let missing hamt bin trigger re-indexing (if is_disable_diginorm not set), 
-	//              since graph cleaning need kmer-freq-based read coverages.
+	//              since graph cleaning *might* need kmer-freq-based read coverages.
 	//            Tolerate the lack of hamt bin if is_disable_diginorm is set. 
 	//              Set mask to 0 length and let htab.cpp and Assembly.cpp handle the allocation & annotation.
+	// TODO: clean up
     char* index_name = (char*)malloc(strlen(read_file_name)+15);
 	char* index_name_hamt = (char*)malloc(strlen(read_file_name)+15);
     sprintf(index_name, "%s.bin", read_file_name);

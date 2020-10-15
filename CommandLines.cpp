@@ -32,7 +32,7 @@ static ko_longopt_t long_options[] = {
     { "read-kmer-profile", ko_no_argument, 400},  // write per-read kmer frequency profiles
     { "readset-kmer-count", ko_no_argument, 401},  // write ha_count (kmers appear less than 5 times will be omitted)
     // { "readset-simple-downsample", ko_no_argument, 402},  // remove confidently super prevalent reads to provide a smaller readset to play around
-    { "readselection-kmer-coverage", ko_no_argument, 403},  // test read selection heuristic
+    // { "readselection-kmer-coverage", ko_no_argument, 403},  // test read selection heuristic
     { "diginorm-coverage", ko_required_argument, 404},  // expose it
     { "preovec-coverage", ko_required_argument, 405},
     { "dump-read-selection", ko_no_argument, 406},  // dump the read selection mask from bin files; only effetive with -B (hamt)
@@ -42,6 +42,7 @@ static ko_longopt_t long_options[] = {
     { "lowq-10", ko_required_argument, 409}, // lower 10% quantile threshold,
     { "lowq-5", ko_required_argument, 410}, // lower 5% quantile threshold,
     { "lowq-3", ko_required_argument, 411}, // lower 3% quantile threshold,
+    { "preovec", ko_no_argument, 412},  // switch
 
     { 0, 0, 0 }
 };
@@ -466,13 +467,23 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         // hamt
         else if (c == 'g') asm_opt->is_disable_phasing = 1;
         else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
-        else if (c == 'R') {asm_opt->readselection_sort_order = atoi(opt.arg); fprintf(stderr, "NOTICE: read selection order set to %d.\n", atoi(opt.arg));}
-        else if (c == 'X') {asm_opt->is_disable_diginorm = 1; fprintf(stderr, "NOTICE: read selection DISABLED (not ha, still using the arbitrary low_occ.)\n");}
+        else if (c == 'R') {
+            // semi legacy, don't set
+            asm_opt->readselection_sort_order = atoi(opt.arg); 
+            fprintf(stderr, "NOTICE: read selection order set to %d, affects how to use sorting info.\n", atoi(opt.arg));
+        }
+        else if (c == 'X') {
+            // disable read selection completely
+            // overrides preovec or forced preovec (force meant force to ignore ovlp counts). 
+            asm_opt->is_disable_diginorm = 1; 
+            fprintf(stderr, "NOTICE: read selection DISABLED (not ha, still using the arbitrary low_occ.)\n");
+        }
         else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "NOTICE: using bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name
-        else if (c == 'S') {asm_opt->is_preovec_readselection = 1; fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");}
+        else if (c == 'S') {
+            asm_opt->is_preovec_readselection = 1; 
+            fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");}
         else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for every read.\n");} 
         else if (c == 401) {asm_opt->mode_readset_kmer_count = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for the dataset.\n");}
-        else if (c == 403) {asm_opt->mode_diginorm_kmer_cov = 1; fprintf(stderr, "DEBUG MODE: test kmer completeness of the curretn read selection heuristic.\n");}
         else if (c == 404) {asm_opt->diginorm_coverage = atoi(opt.arg);}
         else if (c == 405) {
             fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");            
@@ -486,9 +497,10 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->is_ignore_ovlp_cnt = 1;
             asm_opt->is_preovec_readselection = 1;
         }
-        else if (c == 409) {asm_opt->lowq_thre_10 = atoi(opt.arg);}
-        else if (c == 410) {asm_opt->lowq_thre_5 = atoi(opt.arg);}
-        else if (c == 411) {asm_opt->lowq_thre_3 = atoi(opt.arg);}
+        else if (c == 409) {asm_opt->lowq_thre_10 = atoi(opt.arg);asm_opt->is_preovec_readselection = 1; }
+        else if (c == 410) {asm_opt->lowq_thre_5 = atoi(opt.arg);asm_opt->is_preovec_readselection = 1; }
+        else if (c == 411) {asm_opt->lowq_thre_3 = atoi(opt.arg);asm_opt->is_preovec_readselection = 1; }
+        else if (c == 412) {asm_opt->is_preovec_readselection = 1; }
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

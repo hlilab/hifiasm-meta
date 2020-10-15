@@ -745,7 +745,7 @@ void Output_corrected_reads()
 // #define HAMT_VIA_LONGLOW 0x4
 // #define HAMT_VIA_KMER 0x8
 // #define HAMT_VIA_PREOVEC 0x80
-void hamt_pre_ovec_v2(int threshold){
+int hamt_pre_ovec_v2(int threshold){
 	// read selection considering:
 	//    - estimate how many reads we might want to drop (could well be zero) (dont use guessed number of target counts!)
 	//    - if dropping any, then
@@ -754,13 +754,16 @@ void hamt_pre_ovec_v2(int threshold){
 	//        - 1st pass: keep all reads with rare kmers (based on lower quantile value), update a hashtable accordingly
 	//        - 2nd pass: recruite reads until we don't want more of them
 
-    // TEMPORARY: erase diginorm-based selection
+    int ret;
+
+    // TODO: clean up
+    // (temp treatment: overide any exisiting markings)
     double startTime = Get_T();
     fprintf(stderr, "[M::%s] enter pre ovec read selection.\n", __func__);
-    fprintf(stderr, "WARNING: experimental tmp treatment, overriding diginorm marks (if any).\n");
+    fprintf(stderr, "WARNING: erase exisiting read markings (if any).\n");
 
     int hom_cov, het_cov;
-    ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, 1, &R_INF, &hom_cov, &het_cov);
+    ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, R_INF.is_all_in_mem, &R_INF, &hom_cov, &het_cov);
 
     R_INF.nb_target_reads = (uint64_t*)calloc(R_INF.total_reads, sizeof(uint64_t));
     int cutoff = (int) ((float)R_INF.total_reads*2/3 +0.499);  // heuristic: need less than 2/3 reads to have at most 300 ovlp targets
@@ -795,12 +798,21 @@ void hamt_pre_ovec_v2(int threshold){
         }
         fprintf(stderr, "[M::%s] plan to keep %d out of %d reads (%.2f%%).\n",__func__, cnt, (int)R_INF.total_reads, (float)cnt/R_INF.total_reads*100);
         hamt_flt_withsorting_supervised(&asm_opt, &R_INF, cnt);
+        ret = 0;
+        for (int idx_read=0; idx_read<R_INF.total_reads; idx_read++){  // check if we've dropped any read
+            if (R_INF.mask_readnorm[idx_read]&1){
+                ret = 1;
+                break;
+            }
+        }
     }else{
         fprintf(stderr, "[M::%s] keeping all reads.\n", __func__);
+        ret = 0;
     }
     free(R_INF.nb_target_reads);
     fprintf(stderr, "[M::%s] finished read selection, took %0.2fs.\n", __func__, Get_T()-startTime);
     ha_pt_destroy(ha_idx);
+    return ret;
 }
 
 
@@ -814,8 +826,15 @@ void ha_overlap_and_correct(int round, int coverage)
 	CALLOC(b, asm_opt.thread_num);
 	for (i = 0; i < asm_opt.thread_num; ++i)
 		b[i] = ha_ovec_init(0, (round == asm_opt.number_of_round - 1));
+
+    int has_read;
+    if (round!=0 || R_INF.is_all_in_mem)  // TODO: --meta?
+        has_read = 1;
+    else
+        has_read = 0;
 	// ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, round == 0? 0 : 1, &R_INF, &hom_cov, &het_cov); // build the index  // also, reads are loaded
-    ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, 1, &R_INF, &hom_cov, &het_cov); // EXPERIMENTAL
+    ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, has_read, &R_INF, &hom_cov, &het_cov); // EXPERIMENTAL
+
 	// if (round == 0 && ha_flt_tab == 0) // then asm_opt.hom_cov hasn't been updated
 		// ha_opt_update_cov(&asm_opt, hom_cov);
 	if (asm_opt.required_read_name)
@@ -1603,9 +1622,6 @@ int ha_assemble(void)
 
         debug_printstat_read_status(&R_INF);
 
-        // if (asm_opt.is_disable_diginorm){
-        //     hamt_flt_no_read_selection_from_disk_sancheck(&asm_opt, &R_INF);  // given -X, the bin file has to have kept all reads before ovec, or we need to start from the input file.
-        // }
 	}
 	if (!ovlp_loaded) {
         if (strcmp(asm_opt.bin_base_name, asm_opt.output_file_name)!=0){
@@ -1614,39 +1630,46 @@ int ha_assemble(void)
         }
 
 		// construct hash table for high occurrence k-mers
-        // hamt: also collect kmer-based read coverage etc diginorm.
+        // hamt: also collect per read kmer frequency info
 		if (!(asm_opt.flag & HA_F_NO_KMER_FLT)) {
             if (asm_opt.is_disable_diginorm){
                 if (asm_opt.readselection_sort_order!=0){
                     asm_opt.readselection_sort_order = 0; // overwrite
                     fprintf(stderr, "WARNING: disabling read sorting, since read selection is off.\n");
                 }
-                hamt_flt_no_read_selection(&asm_opt, &R_INF);
+                hamt_flt_no_read_selection(&asm_opt, &R_INF);  // init rs but don't do anything
                 fprintf(stderr, "[M::%s] hamt, skipped read selection.\n", __func__);
-                ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 1, 0, 0);  // high freq filter 
+                ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 0);  // high freq filter on all reads
                 fprintf(stderr, "[M::%s] generated flt tab.\n", __func__);
+                // at this point we should have seq lengths, but not the reads
+                assert((!R_INF.is_has_nothing) && R_INF.is_has_lengths && (!R_INF.is_all_in_mem));
             }else{
                 // hamt_flt(&asm_opt, &R_INF, 0, 0);  // count kmers and tag reads
-                hamt_flt_withsorting(&asm_opt, &R_INF);  // note: will consider if we're disable diginorm and use pre-ovec read selection.
-                fprintf(stderr, "[M::%s] diginorm has collected stats (with or without read selection).\n", __func__);
-
-                ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 1, 0, asm_opt.is_preovec_readselection? 1:0);  // high freq filter on retained reads
+                hamt_flt_withsorting(&asm_opt, &R_INF);
+                fprintf(stderr, "[M::%s] read kmer stats collected, with or without diginorm selection (if preovec, diginorm is skipped).\n", __func__);
+                ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 0);  // high freq filter on retained reads
                 fprintf(stderr, "[M::%s] generated flt tab.\n", __func__);
                 // ha_opt_update_cov(&asm_opt, hom_cov);
+                // at this point, reads all in mem
+                assert((!R_INF.is_has_nothing) && R_INF.is_has_lengths && R_INF.is_all_in_mem);
             }
 		}
 
-        debug_printstat_read_status(&R_INF);
+        // debug_printstat_read_status(&R_INF);  // TODO: preovec doesn't use bit flag right now. (Oct 15)
 
-        if (asm_opt.is_preovec_readselection){
-            // hamt_pre_ovec(asm_opt.preovec_coverage);
-            hamt_pre_ovec_v2(asm_opt.preovec_coverage);
-            fprintf(stderr, "[M::%s] dumping debug: read mask...\n", __func__);
-            hamt_dump_read_selection_mask_runtime(&asm_opt, &R_INF);
-
-            fprintf(stderr, "[M::%s] recalculate ha_flt_tab...\n", __func__);
-            ha_ft_destroy(ha_flt_tab);  // redo high freq filter
-            ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 1, 0, 0);
+        if (asm_opt.is_preovec_readselection && (!asm_opt.is_disable_diginorm)){
+            if (hamt_pre_ovec_v2(asm_opt.preovec_coverage)){
+                if (VERBOSE>=1){
+                    fprintf(stderr, "[M::%s] dumping debug: read mask...\n", __func__);
+                    hamt_dump_read_selection_mask_runtime(&asm_opt, &R_INF);
+                }
+                fprintf(stderr, "[M::%s] preovec dropped reads, recalculate ha_flt_tab...\n", __func__);
+                ha_ft_destroy(ha_flt_tab);  // redo high freq filter
+                ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 0);
+                fprintf(stderr, "[M::%s] finished redo ha_flt_tab.\n", __func__);
+            }else{
+                fprintf(stderr, "[M::%s] preovec kept all reads.\n", __func__);
+            }
         }
 
 		// error correction
@@ -1661,20 +1684,13 @@ int ha_assemble(void)
 			fprintf(stderr, "[M::%s] size of buffer: %.3fGB\n", __func__, asm_opt.mem_buf / 1073741824.0);
 		}
 		if (asm_opt.flag & HA_F_WRITE_EC) Output_corrected_reads();
+
 		// overlap between corrected reads
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
 		ha_overlap_final();
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());
 		ha_print_ovlp_stat(R_INF.paf, R_INF.reverse_paf, R_INF.total_reads);
-
-        ///////////////////////////////////////////////////////////////////////////
-        //////            hamt: crude coverage filtering                   ////////
-        // ( remove ovlp if two vertices apparently come from different places) ///
-        // if (!asm_opt.is_disable_diginorm){
-        //     hamt_del_ovlp_by_coverage(&R_INF, asm_opt, 100, 10);
-        // }
-        ///////////////////////////////////////////////////////////////////////////
 
 		ha_ft_destroy(ha_flt_tab);
 		if (asm_opt.flag & HA_F_WRITE_PAF) Output_PAF();

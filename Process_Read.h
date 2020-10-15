@@ -137,8 +137,9 @@ typedef struct
     uint16_t* lowq;  // lower 10 quantile
     uint8_t* mask_readnorm;  // bit flag, whether the read is discarded
     uint8_t* mask_readtype;  // bit flag
-    uint64_t *statpack;  // packed: median--reversed_std--rid
+    uint64_t *statpack;  // pack stat with readID for sorting
     uint64_t *nb_target_reads;  // experimental! guessed number of candiates, for triggering read selection
+    int is_has_nothing, is_has_lengths, is_all_in_mem;
 } All_reads;
 
 extern All_reads R_INF;

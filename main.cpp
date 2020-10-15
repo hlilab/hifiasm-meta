@@ -21,9 +21,6 @@ int main(int argc, char *argv[])
 	}else if (asm_opt.mode_readset_kmer_count){
 		hamt_printout_ha_count(&asm_opt, &R_INF);
 		return 0;
-	}else if (asm_opt.mode_diginorm_kmer_cov){
-		hamt_readselection_kmer_completeness(&asm_opt, &R_INF);
-		return 0;
 	}else if (asm_opt.is_dump_read_selection){
 		hamt_dump_read_selection_mask(&asm_opt, &R_INF);
 		return 0;

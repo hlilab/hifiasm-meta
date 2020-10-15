@@ -133,7 +133,7 @@ void write_debug_SCC_labeling_ug(ma_ug_t *ug, int *SCC_labels, char *filename){
     uint32_t idx;
     char name[32];
     fprintf(fp, "#utgID\tSCC_label\n");
-    for (int i=0; i<ug->u.n; i++){
+    for (int i=0; i<(int)ug->u.n; i++){
         sprintf(name, "utg%.6d%c", i + 1, "lc"[ug->u.a[i].circ]);
         fprintf(fp, "%s\t%d\n", name, SCC_labels[i]);
     }
@@ -671,7 +671,7 @@ int hamt_ugarc_detect_circle(ma_ug_t *ug, asg_t *sg, uint32_t vu0, uint32_t wu0,
                 continue;
             }
             int is_exhausted = 1;
-            for (int i=0; i<nv; i++){
+            for (int i=0; i<(int)nv; i++){
                 w = av[i].v;
                 wu = v2vu[w];
 
@@ -765,7 +765,7 @@ void hamt_ugarc_covcut_danglingCircle(asg_t *sg,
                 fprintf(stderr, "  (nv=0)\n");
                 continue;
             }
-            for (int i=0; i<nv; i++){
+            for (int i=0; i<(int)nv; i++){
                 w = av[i].v;
                 if (!sanmask[w]){
                     fprintf(stderr, "  (w is not unitig start/end.)\n");

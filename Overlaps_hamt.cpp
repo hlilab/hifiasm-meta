@@ -752,7 +752,7 @@ void hamt_ugarc_covcut_danglingCircle(asg_t *sg,
         cov1 = get_ug_coverage(&ug->u.a[vu], sg, coverage_cut, sources, ruIndex, primary_flag);
 
         for (uint32_t dir=0; dir<=1; dir++){  // try both directions
-            fprintf(stderr, "@ utg%.6d, dir %d\n", vu+1, (int)(dir));
+            if (VERBOSE>=1) {fprintf(stderr, "@ utg%.6d, dir %d\n", vu+1, (int)(dir));}
             if (dir==0){
                 v = ug->u.a[vu].end^1;
             }else{
@@ -762,21 +762,21 @@ void hamt_ugarc_covcut_danglingCircle(asg_t *sg,
             nv = asg_arc_n(sg, v);
             av = asg_arc_a(sg, v);
             if (nv<1){
-                fprintf(stderr, "  (nv=0)\n");
+                if (VERBOSE>=1) {fprintf(stderr, "  (nv=0)\n");}
                 continue;
             }
             for (int i=0; i<(int)nv; i++){
                 w = av[i].v;
                 if (!sanmask[w]){
-                    fprintf(stderr, "  (w is not unitig start/end.)\n");
+                    if (VERBOSE>=1) {fprintf(stderr, "  (w is not unitig start/end.)\n");}
                     continue;  // not a unitig start/end
                 }
                 if (asg_arc_n(sg, w^1)<2){  // early termination, the target can't be a circle
-                    fprintf(stderr, "  (w has less than 2 backward arc.)\n");
+                    if (VERBOSE>=1) {fprintf(stderr, "  (w has less than 2 backward arc.)\n");}
                     continue;
                 }
                 wu = v2vu_directed[w];
-                fprintf(stderr, "   [target is utg%.6d ]\n", (int)(wu>>1)+1);
+                if (VERBOSE>=1) {fprintf(stderr, "   [target is utg%.6d ]\n", (int)(wu>>1)+1);}
                 cov2 = get_ug_coverage(&ug->u.a[wu>>1], sg, coverage_cut, sources, ruIndex, primary_flag);
 
                 if (cov1>cov2){
@@ -786,17 +786,17 @@ void hamt_ugarc_covcut_danglingCircle(asg_t *sg,
                 }
 
                 if (cov2<10){  // early termination, target tig has low coverage
-                    fprintf(stderr, "  (larger coverage too low.)\n");
+                    if (VERBOSE>=1) {fprintf(stderr, "  (larger coverage too low.)\n");}
                     continue;
                 }
                 if (cov2<20){  // early termination, no significant coverage diff
                     if ((float)cov2/cov1<2 && (cov2-cov1<8)){
-                        fprintf(stderr, "  (diff insignificant, type 1. (%d vs %d))\n", (int)cov1, (int) cov2);
+                        if (VERBOSE>=1) {fprintf(stderr, "  (diff insignificant, type 1. (%d vs %d))\n", (int)cov1, (int) cov2);}
                         continue;
                     }
                 }else{
                     if ((float)cov2/cov1<2){
-                        fprintf(stderr, "  (diff insignificant, type 2. (%d vs %d))\n", (int)cov1, (int) cov2);
+                        if (VERBOSE>=1) {fprintf(stderr, "  (diff insignificant, type 2. (%d vs %d))\n", (int)cov1, (int) cov2);}
                         continue;
                     }
                 }
@@ -811,7 +811,7 @@ void hamt_ugarc_covcut_danglingCircle(asg_t *sg,
                         fprintf(stderr, "        (coverage small: %d vs large: %d)\n", cov1, cov2);
                     }
                 }else{
-                    fprintf(stderr, "  (circle not detected.)\n");
+                    if (VERBOSE>=1) {fprintf(stderr, "  (circle not detected.)\n");}
                 }
             }
         }

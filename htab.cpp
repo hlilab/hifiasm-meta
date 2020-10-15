@@ -723,12 +723,10 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 			}
 			free(s->mz);
 		}
-		// printf("exit step1\n"); fflush(stdout);
 		free(s->seq); free(s->len);
 		s->seq = 0, s->len = 0;
 		return s;
 	} else if (step == 2) { // step 3: insert k-mers to hash table
-		// printf("worker_count step2\n"); fflush(stdout);
 		st_data_t *s = (st_data_t*)in;
 		int i, n = 1<<p->opt->pre;
 		uint64_t n_ins = 0;
@@ -966,6 +964,11 @@ typedef struct {  // global data structure for pipeline (pl_data_t)
 
 	uint8_t flag;
 	const hifiasm_opt_t *asm_opt;  // hamt experimental, used to toggle things like read selection order. TODO: clean up when ready.
+
+	// experimental for preovec-diginorm
+	int nb_reads_kept;  
+	int nb_reads_limit;
+	int runtime_median_threshold;
 }plmt_data_t;
 
 typedef struct {  // step data structure (st_data_t)
@@ -992,52 +995,51 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 		if ((kh_key(h, key)&YAK_MAX_COUNT)<YAK_MAX_COUNT) kh_key(h, key)++;
 		if (absent) san++;
 	}
-	// fprintf(stderr, "%s::%ld: inserted %" PRIu64 " kmers.\n", __func__, idx_for, san);fflush(stderr);
 }
 
-static void worker_process_one_read(void* data, long idx_for, int tid){
-	// !!!!!! LAST UPDATE AUG 20. Based on HPC version but not tested, since non-HPC isn't enabled anywhere !!!!!! //
-	pltmt_step_t *s = (pltmt_step_t*) data;
-	uint64_t rid = s->n_seq0+idx_for;
-	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_for]);
-	if (!buf) {printf("[error::%s] malloc for buffer failed, thread %d, for_idx %ld.\n", __func__, tid, idx_for); exit(1);}
-	int k = s->p->opt->k;
-	ha_ct_t *h = s->p->h;
+// static void worker_process_one_read(void* data, long idx_for, int tid){
+// 	// !!!!!! LAST UPDATE AUG 20. Based on HPC version but not tested, since non-HPC isn't enabled anywhere !!!!!! //
+// 	pltmt_step_t *s = (pltmt_step_t*) data;
+// 	uint64_t rid = s->n_seq0+idx_for;
+// 	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_for]);
+// 	if (!buf) {printf("[error::%s] malloc for buffer failed, thread %d, for_idx %ld.\n", __func__, tid, idx_for); exit(1);}
+// 	int k = s->p->opt->k;
+// 	ha_ct_t *h = s->p->h;
 
-	uint32_t idx = 0;  // index of kmer count in the buffer
-	khint_t key;
-	int i, l;
-	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
-	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_for]; ++i) {
-		int c = seq_nt4_table[(uint8_t)s->seq[idx_for][i]];
-		if (c < 4) { // not an "N" base
-			x[0] = (x[0] << 1 | (c&1))  & mask;
-			x[1] = (x[1] << 1 | (c>>1)) & mask;
-			x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
-			x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
-			if (++l >= k){
-					uint64_t hash = yak_hash_long(x);
-					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
-					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
-					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
-					else buf[idx] = 0;
-					idx++;
-				}
-		} else l = 0, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
-	}
-	double mean = meanl(buf, idx);
-	double std = stdl(buf, idx, mean);
-	radix_sort_hamt16(buf, buf+idx);
-	uint16_t median = (uint16_t)buf[idx/2];
-	uint8_t code = decide_category(mean, std, buf, idx);
-	s->p->rs_out->mean[rid] = mean;
-	s->p->rs_out->median[rid] = median;
-	s->p->rs_out->std[rid] = std;
-	s->p->rs_out->mask_readtype[rid] = code;
-	// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
-	free(buf);
-	// sequence will be freed by the caller
-}
+// 	uint32_t idx = 0;  // index of kmer count in the buffer
+// 	khint_t key;
+// 	int i, l;
+// 	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+// 	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_for]; ++i) {
+// 		int c = seq_nt4_table[(uint8_t)s->seq[idx_for][i]];
+// 		if (c < 4) { // not an "N" base
+// 			x[0] = (x[0] << 1 | (c&1))  & mask;
+// 			x[1] = (x[1] << 1 | (c>>1)) & mask;
+// 			x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+// 			x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+// 			if (++l >= k){
+// 					uint64_t hash = yak_hash_long(x);
+// 					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
+// 					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
+// 					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+// 					else buf[idx] = 0;
+// 					idx++;
+// 				}
+// 		} else l = 0, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+// 	}
+// 	double mean = meanl(buf, idx);
+// 	double std = stdl(buf, idx, mean);
+// 	radix_sort_hamt16(buf, buf+idx);
+// 	uint16_t median = (uint16_t)buf[idx/2];
+// 	uint8_t code = decide_category(mean, std, buf, idx);
+// 	s->p->rs_out->mean[rid] = mean;
+// 	s->p->rs_out->median[rid] = median;
+// 	s->p->rs_out->std[rid] = std;
+// 	s->p->rs_out->mask_readtype[rid] = code;
+// 	// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
+// 	free(buf);
+// 	// sequence will be freed by the caller
+// }
 
 #define HAMT_DISCARD 0x1
 #define HAMT_VIA_MEDIAN 0x2
@@ -1085,9 +1087,8 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 						// inert into diginorm linear buffer for kmer counting
 						b = &s->lnbuf[hash & ((1<<h->pre)-1)];
 						if ((b->n+3)>=b->m){
-							b->m = b->m+((b->m)>>1);
-							// b->a = (uint64_t*)realloc(b->a, b->m*sizeof(uint64_t));
-							b->a = REALLOC(b->a, b->m);
+							b->m = b->m<16? 16 : b->m+((b->m)>>1);
+							REALLOC(b->a, b->m);
 							assert(b->a);
 						}
 						b->a[b->n] = hash;
@@ -1102,7 +1103,7 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 						yak_ct_t *h2 = s->p->h->h[hash & ((1<<h->pre)-1)].h;  // all-reads count hashtable
 						key = yak_ct_get(h2, hash>>h->pre<<YAK_COUNTER_BITS1);
 						if (key!=kh_end(h2)){
-							if (((kh_key(h2, key) & YAK_MAX_COUNT) <= low_threshold) && ((kh_key(h2, key) & YAK_MAX_COUNT) > 3)) has_wanted_kmers++;
+							if (((kh_key(h2, key) & YAK_MAX_COUNT) <= (uint32_t)low_threshold) && ((kh_key(h2, key) & YAK_MAX_COUNT) > 3)) has_wanted_kmers++;
 						}
 					}
 				}
@@ -1115,17 +1116,20 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 		double std = stdl(buf, idx, mean);
 		radix_sort_hamt16(buf, buf+idx);
 		uint16_t median = (uint16_t)buf[idx/2];
+		// uint16_t lowq = (uint16_t)quantile(buf_norm, idx, 0.10);
+		uint16_t lowq = (uint16_t)buf[idx/10];
 		uint8_t code = decide_category(mean, std, buf, idx);
 		s->p->rs_out->mean[rid] = mean;
 		s->p->rs_out->median[rid] = median;
+		s->p->rs_out->lowq[rid] = lowq;
 		s->p->rs_out->std[rid] = std;
 		s->p->rs_out->mask_readtype[rid] = code;
 		// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
 	}else{  // diginorm
 		uint8_t code;
-		uint16_t cnt = 0;
-		uint16_t max_cnt = 0;
 		uint16_t median = 0;
+		// uint16_t cnt = 0;
+		// uint16_t max_cnt = 0;
 		// int grace_counter = 60; // exp, allow temporary drop; 60 because k=51
 		// for (uint16_t i=0; i<idx; i++){  // examine if runtime buffer looks like long low-coverage. 
 		// 	if (buf_norm[i]<=10){
@@ -1156,6 +1160,118 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 	free(buf_norm);
 }
 
+
+void worker_process_one_read_HPC_inclusive(pltmt_step_t *s, int idx_seq, int round){
+	// note: this function is not called by kt_for, it's linear
+	uint64_t rid = s->RIDs[idx_seq];
+	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
+		return;
+	}
+	// fprintf(stderr, "DEBUG: idx_seq is %d, rid is %d.\n", (int)idx_seq, (int)rid);
+	static int flag_round0_said_warning = 0;
+	static int flag_round1_said_warning = 0;
+
+	// early termination criteria
+	if (round==0){  // keep globally infrequent reads
+		// fprintf(stderr, "[process_one_read round0 dbg] read %d, median %d, lowq %d\n", (int)rid, (int) s->p->rs_in->median[rid] , (int)s->p->rs_in->lowq[rid]);
+		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
+			if (!flag_round0_said_warning){
+				fprintf(stderr, "[W::%s] read limit reached while recruiting lowq reads. continue anyway\n", __func__);
+				flag_round0_said_warning = 1;
+			}
+		}
+		if (s->p->rs_in->median[rid]>300 || s->p->rs_in->lowq[rid]>50){
+			return ;
+		}
+	} else if (round==1){  // recruit remaining reads
+		// fprintf(stderr, "round1DEBUG: read %d, round %d, median %d, lowq %d.\n", (int)rid, round, (int)s->p->rs_in->median[rid], (int)s->p->rs_in->lowq[rid]);
+		if ((s->p->rs_in->mask_readnorm[rid] & 1)==0){  // this read is already kept
+			return ;
+		}
+		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
+			if (!flag_round1_said_warning){
+				fprintf(stderr, "[W::%s] read limit reached in round#2.\n", __func__);
+				flag_round1_said_warning = 1;
+			}
+			return ;
+		}
+	} else {
+		fprintf(stderr, "ERROR: %s invalid round.\n", __func__);
+		exit(1);
+	}
+
+	// collect kmers 
+	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
+	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // runtime kmer frequency container
+	int idx_buf = 0;
+	int k = s->p->opt->k;  // NOTE?????? (Oct 6 2020) ASan thought there's a heap-use-after-free error right here (or a few lines below at the yak_ct_get part), but I don't see why, and it won't segfault without ASan, not sure if it's ASan false positive or an obscure bug. It happens during the 2nd run of this step in kt_pipeline, but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	ha_ct_t *hd = s->p->hd;
+
+	uint32_t idx = 0;  // index of kmer count in the buffer
+	khint_t key;
+	int i, l, last = -1;
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	hamt_ch_buf_t *b = 0;// uint64_t *b = 0;
+
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_seq]; ++i) {
+		int c = seq_nt4_table[(uint8_t)s->seq[idx_seq][i]];
+		if (c < 4) { // not an "N" base
+			if (c != last) {
+				x[0] = (x[0] << 1 | (c&1))  & mask;
+				x[1] = (x[1] << 1 | (c>>1)) & mask;
+				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+				if (++l >= k){
+					uint64_t hash = yak_hash_long(x); 
+					buf[idx_buf++] = hash;
+					yak_ct_t *h_ = hd->h[hash & ((1<<hd->pre)-1)].h;  // runtime count hashtable
+					key = yak_ct_get(h_, hash>>hd->pre<<YAK_COUNTER_BITS1);
+					if (key!=kh_end(h_)){buf_norm[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+					else buf_norm[idx] = 1;  // because bf
+					idx++;
+				}
+				last = c;
+			}
+		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+	
+	int flag_is_keep_read = 0;
+	if (round==0) {flag_is_keep_read = 1;}  // median has been checked upfront
+	else if (round==1){
+		radix_sort_hamt16(buf_norm, buf_norm+idx);
+		// if (buf_norm[idx/2]<=s->p->runtime_median_threshold || buf_norm[idx/10]<=150 || buf_norm[idx/20]<=80){
+		if (buf_norm[idx/2]<=s->p->runtime_median_threshold || 
+			buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10 ||
+			((s->p->asm_opt->lowq_thre_5>0) && (buf_norm[idx/20]<=s->p->asm_opt->lowq_thre_5)) ||
+			((s->p->asm_opt->lowq_thre_3>0) && (buf_norm[idx/30]<=s->p->asm_opt->lowq_thre_3))
+			){
+			flag_is_keep_read = 1;
+		}
+		// else{
+		// 	fprintf(stderr, "   debug: runtime median is %d, runtime lowq is %d, discarded. (readID %d) \n", (int)buf_norm[idx/2], (int)buf_norm[idx/10], (int)rid);
+		// }
+	}
+
+	// flip mask and update linear buffer
+	if (flag_is_keep_read){
+		s->p->rs_out->mask_readnorm[rid] = 0;
+		s->p->nb_reads_kept++;
+		for (i=0; i<idx_buf; i++){
+			b = &s->lnbuf[buf[i] & ((1<<hd->pre)-1)];// inert into diginorm linear buffer for kmer counting
+			if ((b->n+3)>=b->m){
+				b->m = b->m<16? 16 : b->m+((b->m)>>1);
+				REALLOC(b->a, b->m);
+				assert(b->a);
+			}
+			b->a[b->n++] = buf[i];
+		}
+	}
+	free(buf);
+	free(buf_norm);
+}
+
+
+
 static void *worker_mark_reads(void *data, int step, void *in){  // callback of kt_pipeline
 	plmt_data_t *p = (plmt_data_t*)data;
 	if (step==0){ // step 1: read a block of sequences
@@ -1169,6 +1285,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			s->lnbuf = (hamt_ch_buf_t*)calloc(1<<p->h->pre, sizeof(hamt_ch_buf_t));
 			for (int i=0; i<1<<p->h->pre; i++){
 				s->lnbuf[i].a = (uint64_t*)calloc(15000, sizeof(uint64_t));
+				assert(s->lnbuf[i].a);
 				s->lnbuf[i].n = 0;
 				s->lnbuf[i].m = 15000;
 			}
@@ -1492,7 +1609,7 @@ static void worker_get_one_read_kmer_profile_HPC(void* data, long idx_for, int t
 			}
 		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
 	}
-	printf("sequence length: %d, collected %d.\n", len, lnbuf->n);
+	// printf("sequence length: %d, collected %d.\n", len, lnbuf->n);
 }
 
 static void *worker_read_kmer_profile(void *data, int step, void *in){  // callback of kt_pipeline
@@ -1651,12 +1768,6 @@ int hamt_printout_ha_count(hifiasm_opt_t *asm_opt, All_reads *rs){  // debug
 	return 0;
 }
 
-// yak_ct_t *g = a->h->h[i].h;
-// 	khint_t k;
-// 	for (k = 0; k < kh_end(g); ++k)
-// 		if (kh_exist(g, k))
-// 			++cnt[kh_key(g, k)&YAK_MAX_COUNT];
-
 
 ///////////////////////////////////////////////////////////////////////
 //    experimental: diginorm+, but with sorting and less heuristics  //
@@ -1792,6 +1903,106 @@ static void *worker_mark_reads_withsoring(void *data, int step, void *in){  // c
 	return 0;
 }
 
+static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // callback of kt_pipeline
+	// mark all reads with a low enough lower quantile value to be included 
+	plmt_data_t *p = (plmt_data_t*)data;
+	if (step==0){ // collect reads
+		pltmt_step_t *s;
+		// prepare s
+		CALLOC(s, 1);
+		s->p = p;
+		s->n_seq0 = *p->n_seq;
+		s->lnbuf = 0;
+		s->lnbuf = (hamt_ch_buf_t*)calloc(1<<p->hd->pre, sizeof(hamt_ch_buf_t));
+		for (int i=0; i<1<<p->hd->pre; i++){
+			s->lnbuf[i].a = (uint64_t*)calloc(15000, sizeof(uint64_t));
+			s->lnbuf[i].n = 0;
+			s->lnbuf[i].m = 15000;
+			}
+		s->RIDs = (uint64_t*)malloc(sizeof(uint64_t)*2000);
+		// recruit reads
+		uint64_t readID;
+		while (s->n_seq<2000 && ((*p->n_seq) < p->rs_in->total_reads)){
+			int l;
+			readID = (uint64_t) ((uint32_t)p->rs_in->statpack[*p->n_seq]);
+
+			if ((p->rs_in->mask_readnorm[readID] & 1)==0){  // read already retained
+				*p->n_seq = *p->n_seq + 1;
+				continue;
+			}
+
+			s->RIDs[s->n_seq] = readID;  // since we can't rely on n_seq0+idx_for
+			recover_UC_Read(&p->ucr, p->rs_in, readID);
+			l = p->ucr.length;
+			if (s->n_seq == s->m_seq) {
+				s->m_seq = s->m_seq < 16? 16 : s->m_seq + (s->m_seq>>1);
+				REALLOC(s->len, s->m_seq);
+				REALLOC(s->seq, s->m_seq);
+			}
+			MALLOC(s->seq[s->n_seq], l);
+			memcpy(s->seq[s->n_seq], p->ucr.seq, l);
+			s->len[s->n_seq++] = l;
+			*p->n_seq = *p->n_seq + 1;
+			s->sum_len += l;
+			s->nk += l >= p->opt->k? l - p->opt->k + 1 : 0;
+		}
+		if (s->sum_len == 0) {
+			for (int i=0; i<1<<p->hd->pre; i++){
+				free(s->lnbuf[i].a);
+			}
+			free(s->lnbuf);
+			free(s->RIDs);
+			free(s);
+		}
+		else {return s;}
+	} else if (step==1){  // process reads
+		pltmt_step_t *s = (pltmt_step_t*)in;
+		// fprintf(stderr, "DEBUG: entering a block of worker_process_one_read_HPC_inclusive\n"); fflush(stderr);
+		// note: do not use kt_for here, or it's race (that *doesn't always* but occassionally fail)! 
+		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
+			if (p->opt->is_HPC)
+				worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round);
+			else
+				{fprintf(stderr, "NON-HPC IS NOT IMPLEMENTED IN THE TEST PHASE (because stuffs are changing)! \n"); exit(1);}
+				// worker_process_one_read(s, s->n_seq);
+		}
+		// fprintf(stderr, "DEBUG: finished a block of worker_process_one_read_HPC_inclusive\n"); fflush(stderr);
+		int san = 0;
+		for (int i=0; i<1<<p->hd->pre; i++){
+			san+=s->lnbuf[i].n;
+		}
+		if (san==0){  // linear buffer is empty, terminate
+			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
+			free(s->len); s->len = 0;
+			free(s->seq); s->seq = 0; 
+			for (int i=0; i<1<<p->hd->pre; i++){
+				free(s->lnbuf[i].a);
+				}				
+			free(s->lnbuf);
+			free(s->RIDs);
+			free(s);
+		}else{
+			return s;
+		}
+		// return s;
+	} else if (step==2){  // insert the linear buffer
+		pltmt_step_t *s = (pltmt_step_t*)in;
+		// update runtime hashtable
+		kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->hd->pre);
+		// clean up
+		for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
+		free(s->len); s->len = 0;
+		free(s->seq); s->seq = 0; 
+		for (int i=0; i<1<<p->hd->pre; i++){
+			free(s->lnbuf[i].a);
+			}				
+		free(s->lnbuf);
+		free(s->RIDs);
+		free(s);
+	} 
+	return 0;
+}
+
 void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	// collect kmers frequencies
 	int64_t cnt[YAK_N_COUNTS];
@@ -1812,8 +2023,14 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	assert(rs->statpack);
 	fprintf(stderr, "malloc-ed\n"); fflush(stderr);
 	for (uint32_t i=0; i<rs->total_reads; i++){
-		// std packed this way is for read selection: when median kmer freq ties, drop the smoother ones first
-		rs->statpack[i] = ((uint64_t) rs->median[i]<<48) | (((uint64_t) (YAK_MAX_COUNT -1 -rs->std[i] + .499))<<32) | i;  // std won't exceed 14 bits, therefore safe to cast
+		if (!asm_opt->is_preovec_readselection){
+			// pack values for normal diginorm read selection
+			// std packed this way is for read selection: when median kmer freq ties, drop the smoother ones first
+			rs->statpack[i] = (((uint64_t) rs->median[i])<<48) | (((uint64_t) (YAK_MAX_COUNT -1 -rs->std[i] + .499))<<32) | i;  // std won't exceed 14 bits, therefore safe to cast
+		}else{
+			// using preovec read selection
+			rs->statpack[i] = ((uint64_t) ((YAK_MAX_COUNT -1 - ((uint64_t)rs->lowq[i]))<<48)) | (((uint64_t) rs->median[i])<<32) | i;
+		}
 	}
 	fprintf(stderr, "packed\n"); fflush(stderr);
 	radix_sort_hamt64(rs->statpack, rs->statpack+rs->total_reads);
@@ -1837,7 +2054,6 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 		plmt.round = 1;
 		plmt.hd = ha_ct_init(plmt.opt->k, plmt.h->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
 		plmt.asm_opt = asm_opt;
-		assert(h);
 		init_UC_Read(&plmt.ucr);
 		kt_pipeline(2, worker_mark_reads_withsoring, &plmt, 2);
 		destory_UC_Read(&plmt.ucr);
@@ -1846,10 +2062,85 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 		memset(rs->mask_readnorm, 0, rs->total_reads);
 		fprintf(stderr, "debug: diginorm collected stats. Skipping diginorm read selection because `is_preovec_readselection`.\n");
 	}
+	ha_ct_destroy(h);
 	
 }
 
+void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs, int nb_to_keep){
+	// called by hamt_pre_ovec_v2
+	// all stats have been collected before this (global median etc + sorting by `hamt_flt_withsorting`)
 
+	memset(R_INF.mask_readnorm, 1, R_INF.total_reads);  // we will be including reads, not excluding
+
+	uint64_t n_seq = 0;
+	yak_copt_t opt;
+	yak_copt_init(&opt);
+	opt.k = asm_opt->k_mer_length;
+	opt.is_HPC = !(asm_opt->flag&HA_F_NO_HPC);
+	opt.n_thread = asm_opt->thread_num;
+	plmt_data_t plmt;
+	memset(&plmt, 0, sizeof(plmt_data_t));
+	plmt.n_seq = &n_seq;
+	plmt.opt = &opt;
+	plmt.rs_in = rs;
+	plmt.rs_out = rs;
+	plmt.h = ha_ct_init(plmt.opt->k, plmt.opt->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);  // it's a placeholder since some functions may expect h (only to use the pre)
+	plmt.hd = ha_ct_init(plmt.opt->k, plmt.opt->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
+	plmt.asm_opt = asm_opt;
+	plmt.nb_reads_limit = nb_to_keep;
+	init_UC_Read(&plmt.ucr);
+
+	// 1st pass: keep all reads with infrequent kmers and median less than 100
+	plmt.round = 0;
+	plmt.nb_reads_kept = 0;
+	fprintf(stderr, "[M::%s] entering round#1...\n", __func__);
+	kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 3);
+	fprintf(stderr, "[M::%s] finished round#1, retaining %d reads.\n",__func__, plmt.nb_reads_kept);
+
+	// 2nd pass: include reads until reaching the limit
+	// repack the stat
+	if (plmt.nb_reads_kept<plmt.nb_reads_limit){
+		plmt.runtime_median_threshold = 50; /////////////////// 50
+		for (uint64_t i=0; i<rs->total_reads; i++){
+			rs->statpack[i] = ((uint64_t) rs->median[i]<<48) | (((uint64_t) (YAK_MAX_COUNT -1 -rs->std[i] + .499))<<32) | i;  // std won't exceed 14 bits, therefore safe to cast
+		}
+		radix_sort_hamt64(rs->statpack, rs->statpack+rs->total_reads);
+		plmt.round = 1;
+		int rounds_of_dropping = 0, grace=0;
+		int prv_nb_reads = plmt.nb_reads_kept;
+		while (1){		
+			fprintf(stderr, "[M::%s] entering round#2, pass#%d...\n", __func__, rounds_of_dropping);
+			n_seq = 0;  // reset!
+			kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 3);
+
+			plmt.runtime_median_threshold +=50;  ///////////////50
+			rounds_of_dropping++;
+			fprintf(stderr, "[D::%s] runtime_median_threshold has been increased to %d.\n", __func__, plmt.runtime_median_threshold);
+			
+			if (plmt.nb_reads_kept==prv_nb_reads){
+				fprintf(stderr, "[M::%s] no more read has been kept during this round, grace==%d\n", __func__, grace);
+				grace++;
+			}else{
+				grace = 0;
+			}
+			if (plmt.nb_reads_kept>=plmt.nb_reads_limit || grace>=1){
+				fprintf(stderr, "[M::%s] finished selection, retained %d reads (out of %d).\n", __func__, plmt.nb_reads_kept, plmt.nb_reads_limit);
+				break;
+			}
+			prv_nb_reads = plmt.nb_reads_kept;
+			fprintf(stderr, "[M::%s] finished round#2, pass#%d, retaining %d reads.\n", __func__, rounds_of_dropping, prv_nb_reads);
+		}
+	}else{
+		fprintf(stderr, "[M/W::%s] round#1 has collected enough reads, not doing diginorm.\n", __func__);
+	}
+
+	destory_UC_Read(&plmt.ucr);
+	if (plmt.hd) ha_ct_destroy(plmt.hd);
+	if (plmt.h) ha_ct_destroy(plmt.h);
+	
+}
+
+// not really used... but don't comment out until you remove the respective lines in main.cpp
 int hamt_readselection_kmer_completeness(hifiasm_opt_t *asm_opt, All_reads *rs){  // debug
 	fprintf(stderr, "NOTICE: must specify -o outpuptname.\n"); 
 
@@ -1927,6 +2218,7 @@ int hamt_readselection_kmer_completeness(hifiasm_opt_t *asm_opt, All_reads *rs){
 	}
 	
 	// cleanup
+	ha_ct_destroy(hd);
 	free(diff); 
 	free(missing);
 	free(name);
@@ -1952,9 +2244,9 @@ void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_r
 	assert(asm_opt->is_disable_diginorm);
 	assert(rs->hamt_stat_buf_size >= rs->total_reads);
 	assert(rs->index_size >= rs->total_reads);
-	for (int i=0; i<rs->total_reads; i++){
+	for (uint64_t i=0; i<rs->total_reads; i++){
 		if (rs->mask_readnorm[i] & 1){
-			fprintf(stderr, "[E::%s] set to keep all reads, but in bin file read #%d was discarded. Aborting.\n", __func__, i);
+			fprintf(stderr, "[E::%s] set to keep all reads, but in bin file read #%d was discarded. Aborting.\n", __func__, (int)i);
 			exit(1);
 		}
 	}

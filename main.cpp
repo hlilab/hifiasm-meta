@@ -5,7 +5,7 @@
 #include "Assembly.h"
 #include "Levenshtein_distance.h"
 #include "htab.h"
-// #include "debug_modules.h"
+#include "meta_util_debug.h"
 
 int main(int argc, char *argv[])
 {
@@ -14,6 +14,7 @@ int main(int argc, char *argv[])
     init_opt(&asm_opt);
     if (!CommandLine_process(argc, argv, &asm_opt)) return 1;
 
+	// debug modules
 	if (asm_opt.mode_read_kmer_profile){
 		hamt_read_kmer_profile(&asm_opt, &R_INF);
 		return 0;
@@ -23,8 +24,13 @@ int main(int argc, char *argv[])
 	}else if (asm_opt.mode_diginorm_kmer_cov){
 		hamt_readselection_kmer_completeness(&asm_opt, &R_INF);
 		return 0;
+	}else if (asm_opt.is_dump_read_selection){
+		hamt_dump_read_selection_mask(&asm_opt, &R_INF);
+		return 0;
 	}
 
+
+	// main
 	ret = ha_assemble();
     destory_opt(&asm_opt);
 	fprintf(stderr, "[M::%s] Version: %s\n", __func__, HA_VERSION);

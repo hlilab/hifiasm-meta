@@ -6,7 +6,7 @@
 #include <sys/time.h>
 #include "CommandLines.h"
 #include "ketopt.h"
-#include "gitcommit.h"
+#include "gitcommit.h"  // if gone, use stamp
 
 #define DEFAULT_OUTPUT "hifiasm.asm"
 
@@ -27,6 +27,7 @@ static ko_longopt_t long_options[] = {
     { "purge-cov",     ko_required_argument, 309 },
     { "pri-range",     ko_required_argument, 310 },
     { "high-het",      ko_no_argument, 311 },
+
     // hamt debug/probing modules
     { "read-kmer-profile", ko_no_argument, 400},  // write per-read kmer frequency profiles
     { "readset-kmer-count", ko_no_argument, 401},  // write ha_count (kmers appear less than 5 times will be omitted)
@@ -34,7 +35,15 @@ static ko_longopt_t long_options[] = {
     { "readselection-kmer-coverage", ko_no_argument, 403},  // test read selection heuristic
     { "diginorm-coverage", ko_required_argument, 404},  // expose it
     { "preovec-coverage", ko_required_argument, 405},
-	{ 0, 0, 0 }
+    { "dump-read-selection", ko_no_argument, 406},  // dump the read selection mask from bin files; only effetive with -B (hamt)
+    { "exp-graph-cleaning", ko_no_argument,  407},
+    { "force-preovec", ko_no_argument, 408}, // ignore 1st heuristic (which could've kept all reads), do preovec read selection based on lowq given
+	
+    { "lowq-10", ko_required_argument, 409}, // lower 10% quantile threshold,
+    { "lowq-5", ko_required_argument, 410}, // lower 5% quantile threshold,
+    { "lowq-3", ko_required_argument, 411}, // lower 3% quantile threshold,
+
+    { 0, 0, 0 }
 };
 
 double Get_T(void)
@@ -149,6 +158,12 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->bin_base_name = 0;
     asm_opt->diginorm_coverage = 100;
     asm_opt->preovec_coverage = 150;
+    asm_opt->is_ignore_ovlp_cnt = 0;
+    asm_opt->is_dump_read_selection = 0;
+    asm_opt->is_use_exp_graph_cleaning = 0;
+    asm_opt->lowq_thre_10 = 150;
+    asm_opt->lowq_thre_5 = -1;  // disable
+    asm_opt->lowq_thre_3 = -1;  // disable
     // end of hamt
 }
 
@@ -459,7 +474,21 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 401) {asm_opt->mode_readset_kmer_count = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for the dataset.\n");}
         else if (c == 403) {asm_opt->mode_diginorm_kmer_cov = 1; fprintf(stderr, "DEBUG MODE: test kmer completeness of the curretn read selection heuristic.\n");}
         else if (c == 404) {asm_opt->diginorm_coverage = atoi(opt.arg);}
-        else if (c == 405) {asm_opt->preovec_coverage = atoi(opt.arg);}
+        else if (c == 405) {
+            fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");            
+            asm_opt->is_preovec_readselection = 1; 
+            asm_opt->preovec_coverage = atoi(opt.arg);
+        }
+        else if (c == 406) {asm_opt->is_dump_read_selection = 1; fprintf(stderr, "DEBUG DUMP: will write read selection mask to file.\n");}
+        else if (c == 407) {asm_opt->is_use_exp_graph_cleaning = 1; fprintf(stderr, "NOTICE: enabled experimental graph cleaning steps.\n");}
+        else if (c == 408) {
+            fprintf(stderr, "NOTICE: forced pre-ovec read selection. Ignoring count of ovlp. Disabling diginorm (will collect stats w/ sorting).\n");            
+            asm_opt->is_ignore_ovlp_cnt = 1;
+            asm_opt->is_preovec_readselection = 1;
+        }
+        else if (c == 409) {asm_opt->lowq_thre_10 = atoi(opt.arg);}
+        else if (c == 410) {asm_opt->lowq_thre_5 = atoi(opt.arg);}
+        else if (c == 411) {asm_opt->lowq_thre_3 = atoi(opt.arg);}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

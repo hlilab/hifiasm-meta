@@ -92,6 +92,11 @@ double stdl(const uint16_t *counts, uint32_t l, double mean){
 //     return peaks;
 // }
 
+uint16_t quantile(uint16_t *d, uint32_t l, float q){
+    int idx = (int) (l * q);
+    return d[idx];
+}
+
 //////////////////* marking *////////////////////
 #define HAMT_READCOV_LOW 0x1
 #define HAMT_READCOV_REASONABLE 0x2
@@ -168,7 +173,7 @@ static void worker_hamt_del_ovlp_by_coverage(void* data, long idx_for, int tid){
     double diff_fold;
     int tmp_cnt = 0;
 
-    for (int i = 0; i < x->length; i++){
+    for (uint32_t i = 0; i < x->length; i++){
         h = &(x->buffer[i]);  // the overlap
         if(h->del) continue;
         code_target = s->rs->mask_readtype[h->tn];

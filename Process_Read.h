@@ -134,6 +134,7 @@ typedef struct
     double* mean;
     double* std;
     uint16_t* median;
+    uint16_t* lowq;  // lower 10 quantile
     uint8_t* mask_readnorm;  // bit flag, whether the read is discarded
     uint8_t* mask_readtype;  // bit flag
     uint64_t *statpack;  // packed: median--reversed_std--rid

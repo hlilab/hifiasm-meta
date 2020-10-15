@@ -17,6 +17,8 @@ int hamt_readselection_kmer_completeness(hifiasm_opt_t *asm_opt, All_reads *rs);
 void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
 void hamt_flt_no_read_selection(hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
 void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
+
+void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs, int nb_to_keep);
 ///////////////////////////////////
 
 typedef struct {

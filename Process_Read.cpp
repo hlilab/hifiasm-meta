@@ -54,6 +54,7 @@ void init_All_reads(All_reads* r)
 	r->mask_readtype = 0;
 	r->mean = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
 	r->median = (uint16_t*)calloc(r->hamt_stat_buf_size, sizeof(uint16_t));
+	r->lowq = (uint16_t*)calloc(r->hamt_stat_buf_size, sizeof(uint16_t));
 	r->std = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
 	r->mask_readnorm = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
 	r->mask_readtype = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
@@ -100,6 +101,8 @@ void destory_All_reads(All_reads* r)
 		free(r->mean);
 	if (r->median)
 		free(r->median);
+	if (r->lowq)
+		free(r->lowq);
 	if (r->std)
 		free(r->std);
 	if (r->mask_readnorm)
@@ -159,15 +162,15 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	char* str_cmd = (char*)malloc(1000*sizeof(char));
 	sprintf(str_cmd, "version=%s, ", HA_VERSION);
 	sprintf(str_cmd+strlen(str_cmd), "CMD=");
-	for (i = 0; i < asm_argcv.ha_argc; ++i)
-		sprintf(str_cmd+strlen(str_cmd), " %s", asm_argcv.ha_argv[i]);
+	for (int j = 0; j < asm_argcv.ha_argc; ++j)
+		sprintf(str_cmd+strlen(str_cmd), " %s", asm_argcv.ha_argv[j]);
 	
 	// get local time
 	time_t rawtime;
     struct tm * timeinfo;
     time (&rawtime);
     timeinfo = localtime (&rawtime);
-	sprintf(str_cmd+strlen(str_cmd), "\nBin file was created by %s", asctime(timeinfo));  // note: asctime(timeinfo) has a newline. 
+	sprintf(str_cmd+strlen(str_cmd), "\nBin file was created on %s", asctime(timeinfo));  // note: asctime(timeinfo) has a newline. 
 
 	// also include the previous git commit id
 	sprintf(str_cmd+strlen(str_cmd), "Previous git commit hash is: %s .\n", GIT_COMMIT);
@@ -202,6 +205,7 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	// hamt special
 	fwrite(r->mean, sizeof(double), r->total_reads, fp);
 	fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
+	fwrite(r->lowq, sizeof(uint16_t), r->total_reads, fp);
 	fwrite(r->std, sizeof(double), r->total_reads, fp);
 	fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
 	fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
@@ -357,11 +361,13 @@ int load_All_reads(All_reads* r, char* read_file_name)
 		r->mean = (double*)malloc(r->total_reads*sizeof(double));
 		r->std = (double*)malloc(r->total_reads*sizeof(double));
 		r->median = (uint16_t*)malloc(r->total_reads*sizeof(uint16_t));
+		r->lowq = (uint16_t*)malloc(r->total_reads*sizeof(uint16_t));
 		r->mask_readnorm = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
 		r->mask_readtype = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
 		
 		f_flag_hamt += fread(r->mean, sizeof(double), r->total_reads, fp_hamt);
 		f_flag_hamt += fread(r->median, sizeof(uint16_t), r->total_reads, fp_hamt);
+		f_flag_hamt += fread(r->lowq, sizeof(uint16_t), r->total_reads, fp_hamt);
 		f_flag_hamt += fread(r->std, sizeof(double), r->total_reads, fp_hamt);
 		f_flag_hamt += fread(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp_hamt);
 		f_flag_hamt += fread(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp_hamt);
@@ -379,12 +385,14 @@ int load_All_reads(All_reads* r, char* read_file_name)
 			r->mean = (double*)malloc(r->index_size*sizeof(double));
 			r->std = (double*)malloc(r->index_size*sizeof(double));
 			r->median = (uint16_t*)malloc(r->index_size*sizeof(uint16_t));
+			r->lowq = (uint16_t*)malloc(r->index_size*sizeof(uint16_t));
 			r->mask_readnorm = (uint8_t*)malloc(r->index_size * sizeof(uint8_t));
 			r->mask_readtype = (uint8_t*)malloc(r->index_size * sizeof(uint8_t));
 
 			memset(r->mean, 40.0, r->index_size*sizeof(double));  // just in case graph cleaning uses kmer freq info.
 			memset(r->std, 0, r->index_size*sizeof(double));
 			memset(r->median, 40, r->index_size*sizeof(uint16_t));
+			memset(r->lowq, 40, r->index_size*sizeof(uint16_t));
 			memset(r->mask_readnorm, 0, r->index_size*sizeof(uint8_t));
 			memset(r->mask_readtype, 0, r->index_size*sizeof(uint8_t));
 
@@ -445,6 +453,8 @@ void ha_insert_read_len(All_reads *r, int read_len, int name_len)
 			r->mean = (double*)realloc(r->mean, sizeof(double) * r->hamt_stat_buf_size);
 		if (r->median)
 			r->median = (uint16_t*)realloc(r->median, sizeof(uint16_t) * r->hamt_stat_buf_size);
+		if (r->lowq)
+			r->lowq = (uint16_t*)realloc(r->lowq, sizeof(uint16_t) * r->hamt_stat_buf_size);
 		if (r->std)
 			r->std = (double*)realloc(r->std, sizeof(double) * r->hamt_stat_buf_size);
 		if (r->mask_readnorm)

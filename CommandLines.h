@@ -90,8 +90,16 @@ typedef struct {
     int is_disable_diginorm;
     char *bin_base_name;
     int is_preovec_readselection;  // experimental, disable diginorm (but still collects everything) and do minimum read selection before ovec
+    int is_ignore_ovlp_cnt;  // experimental, do preovec read selection even if the whole read set looks practical
     int diginorm_coverage;
     int preovec_coverage;
+    int is_dump_read_selection;
+    int is_use_exp_graph_cleaning;
+
+    int lowq_thre_10;
+    int lowq_thre_5;
+    int lowq_thre_3;
+
     // end of hamt
     
 } hifiasm_opt_t;

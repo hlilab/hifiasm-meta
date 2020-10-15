@@ -135,6 +135,11 @@ typedef struct {
 
 	uint32_t n_F_seq;
 	ma_utg_t* F_seq;
+
+	//hamt
+	uint8_t *whitelist, *blacklist;  // blacklist for nodes with 2 directions available (we want to avoid messing up the graph's traversal direction)
+	uint32_t *v2vu;
+	uint32_t usg_n_seq;
 } asg_t;
 
 asg_t *asg_init(void);
@@ -154,8 +159,9 @@ typedef struct { size_t n, m; uint32_t *a; } asg32_v;
 typedef struct { size_t n, m; ma_utg_t *a; } ma_utg_v;
 
 typedef struct {
-	ma_utg_v u;
+	ma_utg_v u;  // an array of ma_utg_t (each one is a unitig)
 	asg_t *g;
+	int *dir;  // hamt
 } ma_ug_t;
 
 typedef struct {
@@ -1069,5 +1075,21 @@ int unitig_arc_del_short_diploid_by_length(asg_t *g, float drop_ratio);
 
 #define JUNK_COV 5
 #define DISCARD_RATE 0.8
+
+
+//////////// needed by Overlaps_hamt.cpp //////////////
+
+int asg_cut_tip(asg_t *g, int max_ext);
+void output_read_graph(asg_t *sg, ma_sub_t* coverage_cut, char* output_file_name, long long n_read);
+void output_unitig_graph(asg_t *sg, ma_sub_t* coverage_cut, char* output_file_name, 
+						 ma_hit_t_alloc* sources, R_to_U* ruIndex, int max_hang, int min_ovlp);
+int asg_arc_del_single_node_directly(asg_t *g, long long longLen_thres, ma_hit_t_alloc* sources);
+
+void ma_ug_destroy(ma_ug_t *ug);
+ma_ug_t *ma_ug_gen(asg_t *g);
+uint32_t get_ug_coverage(ma_utg_t* u, asg_t* read_g, const ma_sub_t* coverage_cut, 
+						 ma_hit_t_alloc* sources, R_to_U* ruIndex, uint8_t* r_flag);
+int get_arc(asg_t *g, uint32_t src, uint32_t dest, asg_arc_t* result);
+///////////////////////////////////////////////////////
 
 #endif

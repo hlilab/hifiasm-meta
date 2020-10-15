@@ -12,6 +12,7 @@
 #include <assert.h>
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
+#include "Overlaps_hamt.h"
 
 // (hifiasm: filter short potential unitigs)
 #define ASG_ET_MERGEABLE 0
@@ -211,8 +212,6 @@ uint64_t *asg_arc_index_core(size_t max_seq, size_t n, const asg_arc_t *a)
 	for (i = 1, last = 0; i <= n; ++i)
 		if (i == n || a[i-1].ul>>32 != a[i].ul>>32)
 			idx[a[i-1].ul>>32] = (uint64_t)last<<32 | (i - last), last = i;
-
-    
 	return idx;
 }
 
@@ -4426,8 +4425,6 @@ int asg_arc_del_trans(asg_t *g, int fuzz)
     double startTime = Get_T();
 
 	uint8_t *mark;
-	///n_vtx = number of seq * 2
-	///the reason is that each read has two direction (query->target, target->query)
 	uint32_t v, n_vtx = g->n_seq * 2, n_reduced = 0;
 	///at first, all nodes should be set to vacant
 	mark = (uint8_t*)calloc(n_vtx, 1);
@@ -4437,21 +4434,16 @@ int asg_arc_del_trans(asg_t *g, int fuzz)
      * and the lowest 1-bit is the direction
      * (0 means query-to-target, 1 means target-to-query)**/
 	for (v = 0; v < n_vtx; ++v) {
-		///nv is the number of overlaps with v(qn+direction)
 		uint32_t L, i, nv = asg_arc_n(g, v);
-		///av is the array of v
 		asg_arc_t *av = asg_arc_a(g, v);
-        ///that means in this direction, read v is not overlapped with any other reads
-		if (nv == 0) continue; // no hits
-		
-        ///if the read itself has been removed
+
+        // current node is removed, or the vertex has no target
+		if (nv == 0) continue;
 		if (g->seq[v>>1].del) 
         {
 			for (i = 0; i < nv; ++i) av[i].del = 1, ++n_reduced;
 			continue;
 		}
-
-
 
         /**
 	********************************query-to-target overlap****************************
@@ -8260,8 +8252,7 @@ ma_ug_t *ma_ug_gen(asg_t *g)
     asg_cleanup(g);
 	int32_t *mark;
 	uint32_t i, v, n_vtx = g->n_seq * 2;
-	///is a queue
-	kdq_t(uint64_t) *q;
+	kdq_t(uint64_t) *q;  // queue
 	ma_ug_t *ug;
 
 	ug = (ma_ug_t*)calloc(1, sizeof(ma_ug_t));
@@ -26759,464 +26750,6 @@ int max_hang, int min_ovlp)
 }
 
 
-///////////////////////////// hamt stuff ///////////////////////////
-static inline int hamt_asgutil_count_remaining_pres(const asg_t *sg, uint32_t v){
-    // practically asg_is_single_edge, whose name i think is confusing??
-    // for all pres, just use asg_arc_n
-    //?????? should i consider sg->seq[v].c as well?
-    int cnt = 0;
-    asg_arc_t *av = asg_arc_a(sg, v^1);
-    uint32_t nv = asg_arc_n(sg, v^1);
-    for (uint32_t i=0; i<nv; i++){
-        if (!av[i].del) cnt++;
-    }
-    return cnt;
-}
-static inline int hamt_asgutil_count_remaining_sufs(const asg_t *sg, uint32_t v){
-    int cnt = 0;
-    asg_arc_t *av = asg_arc_a(sg, v);
-    uint32_t nv = asg_arc_n(sg, v);
-    for (uint32_t i=0; i<nv; i++){
-        if (!av[i].del) cnt++;
-    }
-    return cnt;
-}
-
-int hamt_asgutil_detect_strict_single_long_path(asg_t *sg, uint32_t begNode, uint32_t *endNode, 
-                                                int threshold_nodes, uint64_t threshold_length){
-    // simpler & more aggressive version of detect_single_path* functions.
-    // - exclude any deleted seq or arc
-    // - does not store any path info, only report its type
-    // (set a threshold to zero will disable it)
-    // returns: 0 is nope, 1 is yes, -1 is error
-    if (threshold_nodes==0 && threshold_length==0 && ((!endNode) || ((*endNode)>>1 == begNode>>1))){
-        fprintf(stderr, "[W::%s] no threshold/destination set.\n", __func__);
-        return -1;
-    }
-    uint32_t v = begNode, nv;
-    asg_arc_t *av;
-    int cnt = 0;  // nodes visited
-    uint64_t acc = 0;  // length of seqs visited
-    uint32_t i;
-    while (1){
-        if (cnt>threshold_nodes || acc>threshold_length) break;
-        if (endNode && (v>>1 == (*endNode)>>1)) break;
-        nv = hamt_asgutil_count_remaining_sufs(sg, v);
-        if (nv>1) return 0;  // bifur
-        if (nv==0) return 0;  // short tip, early termination of traversal
-        nv = asg_arc_n(sg, v);
-        av = asg_arc_a(sg, v);
-        if ((v>>1)==(av[0].v>>1)) return 0;  // circle
-
-        cnt++;
-        // acc += (uint32_t)sg->arc[v].ul;
-        // acc += (uint32_t) sg->idx[]
-
-        for (i=0; i<nv; i++)
-            if (!av[i].del) 
-                {v = av[0].v; 
-                acc += (uint32_t) av[0].ul;
-                break;}
-        if (hamt_asgutil_count_remaining_sufs(sg, v^1)!=1) return 0;  // backward bifur 
-    }
-    return 1;
-}
-
-
-int hamt_asgutil_detect_dangling_circle(const asg_t *g, uint32_t v0, uint32_t w, uint8_t *buf_traversal){
-    // (defaulted to ignore any arc/vertex that has been deleted)
-    // detect if the given vertex is the start of a circle (search in one direction), even a very large one (*i dont want to abuse detect_single_path so here it is)
-    // REQUIRE that w is not in the circle, reagardless of direction
-    // probably expensive; only intend to be used with circle-aware coverage-based arc drop
-    
-    // return 0 if no, otherwise 1. Won't give the size of that circle, nor structure info.
-
-    // ~~~~~ debug ~~~
-    char str_buf[100];
-    uint64_t str_len;
-    //~~~~~~~~~~~~~~
-
-    uint32_t v = v0, nv;
-    asg_arc_t *av;
-
-    // asg32_v queue = {0, 0, 0};
-    // kv_push(uint32_t, queue, v0);
-    kdq_t(uint32_t) *queue = kdq_init(uint32_t);
-    queue->count = 0;
-    kdq_push(uint32_t, queue, v0);
-    int early_termination = 0;
-
-    // while (queue.n>0){
-    while (kdq_size(queue) != 0){
-        // fprintf(stdout, "queue: %d, ", (int)kdq_size(queue));fflush(stdout);
-        v = *kdq_pop(uint32_t, queue);// v = kv_pop(queue);
-        buf_traversal[v] = 1;  // need this because we don't know if there's circles in side of circles, i think
-        av = asg_arc_a(g, v);
-        nv = asg_arc_n(g, v);
-
-        str_len = R_INF.name_index[(v>>1)+1]-R_INF.name_index[v>>1]; 
-        memcpy(str_buf, R_INF.name+R_INF.name_index[v>>1], str_len);
-        str_buf[str_len] = '\0';
-        // fprintf(stdout, "at %s\n", str_buf);
-
-        for (int i=0; i<(int)nv ;i++){
-            str_len = R_INF.name_index[(av[i].v>>1)+1]-R_INF.name_index[av[i].v>>1]; 
-            memcpy(str_buf, R_INF.name+R_INF.name_index[av[i].v>>1], str_len);
-            str_buf[str_len] = '\0';
-
-            if (av[i].del || g->seq[av[i].v>>1].del) {
-                continue;
-            }
-            if (av[i].v>>1 == w>>1) {
-                // w must not be in the loop
-                // NOTE do not break or return 0 here! that's wrong.
-                continue;
-            }
-            if (av[i].v == v0){  // NOTICE: requires that it's the same direction
-                // fprintf(stdout, "  -> %s, HIT\n", str_buf);
-                // free(queue.a);
-                kdq_destroy(uint32_t, queue);
-                return 1;
-            } else{
-                if (buf_traversal[av[i].v]==0){
-                    // fprintf(stdout, "  -> %s, push\n", str_buf);
-                }
-            }
-            kdq_push(uint32_t, queue, av[i].v);// kv_push(uint32_t, queue, av[i].v);
-        }
-        // early_termination++;
-        // if (early_termination>10000){
-        //     fprintf(stdout, "  -> took too long, terminate.\n");
-        //     break;
-        // }
-        fflush(stdout);
-    }
-    fflush(stdout);
-    // free(queue.a);
-    kdq_destroy(uint32_t, queue);
-    return 0;
-    
-}
-
-// // dangerous
-// void hamt_asg_arc_del_by_read_cov_diff(asg_t *sg, All_reads *rs, int diff_abs, double diff_ratio, int is_final){
-//     // drop an arc if it's
-//     //    1) not a single edge
-//     //    2) vertices belong to reads of different coverage (measured by median kmer frequency)
-//     double startTime = Get_T();
-//     int cnt = 0;
-//     uint32_t n_vtx = sg->n_seq*2, v, w;
-//     uint32_t nv;
-//     asg_arc_t *av;
-//     uint16_t median_v, median_w, min, abs; double ratio;
-//     for (v=0; v<n_vtx; v++){
-//         if (sg->seq[v>>1].del || sg->seq[v>>1].c == ALTER_LABLE) continue;  // seq deleted
-//         if (asg_is_utg_end(sg, v, 0) == ASG_ET_TIP) continue;  // is a tip
-//         nv = asg_arc_n(sg, v);
-//         if(nv<2) continue; // not a bifurcation point
-//         if (hamt_asgutil_count_remaining_sufs(sg, v)<2) continue;  // not a bifur point after dropping
-//         av = asg_arc_a(sg, v);
-//         for (uint32_t i=0; i<nv; i++){
-//             if (av[i].del) continue;
-//             w = av[i].v;
-
-//             // want to avoid cutting the arc if child node leads to a long nice 
-//             uint32_t code = hamt_asgutil_detect_strict_single_long_path(sg, w, NULL, 3, 50000);  // no bifurcation whatsoever within 3 nodes or 50kb
-//             if (code>0) continue;
-//             if (!is_final){
-//                 // a more relaxed criteria: if the current arc is single, don't drop (regardless of its downstream)
-//                 if (hamt_asgutil_count_remaining_sufs(sg, w^1)==1) continue;
-//             }
-//             // if we reach here, check depth of reads and see if we want to drop the arc
-//             // median_v = rs->median[v>>1];
-//             // median_w = rs->median[w>>1];
-//             // TEMPORARY!! 
-//             median_v = (uint16_t) rs->mean[v>>1];
-//             median_w = (uint16_t) rs->mean[w>>1];
-//             if (median_v>median_w){
-//                 min = median_w;
-//                 abs = median_v-median_w;
-//                 ratio = (double)median_v/median_w;
-//             } else {
-//                 min = median_v;
-//                 abs = median_w-median_v;
-//                 ratio = (double)median_w/median_v;
-//             }
-//             if ((diff_abs!=0 && abs>diff_abs) || (min>=5 && diff_ratio!=0 && ratio>diff_ratio)){
-//                 // drop the arc (min>=5 for protecting low cov)
-//                 av[i].del = 1;
-//                 cnt++;
-//             }
-//         }
-//     }
-//     if (cnt>0) {
-// 		asg_cleanup(sg);
-// 		asg_symm(sg);
-// 	}
-//     if(VERBOSE >= 1){
-//         fprintf(stderr, "[M::%s] cut %d non-single arcs between reads of different coverage (is_final: %d).\n", __func__, cnt, is_final);
-//         fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-//     }
-// }
-
-static inline int hamt_asgarc_util_countPre(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc){
-    // count the predecessors of vertex v (i.e. the targets of v^1)
-    if (include_del_seq && include_del_seq){
-        return asg_arc_n(g, v^1);
-    }
-    if (!include_del_seq && g->seq[v>>1].del){
-        return 0;
-    }
-    uint32_t nv, nv0 = asg_arc_n(g, v^1);
-    asg_arc_t *av = asg_arc_a(g, v^1);
-    int i;
-    for (i = nv = 0; i<(int)nv0; i++){
-        if (!include_del_arc && av[i].del) {continue;}
-        if (!include_del_seq && g->seq[av[i].v>>1].del) {continue;}
-        nv++;
-    }
-    return nv++;
-}
-static inline int hamt_asgarc_util_countSuc(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc){
-    // count the targets of vertex v
-    if (include_del_seq && include_del_seq){
-        return asg_arc_n(g, v);
-    }
-    if (!include_del_seq && g->seq[v>>1].del){
-        return 0;
-    }
-    uint32_t nv, nv0 = asg_arc_n(g, v);
-    asg_arc_t *av = asg_arc_a(g, v);
-    int i;
-    for (i = nv = 0; i<(int)nv0; i++){
-        if (!include_del_arc && av[i].del) {continue;}
-        if (!include_del_seq && g->seq[av[i].v>>1].del) {continue;}
-        nv++;
-    }
-    return nv++;
-}
-
-int hamt_asgarc_util_get_the_one_target(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc){
-    // v as exactly one target (sucessor), given the `include_del_seq` and `include_del_arc` (NOT tested in this function)
-    // get that vertex's index in av (NOT vertex ID)
-    int nv = asg_arc_n(g, v);
-    if (nv==1) {
-        return 0;
-    }
-    asg_arc_t *av = asg_arc_a(g, v);
-    int i;
-    for (i=0; i<(int)nv; i++){
-        if (!include_del_arc && av[i].del) {continue;}
-        if (!include_del_seq && g->seq[av[i].v>>1].del) {continue;}
-        return i;
-    }
-    fprintf(stderr, "[E::%s] unexpected.\n", __func__); exit(1);
-}
-
-int hamt_asgarc_util_countSinglePath(asg_t *g, uint32_t v0, int include_del_seq, int include_del_arc, 
-                                     int max_arcs, int max_length, asg64_v *a, int *traversal_dist){
-    // count length of single path; 
-    // return 1 if encounters non-single edge within the given threshold
-    // return 0 if longer than the given threshold
-    // return -1 if loop
-    // return -2 if meets end of the unitig
-    //     for status code, use ha's *detect_single_path* functions.
-    // (traverse in the direction of v. Feed with v^1 if looking for the opposite direction.)
-    assert( !((max_arcs>0) && (max_length>0)) ); // not both
-    assert( ((max_arcs>0) || (max_length>0)) ); // at least one
-    int dist = 0, nb_fwd, nb_bwd;
-    uint32_t v, w;
-    int wid;
-    asg_arc_t *av;
-    v = v0;
-    *traversal_dist = 0;  // init
-
-    while (1){
-        nb_fwd = hamt_asgarc_util_countSuc(g, v, include_del_seq, include_del_arc);
-        if (nb_fwd==0) {return -2;}  // reaches the end of this tip
-        if (nb_fwd>1) {break;}  // the end, or more than 1 targets
-        wid = hamt_asgarc_util_get_the_one_target(g, v, include_del_seq, include_del_arc);
-        av = asg_arc_a(g, v);
-        w = av[wid].v;
-        if (w>>1 == v0>>1){
-            return -1;  // loop
-        }
-
-        nb_bwd =  hamt_asgarc_util_countPre(g, w, include_del_seq, include_del_arc);
-        assert(nb_bwd!=0);
-        if (nb_bwd>1) {break;}  // w has more than 1 predecessor
-
-        v = w;
-        if (max_arcs>0) {
-            *traversal_dist = *traversal_dist +1;
-            if (*traversal_dist>max_arcs) {return 0;}
-        }else {
-            *traversal_dist += (int) ((uint32_t)av[wid].ul);
-            if (*traversal_dist>max_length) {return 0;}
-        }
-
-        if (a){
-            kv_push(uint64_t, *a, (uint64_t)w);
-        }
-    }
-    return 1;  // encountered non-single edge
-
-}
-
-int hamt_asgutil_calc_singlepath_cov(asg_t *g, uint32_t v){
-    // given v, find the kmer-based coverage of the longest single path
-    // IN THE REVERSE DIRECTION 
-    // (intend to be sused with hamt_asgutil_detect_dangling_circle)
-
-    uint32_t w = v^1;
-    int wid;
-    int cov = 0, n=0;
-    while (1){
-        // log the current vertex
-        n++;
-        cov += R_INF.median[w>>1];
-
-        // step to the next one
-        if (hamt_asgarc_util_countSuc(g, w, 0, 0)!=1){
-            break;
-        }
-        wid = hamt_asgarc_util_get_the_one_target(g, w, 0, 0);
-        w = asg_arc_a(g, w)[wid].v;
-        if (hamt_asgarc_util_countPre(g, w, 0, 0)!=1){
-            break;
-        }
-    }
-    cov = (int) (((float)cov/n) +0.499);
-    return cov;
-}
-
-void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int max_arcs, int max_length){
-    // rationale: tips could hinder simple bubble detection, and hamt doesn't need to be too careful with both of them (i think) (Sep 17)  
-    double startTime = Get_T();
-    uint32_t n_vtx = g->n_seq*2, v;
-    uint32_t n_del;
-    int pre, suc, l, ret;
-
-    asg64_v a = {0,0,0};
-
-    while (1){
-        n_del = 0;
-        // drop short tips
-        for (v=0; v<n_vtx; v++){
-            if (g->seq[v>>1].del) {continue;}
-            pre = hamt_asgarc_util_countPre(g, v, 0, 0);
-            suc = hamt_asgarc_util_countSuc(g, v, 0, 0);
-            if (pre==0 && suc==1){  // tip of the other way around will be address later (or is already addressed) since we are iterating all vertices
-                // traverse and see if single path down the way is short enough
-                ret = hamt_asgarc_util_countSinglePath(g, v, 0, 0, max_arcs, max_length, &a, &l);
-                if (ret>=0){  // not a very long tip, also not a loop, within the search range
-                    // remove the whole tig
-                    g->seq[v>>1].del = 1;
-                    for (int i=0; i<(int)a.n; i++){
-                        g->seq[(uint32_t)a.a[i]>>1].del = 1;
-                    }
-                    n_del+=1;
-                }
-            }
-        }
-        if (n_del>0){
-            asg_cleanup(g);
-            asg_symm(g);
-        }
-
-        // drop simple circles
-        n_del += asg_arc_del_simple_circle_untig(NULL, NULL, g, 100, 0);
-
-        // pop bubbles
-        // (comment in ha was "remove isoloated single read")
-        n_del += asg_arc_del_single_node_directly(g, asm_opt.max_short_tip, sources);  // includes graph cleanups
-
-        // check
-        if (n_del==0)
-            {break;}
-        else{
-            if (VERBOSE>=1){
-                fprintf(stderr, "[M::%s] removed %d locations\n", __func__, n_del);
-                fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-            }
-        }
-    }
-    free(a.a);
-
-}
-
-void hamt_asg_arc_del_by_readcov_circle_aware(asg_t *g){
-    // drop an arc if 
-    //    - the vertex in focus is not in a bubble
-    //    - the vertex in focus is low coverage, 
-    //    - the node only has only one arc in this direction
-    //    - target and its targets on one side are ok/high coverage ones, AND they form a loop that does not involve the current read
-    double startTime = Get_T();
-    fprintf(stdout, "entering %s\n", __func__); fflush(stdout);
-    int cnt = 0;
-    uint32_t n_vtx = g->n_seq*2, v, w, nv, v0;
-    int cov, cov2;
-    asg_arc_t *av;
-    uint8_t *buf_traversal = (uint8_t*)calloc(n_vtx, sizeof(uint8_t));
-    char str_buf[500]; uint64_t str_len; // debug
-    for (v=0; v<n_vtx; v++){       
-        str_len = R_INF.name_index[(v>>1)+1]-R_INF.name_index[v>>1]; 
-        memcpy(str_buf, R_INF.name+R_INF.name_index[v>>1], str_len);
-        str_buf[str_len] = '\0';
-        // if (strcmp("m54337_181215_161949/63897767/ccs/worker3_136534", str_buf)!=0){continue;}
-
-        if (hamt_asgarc_util_countSuc(g, v, 0, 0)!=1) {  // only check in the current direction; the other direction will be address since we iterate through all the vertices
-            continue;
-        }
-
-        // get the "unitig" (the long single path in reversed direction)
-        cov = hamt_asgutil_calc_singlepath_cov(g, v);
-        fprintf(stdout, "m\t%s\t%d\n", str_buf, cov);
-        // if (cov>30){
-        //     fprintf(stdout, "median, %s\t%d\n", str_buf, cov);
-        //     continue;
-        // }
-
-        fprintf(stdout, ">%s\n", str_buf);
-
-        // (^~~~ maybe we can be more permissive, e.g. ignore if there's long tips connected to this vertex)
-        v0 = asg_arc_a(g, v)[hamt_asgarc_util_get_the_one_target(g, v, 0, 0)].v;  // the single sucessor node
-        if (hamt_asgarc_util_countPre(g, v0, 0, 0)<=1) {  // can't possibly be a circle
-            fprintf(stdout, "=%s\tskip.defiNotCircle\n", str_buf); fflush(stdout);
-            continue;
-        }
-        
-        // if (R_INF.median[v0>>1] < (R_INF.median[v>>1]+1)*3) {  // require coverage difference
-        cov2 = hamt_asgutil_calc_singlepath_cov(g, v0);
-        if (cov*3 > cov2 || cov>50) {
-            fprintf(stdout, "nodiff, %s\t%d\t%d\n", str_buf, cov, hamt_asgutil_calc_singlepath_cov(g, v0));
-        }  
-        memset(buf_traversal, 0, n_vtx*sizeof(uint8_t));
-        if (hamt_asgutil_detect_dangling_circle(g, v0, v, buf_traversal)){ // check if it's in a (large) circle (allow any bubble/tangle/bifurcation/tip along the way)
-            av = asg_arc_a(g, v);
-            for (int i=0; i<(int)asg_arc_n(g, v); i++){  // (actually there's only 1 remaining arc but its index is not readily available, so.)
-                av[i].del = 1;
-                cnt++;
-            }
-            fprintf(stdout, "=%s\tYES\n", str_buf);fflush(stdout);
-        }else{
-            fprintf(stdout, "=%s\tnotcirc\n", str_buf);fflush(stdout);
-        }
-    }
-
-    if (cnt>0) {
-		asg_cleanup(g);
-		asg_symm(g);
-	}
-    if (VERBOSE>=1){
-        fprintf(stderr, "[M::%s] removed %d arcs\n", __func__, cnt);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
-    free(buf_traversal);
-
-}
-
-
 void hamt_clean_graph(int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
                         long long n_read, uint64_t* readLen, long long mini_overlap_length, 
                         long long max_hang_length, long long clean_round, long long gap_fuzz,
@@ -27303,9 +26836,6 @@ void hamt_clean_graph(int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* rever
     // ~~~~~~~~~~~~~~~~~~~~ clean up ~~~~~~~~~~~~~~~~~~~~ // 
 }
 
-////////////////////// end of hamt stuff //////////////////////
-
-
 
 void clean_graph(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
@@ -27326,7 +26856,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     ///it's hard to say which function is better       
     ///normalize_ma_hit_t_single_side(sources, n_read);
-    normalize_ma_hit_t_single_side_advance(sources, n_read);
+    normalize_ma_hit_t_single_side_advance(sources, n_read);  // ?????? this is pretty slow
     normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
     
 
@@ -27352,7 +26882,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     ///fix_binned_reads(sources, n_read, coverage_cut);
     ///just need to deal with trio here
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
 
@@ -27497,8 +27027,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
 
-    // hamt_asg_arc_del_by_read_cov_diff(sg, &R_INF, 20, (double)3.0, 1);  // NOTE THIS IS DANGEROUS
-    hamt_asg_arc_del_by_readcov_circle_aware(sg);
 
     if (asm_opt.flag & HA_F_VERBOSE_GFA)
     {
@@ -27544,6 +27072,27 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     else
     {
 
+        if (asm_opt.is_use_exp_graph_cleaning){
+        // hamt_asg_arc_del_by_readcov_circle_aware(sg);  // unusable, slow, need rewrite to strongly connected components.
+
+        if(VERBOSE >= 1)  // debug
+        {
+            char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+            sprintf(unlean_name, "%s.beforeG", output_file_name);
+            output_read_graph(sg, coverage_cut, unlean_name, n_read);
+            output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+            free(unlean_name);
+        }
+
+        // hamt_asgarc_SCCcovCut(sg);
+        // hamt_utg_SCCcovCut(sg, coverage_cut, sources, ruIndex);
+        // hamt_usg_SCCcovCut(sg, coverage_cut, sources, ruIndex);
+        hamt_ugarc_covcut_danglingCircle(sg, coverage_cut, sources, ruIndex);
+    }
+
+
+
+
         output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
 
         if(VERBOSE >= 1)
@@ -27567,45 +27116,45 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
 
 ///////////////////////////////////// hamt debug etc //////////////////////////////////
-void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
-    fprintf(stderr, "Writing debug asg to disk... \n");
-    double startTime = Get_T();
-    char* index_name = (char*)malloc(strlen(read_file_name)+15);
-    sprintf(index_name, "%s.dbg_asg", read_file_name);
-    FILE* fp = fopen(index_name, "w");
+// void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
+//     fprintf(stderr, "Writing debug asg to disk... \n");
+//     double startTime = Get_T();
+//     char* index_name = (char*)malloc(strlen(read_file_name)+15);
+//     sprintf(index_name, "%s.dbg_asg", read_file_name);
+//     FILE* fp = fopen(index_name, "w");
 
-    asg64_v a = {0,0,0};
-	uint32_t n_vtx = sg->n_seq * 2, v, i;
+//     // asg64_v a = {0,0,0};
+// 	uint32_t n_vtx = sg->n_seq * 2, v, i;
     
-    uint32_t nv;
-    asg_arc_t* av;
+//     uint32_t nv;
+//     asg_arc_t* av;
 
-    // basic info of seqs
-    for (i=0; i<rs->total_reads; i++){
-        if (sg->seq[i].del) continue;
-        fprintf(fp, "s\t%" PRIu32 "\t%f\t%" PRIu16 "\t%f\t%" PRIu8 "\t%" PRIu8 "\n",
-                           i, rs->mean[i], rs->median[i], rs->std[i], rs->mask_readtype[i], rs->mask_readnorm[i]);
-    }
+//     // basic info of seqs
+//     for (i=0; i<rs->total_reads; i++){
+//         if (sg->seq[i].del) continue;
+//         fprintf(fp, "s\t%" PRIu32 "\t%f\t%" PRIu16 "\t%f\t%" PRIu8 "\t%" PRIu8 "\n",
+//                            i, rs->mean[i], rs->median[i], rs->std[i], rs->mask_readtype[i], rs->mask_readnorm[i]);
+//     }
     
-    // the graph
-	for (v = 0; v < n_vtx; ++v) {
-        if (sg->seq[v>>1].del) continue;
-        nv = asg_arc_n(sg, v);
-	    av = asg_arc_a(sg, v);
-        if (nv==0) continue;
-        for (i=0; i<nv; i++){
-            if (av[i].del) continue;
-            if (sg->seq[av[i].v>>1].del) continue;
-            fprintf(fp, "l\t%" PRIu32 "\t%d\t%" PRIu32 "\t%d\t", v>>1, v&1, av[i].v>>1, av[i].v&1);  // vid, v_strand, wid, w_strand
-            fprintf(fp, "%" PRIu8 "\n", sg->seq_vis[i]);
-        }
-    }
+//     // the graph
+// 	for (v = 0; v < n_vtx; ++v) {
+//         if (sg->seq[v>>1].del) continue;
+//         nv = asg_arc_n(sg, v);
+// 	    av = asg_arc_a(sg, v);
+//         if (nv==0) continue;
+//         for (i=0; i<nv; i++){
+//             if (av[i].del) continue;
+//             if (sg->seq[av[i].v>>1].del) continue;
+//             fprintf(fp, "l\t%" PRIu32 "\t%d\t%" PRIu32 "\t%d\t", v>>1, v&1, av[i].v>>1, av[i].v&1);  // vid, v_strand, wid, w_strand
+//             fprintf(fp, "%" PRIu8 "\n", sg->seq_vis[i]);
+//         }
+//     }
 
-    fflush(fp);
-    fclose(fp);
-    fprintf(stderr, "[M::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
-    free(index_name);
-}
+//     fflush(fp);
+//     fclose(fp);
+//     fprintf(stderr, "[M::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
+//     free(index_name);
+// }
 /////////////////////////////end of hamt debug etc/////////////////////////////////////////
 
 void build_string_graph_without_clean(

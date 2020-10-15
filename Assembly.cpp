@@ -14,8 +14,9 @@
 #include "ksort.h"
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
+#include "meta_util_debug.h"
 
-void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs);
+void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs, int sort_mode);
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain);
 void ha_sort_list_by_anchor(overlap_region_alloc *overlap_list);
 
@@ -545,7 +546,18 @@ static void worker_read_selection_by_est_ov(void *data, long i, int tid){
     UC_Read ucr;
     init_UC_Read(&ucr);
     recover_UC_Read(&ucr, &R_INF, i);
-    hamt_count_new_candidates(i, &ucr, &R_INF);
+    hamt_count_new_candidates(i, &ucr, &R_INF, 0);
+    destory_UC_Read(&ucr);
+}
+
+static void worker_read_selection_by_est_ov_v2(void *data, long i, int tid){
+    // (only guess the total number of disered reads, dont actually do any read selection)
+    // collect the number of overlap targets for each read but don't do any alignment
+    // we want to limit ovec to an affordable volume, AND want to drop as less reads as possible
+    UC_Read ucr;
+    init_UC_Read(&ucr);
+    recover_UC_Read(&ucr, &R_INF, i);
+    hamt_count_new_candidates(i, &ucr, &R_INF, 0);  // stored in rs->nb_target_reads[rid], packed as: upper 32 is nb_candidates, lower 32 is rid
     destory_UC_Read(&ucr);
 }
 
@@ -592,7 +604,7 @@ static void worker_ovec(void *data, long i, int tid)
 static void worker_ovec_related_reads(void *data, long i, int tid)
 {
 	if (R_INF.mask_readnorm[i] & 1){
-        fprintf(stderr, "hamtDebug: this read is dropped.\n");
+        // fprintf(stderr, "hamtDebug: this read is dropped.\n");
         return;
     }
     ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
@@ -637,6 +649,10 @@ typedef struct {
 
 static void worker_ec_save(void *data, long i, int tid)
 {
+    /////////// meta ///////////////
+    if (R_INF.mask_readnorm[i] & 1) return;
+    // (this relies on malloc_all_reads to ensure every location is accessible. I think there's no malloc happening in worker_ovec.)
+    ////////////////////////////////
 	ha_ecsave_buf_t *e = (ha_ecsave_buf_t*)data + tid;
 
 	Cigar_record cigar;
@@ -723,61 +739,70 @@ void Output_corrected_reads()
     fclose(output_file);
 }
 
+// TODO debug bit flag
 // #define HAMT_DISCARD 0x1
 // #define HAMT_VIA_MEDIAN 0x2
 // #define HAMT_VIA_LONGLOW 0x4
 // #define HAMT_VIA_KMER 0x8
-#define HAMT_VIA_PREOVEC 0x80
-void hamt_pre_ovec(int threshold){
+// #define HAMT_VIA_PREOVEC 0x80
+void hamt_pre_ovec_v2(int threshold){
+	// read selection considering:
+	//    - estimate how many reads we might want to drop (could well be zero) (dont use guessed number of target counts!)
+	//    - if dropping any, then
+	//        - sort reads based on median + lowq (aka lower quantile value)
+	//        - set all reads to 'drop'
+	//        - 1st pass: keep all reads with rare kmers (based on lower quantile value), update a hashtable accordingly
+	//        - 2nd pass: recruite reads until we don't want more of them
+
     // TEMPORARY: erase diginorm-based selection
     double startTime = Get_T();
-    fprintf(stderr, "WARNING: experimental tmp treatment, erasing diginorm makrs.\n");
-    memset(R_INF.mask_readnorm, 0, R_INF.total_reads);
+    fprintf(stderr, "[M::%s] enter pre ovec read selection.\n", __func__);
+    fprintf(stderr, "WARNING: experimental tmp treatment, overriding diginorm marks (if any).\n");
 
     int hom_cov, het_cov;
     ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, 1, &R_INF, &hom_cov, &het_cov);
 
     R_INF.nb_target_reads = (uint64_t*)calloc(R_INF.total_reads, sizeof(uint64_t));
-    int cutoff = R_INF.total_reads/2;
-    int rounds = 0;
-    int cursor = R_INF.total_reads-1;  // for dropping reads
+    int cutoff = (int) ((float)R_INF.total_reads*2/3 +0.499);  // heuristic: need less than 2/3 reads to have at most 300 ovlp targets
     
     // collect counts
-    kt_for(asm_opt.thread_num, worker_read_selection_by_est_ov, NULL, R_INF.total_reads);
+    kt_for(asm_opt.thread_num, worker_read_selection_by_est_ov_v2, NULL, R_INF.total_reads);
     radix_sort_radix64(R_INF.nb_target_reads, R_INF.nb_target_reads + R_INF.total_reads);  // sort by nb_target + rid
 
     // read selection
-    // experimental: let half of the reads (excluding reads with no overlap) to have less than $threshold candidates 
-    int cnt = 0, dropped=0;
-    for (int i=0; i<R_INF.total_reads; i++){
-        if ((R_INF.nb_target_reads[i]>>32)<=threshold){
-            // fprintf(stdout, "%d\tpass\t%" PRIu64 "\n", i, R_INF.nb_target_reads[i]>>32);
-            continue;
+    int is_do_preovec_selection = 1;
+    int cnt = 0/*, dropped=0*/;
+    if (!asm_opt.is_ignore_ovlp_cnt){
+        // experimental: let half of the reads (excluding reads with no overlap) to have less than $threshold candidates 
+        for (uint64_t i=0; i<R_INF.total_reads; i++){
+            if ((R_INF.nb_target_reads[i]>>32)>(uint64_t)threshold){
+                cnt++;
             }
-        if (R_INF.mask_readnorm[(uint32_t)R_INF.nb_target_reads[i]] & 1) {
-            // fprintf(stdout, "%d\tdn\n", i);
-            continue;
-            }
-        // fprintf(stdout, "%d\thit\n", i);
-        cnt++;
-    }
-    fprintf(stderr, "[M::%s] cnt is %d\n", __func__, cnt);
-    if (cnt<=cutoff){
-        fprintf(stderr, "[M::%s] keeping all reads, cnt==%d. (threshold is %d)\n", __func__, cnt, threshold);
-    }else{
-        // drop reads based on sorting order
-        int nb_to_drop = (cnt-cutoff)/5;
-        for (int j=0; j<nb_to_drop; j++){
-            R_INF.mask_readnorm[cursor--] |= (0x1 | 0x80);
         }
-        fprintf(stderr, "[M::%s] drop round %d, dropped %d. current read is %d, median is %d.\n", __func__, rounds, nb_to_drop, cursor, (int)R_INF.median[cursor]);
-        fprintf(stderr, "[M::%s] took %0.2fs.\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] number of reads with more than desired (%d) targets is %d. (Total reads: %d)\n", __func__, threshold, cnt, (int)R_INF.total_reads);
+        if (cnt<=cutoff){
+            is_do_preovec_selection = 0;
+        }
     }
-
+    else{
+        fprintf(stderr, "[M::%s] Did not guess the total number of overlaps.\n", __func__);
+    }
+    if (is_do_preovec_selection){
+        if (!asm_opt.is_ignore_ovlp_cnt){
+            cnt = R_INF.total_reads - (cnt - cutoff);  // the number of reads we're going to keep
+        }else{
+            cnt = R_INF.total_reads;
+        }
+        fprintf(stderr, "[M::%s] plan to keep %d out of %d reads (%.2f%%).\n",__func__, cnt, (int)R_INF.total_reads, (float)cnt/R_INF.total_reads*100);
+        hamt_flt_withsorting_supervised(&asm_opt, &R_INF, cnt);
+    }else{
+        fprintf(stderr, "[M::%s] keeping all reads.\n", __func__);
+    }
     free(R_INF.nb_target_reads);
     fprintf(stderr, "[M::%s] finished read selection, took %0.2fs.\n", __func__, Get_T()-startTime);
     ha_pt_destroy(ha_idx);
 }
+
 
 void ha_overlap_and_correct(int round, int coverage)
 {
@@ -1562,7 +1587,7 @@ void ha_overlap_final(void)
 int ha_assemble(void)
 {
 	extern void ha_extract_print_list(const All_reads *rs, int n_rounds, const char *o);
-	int r, hom_cov = -1, ovlp_loaded = 0;
+	int r,/* hom_cov = -1*/ ovlp_loaded = 0;
 	if (asm_opt.load_index_from_disk && load_all_data_from_disk(&R_INF.paf, &R_INF.reverse_paf, asm_opt.bin_base_name)) {
 		ovlp_loaded = 1;
 		fprintf(stderr, "[M::%s::%.3f*%.2f] ==> loaded corrected reads and overlaps from disk\n", __func__, yak_realtime(), yak_cpu_usage());
@@ -1614,7 +1639,12 @@ int ha_assemble(void)
         debug_printstat_read_status(&R_INF);
 
         if (asm_opt.is_preovec_readselection){
-            hamt_pre_ovec(asm_opt.preovec_coverage);
+            // hamt_pre_ovec(asm_opt.preovec_coverage);
+            hamt_pre_ovec_v2(asm_opt.preovec_coverage);
+            fprintf(stderr, "[M::%s] dumping debug: read mask...\n", __func__);
+            hamt_dump_read_selection_mask_runtime(&asm_opt, &R_INF);
+
+            fprintf(stderr, "[M::%s] recalculate ha_flt_tab...\n", __func__);
             ha_ft_destroy(ha_flt_tab);  // redo high freq filter
             ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 1, 0, 0);
         }

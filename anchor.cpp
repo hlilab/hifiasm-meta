@@ -57,7 +57,7 @@ static int ha_ov_type(const overlap_region *r, uint32_t len)
 	else return r->x_pos_s == 0? 0 : 1;
 }
 
-void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs){
+void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs, int sort_mode){
 	// work on one read
 	// (immitate ha_get_new_candidates, but only count how many candidates are within consideration.)
 	// (used for read selection)
@@ -65,7 +65,7 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs){
 
 	extern void *ha_flt_tab;
 	extern ha_pt_t *ha_idx;
-	uint32_t i, rlen;
+	uint32_t i/*, rlen*/;
 	uint64_t k, l;
 	double low_occ = 5;
 	double high_occ = 500;
@@ -80,7 +80,7 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs){
 	// get the list of anchors
 	ha_sketch(ucr->seq, ucr->length, asm_opt.mz_win, asm_opt.k_mer_length, 0, !(asm_opt.flag & HA_F_NO_HPC), &mz, ha_flt_tab);
 	seed = (seed1_t*)malloc(sizeof(seed1_t) * mz.m);
-	int n_a = 0;
+	uint64_t n_a = 0;
 	for (i = 0, n_a = 0; i < mz.n; ++i) {
 		int n;
 		seed[i].a = ha_pt_get(ha_idx, mz.a[i].x, &n);  // start idx of the minimizer in the linear buffer
@@ -103,9 +103,7 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs){
 			an->srt = (uint64_t)y->rid<<33 | (uint64_t)rev<<32 | an->other_off;
 		}
 	}
-	// fprintf(stdout, "n_a@%d=%d, k==%d\n", (int)rid, n_a, k);
 
-	// sort anchors + count
 	uint64_t nb_candidates = 0;
 	radix_sort_ha_an1(a, a+n_a);  // sort by srt (targetID-strand-posOnTargetRead)
 	for (k = 1, l = 0; k <= n_a; ++k) {
@@ -116,9 +114,17 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs){
 			l = k;
 		}
 	}
-	// fprintf(stdout, "debug\t%d\t%d\n", (int)rid, (int)nb_candidates);
-
-	rs->nb_target_reads[rid] = nb_candidates<<32 | ((uint64_t)rid);
+	// sort anchors + count
+	if (sort_mode==0){
+		// fprintf(stdout, "debug\t%d\t%d\n", (int)rid, (int)nb_candidates);
+		rs->nb_target_reads[rid] = nb_candidates<<32 | ((uint64_t)rid);
+	}else if (sort_mode==1){
+		nb_candidates = nb_candidates<65535? nb_candidates : 65535;
+		rs->nb_target_reads[rid] = nb_candidates<<48 | ((uint64_t)(65535 - rs->lowq[rid]))<<32 | ((uint64_t) rid);  // lowq sorted the reversed order
+	}else{
+		fprintf(stderr, "[E::%s] unexpected sort_mode, aborting.\n", __func__);
+		exit(1);
+	}
 
 	// clean up
 	free(a);
@@ -126,6 +132,11 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs){
 	free(seed);
 
 }
+
+// void hamt_count_new_candidates_v2(int64_t rid, UC_Read *ucr, All_reads *rs){
+	
+
+// }
 
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain)
 {

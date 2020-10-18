@@ -140,6 +140,7 @@ typedef struct {
 	uint8_t *whitelist, *blacklist;  // blacklist for nodes with 2 directions available (we want to avoid messing up the graph's traversal direction)
 	uint32_t *v2vu;
 	uint32_t usg_n_seq;
+	uint8_t *consist;  // consistency (in the sense of bidirected graph), 0 is unmarked/not determined yet(if marking is finished, 0 should be interpreted as 1), 1 is consistent, 2 is inconsistent
 } asg_t;
 
 asg_t *asg_init(void);

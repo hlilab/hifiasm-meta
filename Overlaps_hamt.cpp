@@ -15,6 +15,23 @@ KRADIX_SORT_INIT(ovhamt64, uint64_t, uint64_t, 8)
 //////////////////////////////////////////////////////////////////////
 //                        debug functions                           //
 //////////////////////////////////////////////////////////////////////
+void write_debug_auxsg(asg_t *sg, char *file_base_name){
+    char* index_name = (char*)malloc(strlen(file_base_name)+15);
+    sprintf(index_name, "%s.auxsg.gfa", file_base_name);
+    FILE* fp = fopen(index_name, "w");
+
+    uint32_t v, w, dir1, dir2;
+    for (uint32_t i=0; i<sg->n_arc; i++){
+        v = sg->arc[i].ul>>32;
+        w = sg->arc[i].v;
+        dir1 = (uint32_t)v&1;
+        dir2 = (uint32_t)w&2;
+        fprintf(fp, "#%d\t%d\t#%d\t%d\n", (int)v+1, (int)dir1, (int)w+1, (int)dir2);
+    }
+    fclose(fp);
+    free(index_name);
+}
+
 void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
     fprintf(stderr, "Writing debug asg to disk... \n");
     double startTime = Get_T();
@@ -223,6 +240,9 @@ int stacku32_pop(stacku32_t *stack, uint32_t *value){
     return 1;
 }
 
+void stacku32_reset(stacku32_t *stack){
+    stack->n = 0;
+}
 
 
 static inline int hamt_asgarc_util_countPre(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc){
@@ -825,5 +845,473 @@ void hamt_ugarc_covcut_danglingCircle(asg_t *sg,
     ma_ug_destroy(ug);
     free(v2vu_directed);
     free(sanmask);
+    free(primary_flag);
+}
+
+
+
+// here we go again, bidirectional graph SCC
+
+void hamt_ug_debug_write_SCClabels(asg_t *auxsg, int *SCCmarkings, char *file_base_name){
+    char* index_name = (char*)malloc(strlen(file_base_name)+15);
+    sprintf(index_name, "%s.SCClabels", file_base_name);
+    FILE* fp = fopen(index_name, "w");
+
+    for (uint32_t i=0; i<auxsg->n_seq*2; i++){
+        fprintf(fp, "utg%.6d\t%d\t%d\n", (int)(i>>1)+1, (int)(i&1), SCCmarkings[i]);
+    }
+
+    free(index_name);
+    fclose(fp);
+}
+
+// asg_t *hamt_ug_gen_auxsg(asg_t *sg, ma_ug_t *ug){
+//     // convert bidirectional graph (ug) to a directional graph (asg)
+//     asg_t *auxsg = asg_init();
+//     uint32_t nv;
+//     uint32_t u, w;
+//     asg_arc_t *p, *q;
+//     uint64_t dir1, dir2;
+
+//     // mark starts/ends
+//     uint32_t *v2vu = (uint32_t*)calloc(sg->n_seq*2, sizeof(uint32_t));
+//     for (uint32_t vu=0; vu<ug->u.n; vu++){
+//         v2vu[ug->u.a[vu].start] = vu<<1 | 0;
+//         v2vu[ug->u.a[vu].end] = vu<<1 | 1;
+//     }
+
+//     // nodes
+//     auxsg->n_seq = ug->u.n*2;
+//     auxsg->m_seq = ug->u.n*2;
+//     auxsg->is_symm = 1;
+
+//     // arcs
+//     for (int i=0; i<ug->g->n_arc;i++){
+//         u = ug->g->arc[i].ul>>32;  // unitig ID with direction (by ma_ug_gen)
+//         w = ug->g->arc[i].v;
+//         fprintf(stderr, "wut\t%d\t%d\n", (int)u, (int)w);
+
+//         p = &ug->g->arc[i];
+//         q = asg_arc_pushp(auxsg);
+//         q->ol = p->ol;
+//         q->del = 0;   
+//         q->ul = ((uint64_t)u)<<32 | ((uint64_t)((uint32_t)p->ul));
+//         q->v = w;
+//     }
+//     asg_arc_sort(auxsg);
+//     auxsg->is_srt = 1;
+//     asg_arc_index(auxsg);
+
+//     return auxsg;
+// }
+
+void hamt_asg_mark_consistency(asg_t *sg){
+    // prepare for DFS
+    // TODO: is there a better aka linear way??????
+    //       also currently (Oct 17 2020) i'll just mark all inconsistent vertices as their own SCC... is this right?
+    // for rational see Kazutoshi Ando et al, Discrete Applied Mathematics 68 (1996) 237-248
+    int verbose = 0;
+
+    if (sg->consist){
+        free(sg->consist);
+    }
+    sg->consist = (uint8_t*)calloc(sg->n_seq*2, 1);
+    memset(sg->consist, 1, 1);
+    
+    // aux
+    stacku32_t stack;
+    stacku32_init(&stack);
+    stacku32_t buf;
+    stacku32_init(&buf);
+    uint32_t v, w, nv, seed;
+    asg_arc_t *av;
+
+    // init
+    uint8_t *color = (uint8_t*)calloc(sg->n_seq*2, 1);
+    int flag_const = 1;
+    v = 0;
+    seed = v;  // must remember the current seed
+    stacku32_push(&stack, v);
+    stacku32_push(&buf, v);
+    color[v] = 1;
+    if (verbose){
+        fprintf(stderr, "[debug::%s] seeded: #%d (dir: %d)\n", __func__, (int)(seed>>1)+1, (int)(seed&1));
+    }
+
+    // main loop
+    // note: multiple passes, and only push 1 white child node per turn (instead all of them)
+    while (1){
+        if (stacku32_pop(&stack, &v)){
+            if (color[v]==2){
+                continue;
+            }
+            // check if we found an inconsistency
+            if (color[v^1]!=0){
+                flag_const = 0;
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] encountered inconsistency: #%.6d (dir %d)\n", __func__, (int)(v>>1)+1, (int)v&1);
+                }
+                // is the start node inconsistent? (if so, mark it)
+                if ((v^1)==seed){
+                    sg->consist[v] = 2;
+                    sg->consist[v^1] = 2;
+                    if (verbose){
+                        fprintf(stderr, "[debug::%s] marked inconsistency: #%.6d (dir:%d)\n", __func__, (int)(v>>1)+1, (int)v&1);
+                    }
+                    stacku32_reset(&stack);  // force to skip to seeding 
+                    stacku32_reset(&buf);
+                    continue;
+                }
+                // sg->consist[v] = 2;
+                // sg->consist[v^1] = 2;
+                // stacku32_reset(&stack);
+                // stacku32_reset(&buf);
+                continue;
+            }
+            // do normal DFS stuff
+            nv = asg_arc_n(sg, v);
+            av = asg_arc_a(sg, v);
+            if (nv==0){
+                color[v] = 2;
+            }else{  // check child nodes
+                int is_exhausted = 1;
+                for (int i=0; i<nv; i++){
+                    if (sg->consist[av[i].v]==2){  // target vertex is inconsistent, pretend we saw nothing
+                        continue;
+                    }
+                    if (color[av[i].v]==0){
+                        is_exhausted = 0;
+                        stacku32_push(&stack, v); // put back
+                        color[av[i].v] = 1;
+                        stacku32_push(&stack, av[i].v);
+                        stacku32_push(&buf, av[i].v);
+                        break;  // only push 1 new node at a time
+                    }
+                }
+                if (is_exhausted){
+                    color[v] = 2;
+                }
+            }
+        }else{
+            if (flag_const){  // traversal didn't see inconsistent vertices, so mark all vertcies in buf
+                while (stacku32_pop(&buf, &v)){
+                    sg->consist[v] = 1;
+                }
+            }
+            // reset stuff
+            stacku32_reset(&buf);
+            memset(color, 0, 1*sg->n_seq*2);
+            flag_const = 1;
+            // pick new seed, or terminate
+            for (v=seed+1;v<sg->n_seq*2; v++){
+                if (sg->consist[v]==0){
+                    seed = v;
+                    stacku32_push(&stack, seed);
+                    stacku32_push(&buf, seed);
+                    if (verbose){
+                        fprintf(stderr, "[debug::%s] seeded: #%d (dir: %d)\n", __func__, (int)(seed>>1)+1, (int)(seed&1));
+                    }
+                    break;
+                }
+            }
+            if (v>=sg->n_seq*2){
+                break;
+            }
+        }
+    }
+
+    stacku32_destroy(&stack);
+    stacku32_destroy(&buf);
+    free(color);
+}
+
+void hamt_asg_DFS(asg_t *sg0, uint64_t *ts_curr, uint64_t *ts_order, int is_use_transpose, int *SCC_marking){
+    assert(ts_curr || (SCC_marking && ts_order));  // we should either be able to stamp the finishing time, or mark SCC
+
+    int verbose = 0;  // debug
+
+    asg_t *sg;
+    if (is_use_transpose){
+        sg = hamt_asggraph_util_gen_transpose(sg0);
+    }else{
+        sg = sg0;
+    }
+
+    // aux
+    stacku32_t stack;
+    stacku32_init(&stack);
+    uint8_t *color = (uint8_t*)calloc(sg->n_seq*2, sizeof(uint8_t));
+    int SCC_label = 1, cnt_finished = 0;
+    uint64_t DFStime = 0;
+
+    // handles
+    uint32_t v, w, nv;
+    asg_arc_t *av;
+
+    // exclude inconsistent nodes
+    if (SCC_marking){
+        // give each on of them a different SCC label
+        for (v=0; v<sg->n_seq*2; v++){
+            if (sg0->consist[v]==2){  // note: using sg0 because the transpose only carried edges over, not (all) aux
+                SCC_marking[v] = SCC_label;
+                SCC_label++;
+                color[v] = 2;
+            }
+        }
+    }else{
+        // mark them as finished
+        if (ts_curr){
+            for (v=0; v<sg->n_seq*2; v++){
+                if (sg0->consist[v]==2){
+                    ts_curr[v] = (uint64_t)v<<32 | DFStime;
+                    DFStime++;
+                    color[v] = 2;
+                }
+            }
+        }
+
+    }
+
+    // init
+    if (ts_order){
+        for (v=(uint32_t)ts_order[sg->n_seq*2-1]; v>=0; v--){
+            if (sg0->consist[v]!=2){
+                break;
+            }
+        }
+        if (v<0){
+            fprintf(stderr, "[W::%s] ordered DFS can't find the 1st consistent seed.\n", __func__);
+            exit(1);
+        }
+    }else{
+        for (v=0; v<sg->n_seq*2; v++){
+            if (sg0->consist[v]!=2){
+                break;
+            }
+        }
+        if (v==sg->n_seq*2){
+            fprintf(stderr, "[W::%s] ordered DFS can't find the 1st consistent seed.\n", __func__);
+            exit(1);
+        }
+    }
+    color[v] = 1;
+    if (SCC_marking){
+        SCC_marking[v] = SCC_label;
+    }
+    stacku32_push(&stack, v);
+    DFStime++;
+    if (verbose){
+        fprintf(stderr, "[debug::%s] is use transpose: %d\n", __func__, is_use_transpose);
+        fprintf(stderr, "[debug::%s] seeded #%.6d, direction %d\n", __func__, (int)(v>>1)+1, (int)(v&1));
+    }
+
+    // main loop
+    while (1){
+        DFStime++;
+        if (stacku32_pop(&stack, &v)){
+            if (verbose){fprintf(stderr, "[debug::%s] poped #%.6d, direction %d\n", __func__, (int)(v>>1)+1, (int)(v&1));}
+            if (color[v]==2){
+                DFStime--;
+                continue;
+            }
+            nv = asg_arc_n(sg, v);
+            av = asg_arc_a(sg, v);
+            if (nv==0){  // node is leaf
+                color[v] = 2;
+                if (ts_curr){
+                    ts_curr[v] = DFStime<<32 | (uint64_t)v;
+                }
+                cnt_finished++;
+                if (verbose){fprintf(stderr, "[debug::%s] finished #%.6d (leaf), direction %d\n", __func__, (int)(v>>1)+1, (int)(v&1));}
+            }else{  // check current node
+                int is_exhausted = 1;
+                for (int i=0; i<(int)nv; i++){
+                    if (color[av[i].v]==0){
+                        is_exhausted = 0;
+                        break;
+                    }
+                }
+                if (is_exhausted){  // node finished
+                    color[v] = 2;
+                    if (ts_curr){
+                        ts_curr[v] = DFStime<<32 | (uint64_t)v;
+                    }
+                    cnt_finished++;
+                    if (verbose){fprintf(stderr, "[debug::%s] finished #%.6d (exhaust), direction %d\n", __func__, (int)(v>>1)+1, (int)(v&1));}
+                }else{  // node not finished yet
+                    stacku32_push(&stack, v);  // put it back
+                    if (verbose){fprintf(stderr, "[debug::%s]     put back #%.6d, direction %d\n", __func__, (int)(v>>1)+1, (int)(v&1));}
+                    for (int i=0; i<(int)nv; i++){
+                        w = av[i].v;
+                        if (color[w]==0){  // found a new node
+                            color[w] = 1;
+                            if (SCC_marking){
+                                SCC_marking[w] = SCC_label;
+                            }
+                            stacku32_push(&stack, w);
+                            DFStime++;
+                            if (verbose){fprintf(stderr, "[debug::%s]     pushed #%.6d, direction %d\n", __func__, (int)(w>>1)+1, (int)(w&1));}
+                        }
+                    }
+
+                }
+            }
+        }else{  // need a new seed or termination
+            // note: note checking consistency marks since inconsistent nodes have been marked black in `color`
+            SCC_label++;
+            int i;
+            if (ts_order){
+                for (i=sg->n_seq*2-1; i>=0; i--){
+                    if (color[(uint32_t)ts_order[i]]==0){
+                        break;
+                    }
+                }
+                if (i<0){
+                    if (verbose){fprintf(stderr, "[debug::%s] exit DFS.\n", __func__);}
+                    break;
+                }
+                v = (uint32_t)ts_order[i];
+            }else{
+                for (i=0; i<sg->n_seq*2-1; i++){
+                    if (color[i]==0){
+                        break;
+                    }
+                }
+                if (i==(sg->n_seq*2-1)){
+                    if (verbose){fprintf(stderr, "[debug::%s] exit DFS.\n", __func__);}
+                    break;
+                }
+                v = (uint32_t)i;
+            }
+            color[v] = 1;
+            if (SCC_marking){
+                SCC_marking[v] = SCC_label;
+            }
+            stacku32_push(&stack, v);
+            if (verbose){
+                fprintf(stderr, "[debug::%s] seeded #%.6d, direction %d\n", __func__, (int)(v>>1)+1, (int)(v&1));
+                if (SCC_marking){
+                    fprintf(stderr, "[debug::%s]        SCClabel: %d\n", __func__, SCC_label);
+                }
+            }
+        }
+    }
+    free(color);
+    stacku32_destroy(&stack);
+    if (is_use_transpose){
+        asg_destroy(sg);
+    }
+}
+
+int *hamt_asg_SCC(asg_t *sg){
+    uint64_t *ts1 = (uint64_t*)calloc(sg->n_seq*2, sizeof(uint64_t)); assert(ts1);
+    int *SCC_labels = (int*)calloc(sg->n_seq*2, sizeof(int));  assert(SCC_labels);
+
+    hamt_asg_DFS(sg, ts1, NULL, 0, NULL);
+    radix_sort_ovhamt64(ts1, ts1+sg->n_seq*2);
+    hamt_asg_DFS(sg, NULL, ts1, 1, SCC_labels);
+
+    free(ts1);
+    return SCC_labels;
+}
+
+void hamt_asgarc_ugCovCutSCC(asg_t *sg,
+                        const ma_sub_t* coverage_cut,   // for utg coverage
+                        ma_hit_t_alloc* sources, R_to_U* ruIndex)  // for utg coverage
+{
+    int verbose = 0;
+
+    asg_cleanup(sg);
+    ma_ug_t *ug = ma_ug_gen(sg);
+    asg_t *auxsg = ug->g;  // nodes are: unitigID<<1|direction
+    write_debug_auxsg(auxsg, asm_opt.output_file_name);
+    hamt_asg_mark_consistency(auxsg);
+
+    // aux
+    uint32_t *v2vu = (uint32_t*)calloc(sg->n_seq, sizeof(uint32_t));
+    for (uint32_t i=0; i<ug->u.n; i++){
+        v2vu[ug->u.a[i].start>>1] = i;
+        v2vu[ug->u.a[i].end>>1] = i;
+    }
+
+    if (VERBOSE>=1){
+        char tmp[100];
+        sprintf(tmp, "%s.SCCug.gfa", asm_opt.output_file_name);
+        FILE *fp = fopen(tmp, "w");
+        ma_ug_print2_lite(ug, &R_INF, sg, 0, "utg", fp);
+        fclose(fp);
+    }
+
+    int *SCC_labels = hamt_asg_SCC(auxsg);
+    hamt_ug_debug_write_SCClabels(auxsg, SCC_labels, asm_opt.output_file_name);
+
+    uint32_t vu, wu, v, w;
+    int cov1, cov2, covtmp;
+    int cnt_del = 0;
+    uint8_t* primary_flag = (uint8_t*)calloc(sg->n_seq, sizeof(uint8_t));  // for utg coverage
+    for (int i=0; i<auxsg->n_arc; i++){
+        vu = auxsg->arc[i].ul>>32;
+        wu = auxsg->arc[i].v;
+        if (SCC_labels[vu]==SCC_labels[wu]){
+            if (verbose){fprintf(stderr, "[debug::%s] #%.6d vs #%.6d, skip because same SCC label.\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);}
+            continue;
+        }
+        
+        // check coverage diff
+        cov1 = (int) get_ug_coverage(&ug->u.a[vu>>1], sg, coverage_cut, sources, ruIndex, primary_flag);
+        cov2 = (int) get_ug_coverage(&ug->u.a[wu>>1], sg, coverage_cut, sources, ruIndex, primary_flag);
+        if (cov1>cov2){
+            covtmp = cov1; 
+            cov1 = cov2;
+            cov2 = covtmp;
+        }
+        int yescut;
+        if (cov2<10){
+            yescut = 0;
+        }else{
+            if (cov2<20){
+                if ((cov2-cov1)>8 || ((float)cov2/cov1)>2){
+                    yescut = 1;
+                }else{
+                    yescut = 0;
+                }
+            }else{
+                if ((float)cov2/cov1>2){
+                    yescut = 1;
+                }else{
+                    yescut = 0;
+                }
+            }
+        }
+        if (!yescut){
+            if (verbose){
+                fprintf(stderr, "[debug::%s] #%.6d vs #%.6d, skip because insufficient cov diff (large: %d, small: %d).\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1, cov2, cov1);
+            }
+            continue;
+        }else{  // cut arc
+            for (int i=0; i<sg->n_arc; i++){  // TODO: not the best way
+                v = sg->arc[i].ul>>32;
+                w = sg->arc[i].v;
+                if ( ((v2vu[v>>1]==(vu>>1))&&(v2vu[w>>1]==(wu>>1))) || ((v2vu[v>>1]==(wu>>1))&&(v2vu[w>>1]==(vu>>1))) ){
+                    asg_arc_del(sg, v, w, 1);
+                    cnt_del++;
+                }
+            }
+            if (verbose){
+                fprintf(stderr, "[debug::%s] cut a arc between #%.6d and #%.6d.\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
+            }
+        }
+
+    }
+
+    // clean up
+    fprintf(stderr, "[M::%s] removed %d arcs.", __func__, cnt_del);
+    if (cnt_del){
+        asg_cleanup(sg);
+    }
+    free(ug->g->consist);
+    ma_ug_destroy(ug);
+    free(v2vu);
+    free(SCC_labels);
     free(primary_flag);
 }

@@ -30,5 +30,8 @@ void hamt_asg_arc_del_by_readcov_circle_aware(asg_t *g);
 void hamt_ugarc_covcut_danglingCircle(asg_t *sg,
                                         const ma_sub_t* coverage_cut,   // for utg coverage
                                         ma_hit_t_alloc* sources, R_to_U* ruIndex);  // for utg coverage
+void hamt_asgarc_ugCovCutSCC(asg_t *sg,
+                        const ma_sub_t* coverage_cut,   // for utg coverage
+                        ma_hit_t_alloc* sources, R_to_U* ruIndex);  // for utg coverage
 
 #endif // __OVERLAPS_HAMT__

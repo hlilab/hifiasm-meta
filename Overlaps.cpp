@@ -27087,7 +27087,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         // hamt_asgarc_SCCcovCut(sg);
         // hamt_utg_SCCcovCut(sg, coverage_cut, sources, ruIndex);
         // hamt_usg_SCCcovCut(sg, coverage_cut, sources, ruIndex);
-        hamt_ugarc_covcut_danglingCircle(sg, coverage_cut, sources, ruIndex);
+        hamt_asgarc_ugCovCutSCC(sg, coverage_cut, sources, ruIndex);
+        // hamt_ugarc_covcut_danglingCircle(sg, coverage_cut, sources, ruIndex);
     }
 
 

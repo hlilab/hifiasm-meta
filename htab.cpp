@@ -1239,7 +1239,7 @@ void worker_process_one_read_HPC_inclusive(pltmt_step_t *s, int idx_seq, int rou
 	else if (round==1){
 		radix_sort_hamt16(buf_norm, buf_norm+idx);
 		// if (buf_norm[idx/2]<=s->p->runtime_median_threshold || buf_norm[idx/10]<=150 || buf_norm[idx/20]<=80){
-		if (buf_norm[idx/2]<=s->p->runtime_median_threshold || 
+		if (// buf_norm[idx/2]<=s->p->runtime_median_threshold || 
 			buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10 ||
 			((s->p->asm_opt->lowq_thre_5>0) && (buf_norm[idx/20]<=s->p->asm_opt->lowq_thre_5)) ||
 			((s->p->asm_opt->lowq_thre_3>0) && (buf_norm[idx/30]<=s->p->asm_opt->lowq_thre_3))

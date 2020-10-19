@@ -16,6 +16,8 @@ hifiasm_meta -t32 --force-preovec -oasm reads.fq.gz 2>asm.log
 
 ## Special Notes
 
+Certain commits may write excessive info to STDERR for dev/debug purposes (even without -V), please pipe to gzip if this is a concern.
+
 Bin file format has been slightly altered because of the need for auxiliary info etc, currently it's not compatible with the stable hifiasm release. This is temporary.
 
 ## Switches (see also README\_ha.md)

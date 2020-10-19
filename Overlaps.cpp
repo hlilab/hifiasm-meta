@@ -27073,23 +27073,19 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     {
 
         if (asm_opt.is_use_exp_graph_cleaning){
-        // hamt_asg_arc_del_by_readcov_circle_aware(sg);  // unusable, slow, need rewrite to strongly connected components.
 
-        if(VERBOSE >= 1)  // debug
-        {
-            char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-            sprintf(unlean_name, "%s.beforeG", output_file_name);
-            output_read_graph(sg, coverage_cut, unlean_name, n_read);
-            output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-            free(unlean_name);
+            if(VERBOSE >= 1)  // debug
+            {
+                char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+                sprintf(unlean_name, "%s.beforeG", output_file_name);
+                output_read_graph(sg, coverage_cut, unlean_name, n_read);
+                output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+                free(unlean_name);
+            }
+
+            // hamt_asgarc_ugCovCutSCC(sg, coverage_cut, sources, ruIndex);  
+            hamt_ugarc_covcut_danglingCircle(sg, coverage_cut, sources, ruIndex);
         }
-
-        // hamt_asgarc_SCCcovCut(sg);
-        // hamt_utg_SCCcovCut(sg, coverage_cut, sources, ruIndex);
-        // hamt_usg_SCCcovCut(sg, coverage_cut, sources, ruIndex);
-        hamt_asgarc_ugCovCutSCC(sg, coverage_cut, sources, ruIndex);
-        // hamt_ugarc_covcut_danglingCircle(sg, coverage_cut, sources, ruIndex);
-    }
 
 
 

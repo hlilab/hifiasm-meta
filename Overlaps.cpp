@@ -1897,122 +1897,23 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
  **********************************/
 static inline int asg_is_utg_end(const asg_t *g, uint32_t v, uint64_t *lw)
 {
-    
-	/**
-	..............................
-	.  w1---------------         .
-	.    w2--------------        .
-	.       w3--------------     .--->asg_arc_a(g, v^1)
-	.          w4-------------   .
-	.             w5------------ .
-	..............................
-						v---------------
-						..............................
-						.  w1---------------         .
-						.    w2--------------        .
-						.       w3--------------     .--->asg_arc_a(g, v)
-						.          w4-------------   .
-						.             w5------------ .
-						..............................
-    !!!!!note here the graph has already been cleaned by transitive reduction, so idealy:
-
-        .........................
-        .    w1---------------  .--->asg_arc_a(g, v^1)
-        .........................
-                            v---------------
-                                    .........................
-                                    .    w5---------------  .--->asg_arc_a(g, v)
-                                    .........................
-
-	**/
-	///v^1 is the another direction of v
 	uint32_t w, nv, nw, nw0, nv0 = asg_arc_n(g, v^1);
 	int i, i0 = -1;
 	asg_arc_t *aw, *av = asg_arc_a(g, v^1);
 
-	///if this arc has not been deleted
-	for (i = nv = 0; i < (int)nv0; ++i)
+	for (i = nv = 0; i < (int)nv0; ++i)  // count still existing in-arcs
 		if (!av[i].del) i0 = i, ++nv;
 
 	///end without any out-degree
 	if (nv == 0) return ASG_ET_TIP; // tip
-
-    /**
-        since the graph has already been cleaned by transitive reduction,
-        w1 and w2 should not be overlapped with each other
-        that mean v has mutiple in-edges, and each of them is not overlapped with others
-        .........................
-        .    w2---------------  .--->asg_arc_a(g, v^1)
-        .    w1---------------  .
-        .........................
-                            v---------------
-
-	**/
 	if (nv > 1) return ASG_ET_MULTI_OUT; // multiple outgoing arcs
-
-
-
-	
-    /**
-     * ///until here, nv == 1
-        note the graph has already been cleaned by transitive reduction,
-        .........................
-        .    w1---------------  .--->asg_arc_a(g, v^1)
-        .........................
-                            v---------------
-	**/
-	/**
-	p->ul: |____________31__________|__________1___________|______________32_____________|
-	                    qn            direction of overlap       length of this node (not overlap length)
-						                 (based on query)
-	p->v : |___________31___________|__________1___________|
-				        tn             reverse direction of overlap
-						                  (based on target)
-	p->ol: overlap length
-	**/
-	///until here, nv == 1
 	if (lw) *lw = av[i0].ul<<32 | av[i0].v;
-	/**
-	p->ul: |____________31__________|__________1___________|______________32_____________|
-	                    qns            direction of overlap       length of this node (not overlap length)
-						                 (based on query)
-	p->v : |___________31___________|__________1___________|
-				        tns             reverse direction of overlap
-						                  (based on target)
-	p->ol: overlap length
-	**/
 	w = av[i0].v ^ 1;
 	nw0 = asg_arc_n(g, w);
 	aw = asg_arc_a(g, w);
 	for (i = nw = 0; i < (int)nw0; ++i)
 		if (!aw[i].del) ++nw;
-
-
-    /**
-        note nw is at least 1, since we have v 
-        nw > 1 means
-        .........................
-        . av[i0].v^1----------  .--->asg_arc_a(g, v^1)
-        .........................
-                        v---------------
-                        w---------------
-                        z---------------
-        asg_arc_a(av[i0].v^1) is the (v, w, z), and v, w, z are not overlapped with each others
-	**/
 	if (nw != 1) return ASG_ET_MULTI_NEI;
-
-	/**
-     *  nw == 1 means
-        note the graph has already been cleaned by transitive reduction,
-        .........................
-        .    w1---------------  .--->asg_arc_a(g, v^1)
-        .........................
-                            v---------------
-                                    .........................
-                                    .    w5---------------  .--->asg_arc_a(g, v)
-                                    .........................
-
-	**/
 	return ASG_ET_MERGEABLE;
 }
 
@@ -4556,7 +4457,6 @@ int asg_cut_tip(asg_t *g, int max_ext)
 	uint32_t n_vtx = g->n_seq * 2, v, i, cnt = 0;
     
 	for (v = 0; v < n_vtx; ++v) {
-		//if this seq has been deleted
 		if (g->seq[v>>1].del) continue;
 		///check if the another direction of v has no overlaps
 		///if the self direction of v has no overlaps, we don't have the overlaps of them
@@ -4830,6 +4730,15 @@ int asg_arc_del_short_diploid_unclean(asg_t *g, float drop_ratio, ma_hit_t_alloc
 
 uint32_t detect_single_path_with_dels(asg_t *g, uint32_t begNode, uint32_t* endNode, long long* Len, buf_t* b)
 {
+    // FUNC
+    //     walk the single path start from begNode
+    //     (theres no limit of the single path length)
+    // SIDE EFFECT
+    //     the node before branching / is the end in *endNode
+    //     path length (in number of nodes) in *Len
+    //     walked nodes in *b
+    // RETURN
+    //     (see macros)
     uint32_t v = begNode, w;
     uint32_t kv, kw;
     (*Len) = 0;
@@ -5485,6 +5394,9 @@ long long* baseLen, long long* max_stop_base_Len, buf_t* b, uint32_t stops_thres
 long long check_if_diploid(uint32_t v1, uint32_t v2, asg_t *g, 
 ma_hit_t_alloc* reverse_sources, long long min_edge_length, R_to_U* ruIndex)
 {
+    // RETURN
+    //     -1 if either v1 or v2 found loop in their single paths, or the single paths are too short
+    //     
     buf_t b_0, b_1;
     memset(&b_0, 0, sizeof(buf_t));
     memset(&b_1, 0, sizeof(buf_t));
@@ -5506,27 +5418,27 @@ ma_hit_t_alloc* reverse_sources, long long min_edge_length, R_to_U* ruIndex)
         return -1;
     }
 
+    // adjust the stored path length
     if(flag1 != END_TIPS && flag1 != LONG_TIPS)
     {
         l1--;
         b_0.b.n--;
     }
-
     if(flag2 != END_TIPS && flag2 != LONG_TIPS)
     {
         l2--;
         b_1.b.n--;
     }
 
-
+    // single path too short
     if(l1 <= min_edge_length || l2 <= min_edge_length)
     {
 		free(b_0.b.a); free(b_1.b.a);
         return -1;
     }
 
-    buf_t* b_min;
-    buf_t* b_max;
+    buf_t* b_min;  // nodes in the shorter edge
+    buf_t* b_max;  // nodes in the longer edge
     if(l1<=l2)
     {
         b_min = &b_0;
@@ -8143,11 +8055,10 @@ int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_t
     {
         if(g->seq_vis[v] == 0)
         {
-            if(asg_arc_n(g, v)!=1 || asg_arc_n(g, v^1)!=1)
+            if(asg_arc_n(g, v)!=1 || asg_arc_n(g, v^1)!=1)  // require node to be in a single path
             {
                 continue;
             }
-
 
             if(asg_is_single_edge(g, asg_arc_a(g, v)[0].v, v>>1) < 2)
             {
@@ -14701,7 +14612,6 @@ int asg_arc_del_orthology(asg_t *g, ma_hit_t_alloc* reverse_sources, float drop_
 long long miniedgeLen, R_to_U* ruIndex)
 {
     double startTime = Get_T();
-    ///the reason is that each read has two direction (query->target, target->query)
     uint32_t v, n_vtx = g->n_seq * 2, n_reduced = 0;
     uint32_t idx[2];
 
@@ -14709,13 +14619,14 @@ long long miniedgeLen, R_to_U* ruIndex)
     {
         uint32_t i, n_arc = 0, nv = asg_arc_n(g, v);
         asg_arc_t *av = asg_arc_a(g, v);
-        ///some node could be deleted
+
+        // require v to have 2 (still exist) arcs in forward direction
         if (nv < 2 || g->seq[v>>1].del) continue;
-        ///some edges could be deleted
         for (i = 0; i < nv; ++i) // asg_bub_pop1() may delete some edges/arcs
             if (!av[i].del) ++n_arc;
         if (n_arc != 2) continue;
 
+        // collect the 2 arcs
         for (i = 0, n_arc = 0; i < nv; i++)
         {
             if (!av[i].del)
@@ -14738,10 +14649,6 @@ long long miniedgeLen, R_to_U* ruIndex)
             }
         }
     }
-
-
-    
-    
 
     if (n_reduced) {
         asg_cleanup(g);
@@ -26983,19 +26890,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             asg_cut_tip(sg, asm_opt.max_short_tip);
 
-            ///////////////////////// hamt special ////////////////////////////////
-            // if (!asm_opt.is_disable_diginorm){
-            //     hamt_asg_arc_del_by_read_cov_diff(sg, &R_INF, 30, (double)4.0, (i==(clean_round-1))?1:0);  
+            // if(VERBOSE >= 1){  // debug: write temp graph
+            //     char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+            //     sprintf(unlean_name, "%s.afterRound%d", output_file_name, i);
+            //     output_read_graph(sg, coverage_cut, unlean_name, n_read);
+            //     output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+            //     free(unlean_name);
             // }
-            ///////////////////////////////////////////////////////////////////////
-
-            if(VERBOSE >= 1){  // debug: write temp graph
-                char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-                sprintf(unlean_name, "%s.afterRound%d", output_file_name, i);
-                output_read_graph(sg, coverage_cut, unlean_name, n_read);
-                output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-                free(unlean_name);
-            }
         }
     }
 
@@ -27083,8 +26984,30 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 free(unlean_name);
             }
 
-            // hamt_asgarc_ugCovCutSCC(sg, coverage_cut, sources, ruIndex);  
-            hamt_ugarc_covcut_danglingCircle(sg, coverage_cut, sources, ruIndex);
+            ma_ug_t *hamt_ug = ma_ug_gen(sg);
+            hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
+
+            // topo pre clean
+            for (int i=0; i<3; i++){
+                hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+                hamt_asgarc_ugTreatMultiLeaf(sg, hamt_ug, 30000);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+                hamt_ug_pop_miscbubble(sg, hamt_ug);  // dangerous?
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+                hamt_ug_pop_simpleInvertBubble(sg, hamt_ug);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            }
+
+            // cut dangling circles and inversion links
+            hamt_circle_cleaning(sg, hamt_ug);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            hamt_clean_shared_seq(sg, hamt_ug);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            hamt_circle_cleaning(sg, hamt_ug);
+
+            hamt_destroy_utg_coverage(hamt_ug);
+            ma_ug_destroy(hamt_ug);
         }
 
 
@@ -27174,7 +27097,8 @@ long long bubble_dist, int read_graph, int write)
 
     if (asm_opt.flag & HA_F_VERBOSE_GFA)
     {
-        if(load_debug_graph(&sg, &sources, &coverage_cut, output_file_name, &reverse_sources, &ruIndex))
+        // if(load_debug_graph(&sg, &sources, &coverage_cut, output_file_name, &reverse_sources, &ruIndex))
+        if(load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex))  // ?????? leak
         {
             fprintf(stderr, "debug gfa has been loaded\n");
             

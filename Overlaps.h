@@ -632,11 +632,11 @@ uint32_t stops_threshold, buf_t* b)
     {
         kv = get_real_length(sg, v, NULL);
         (*endNode) = v;
-		if(u == NULL) 
+		if(u == NULL)   // don't have ug
 		{
 			(*nodeLen)++;
 		}
-		else
+		else  // have ug, increment by ug->u.a[uid].start
 		{
 			(*nodeLen) += EvaluateLen((*u), v>>1);
 		}
@@ -656,9 +656,9 @@ uint32_t stops_threshold, buf_t* b)
 			///return MUL_OUTPUT;
 		}
         ///kv must be 1 here
-        kv = get_real_length(sg, v, &w);
+        kv = get_real_length(sg, v, &w);  // using &w is safe since kv is 1
 		///means reach the end of a unitig
-        if(get_real_length(sg, w^1, NULL)!=1)
+        if(get_real_length(sg, w^1, NULL)!=1)  // next node has more than 1 predecessor
 		{
 
 			n_stops++;

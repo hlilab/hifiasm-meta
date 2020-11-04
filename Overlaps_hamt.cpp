@@ -2,6 +2,7 @@
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>
 #include <assert.h>
+#include <pthread.h>
 #include "Overlaps.h"
 #include "Process_Read.h"
 #include "CommandLines.h" 
@@ -200,6 +201,70 @@ void ma_ug_print2_lite(const ma_ug_t *ug, All_reads *RNF, asg_t* read_g,
 	}
 }
 
+void hamtdebug_add_fake_utg_coverage(ma_ug_t *ug){
+    if (ug->utg_coverage){free(ug->utg_coverage);}
+    ug->utg_coverage = (int*)calloc(ug->g->n_seq, sizeof(int));
+}
+
+void hamt_ug_print_simple(const ma_ug_t *ug, All_reads *RNF, FILE *fp)
+{
+    // debug function. Assume coverage has been collected. (otherwise it's ma_ug_print2)
+	uint32_t i, j, l;
+	char name[32];
+	for (i = 0; i < ug->u.n; ++i) { // the Segment lines in GFA
+		ma_utg_t *p = &ug->u.a[i];
+        if(p->m == 0) continue;
+        sprintf(name, "utg%.6d%c", i + 1, "lc"[p->circ]);
+		fprintf(fp, "S\t%s\t*\tLN:i:%d\tdp:f:%u\n", name, p->len, ug->utg_coverage[i]);
+        
+		for (j = l = 0; j < p->n; l += (uint32_t)p->a[j++]) {
+			uint32_t x = p->a[j]>>33;
+			if(x<RNF->total_reads)
+            {
+                fprintf(fp, "A\t%s\t%d\t%c\t%.*s\t%d\t%d\tid:i:%d\tHG:A:%c\n", name, l, "+-"[p->a[j]>>32&1],
+                (int)Get_NAME_LENGTH((*RNF), x), Get_NAME((*RNF), x), 
+                0, 8888, x, "apmaaa"[RNF->trio_flag[x]]);
+            }else{
+                fprintf(stderr, "[%s] ERROR\n", __func__);
+                exit(1);
+            }
+        }
+	}
+	for (i = 0; i < ug->g->n_arc; ++i) { // the Link lines in GFA
+		uint32_t u = ug->g->arc[i].ul>>32, v = ug->g->arc[i].v;
+		fprintf(fp, "L\t%s%.6d%c\t%c\t%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
+        "utg", (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
+		"utg",	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
+	}
+}
+
+void hamtdebug_output_unitig_graph_ug(ma_ug_t *ug, char *base_fn, int cleanID){
+    // write gfa without ma_ug_gen
+    
+    // kvec_asg_arc_t_warp new_rtg_edges;
+    // kv_init(new_rtg_edges.a);
+    // ma_ug_seq(ug, sg, &R_INF, coverage_cut, sources, &new_rtg_edges, max_hang, min_ovlp);
+
+    char* gfa_name = (char*)malloc(strlen(base_fn)+25);
+    sprintf(gfa_name, "%s.G_%d.rutg.gfa", base_fn, cleanID);
+    FILE *output_file = fopen(gfa_name, "w");
+    hamt_ug_print_simple(ug, &R_INF, output_file);
+    fclose(output_file);
+
+    free(gfa_name);
+    // kv_destroy(new_rtg_edges.a);
+}
+
+//////////////////////////////////////////////////////////////////////
+//                        helper structs                           //
+//////////////////////////////////////////////////////////////////////
+typedef struct {
+    int threadID, total_threads;
+    asg_t *sg;
+    ma_ug_t *ug;
+} thrdpara_ugPopBubble;
+
+
 
 //////////////////////////////////////////////////////////////////////
 //                        helper routines                           //
@@ -347,6 +412,8 @@ void hamt_collect_utg_coverage(asg_t *sg, ma_ug_t *ug,
                                 ma_hit_t_alloc* sources, R_to_U* ruIndex){
     // FUNC
     //     collect unitig coverages and store in ug->utg_coverage
+    double startTime = Get_T();
+
     if (ug->utg_coverage){
         free(ug->utg_coverage);
     }
@@ -356,6 +423,10 @@ void hamt_collect_utg_coverage(asg_t *sg, ma_ug_t *ug,
         ug->utg_coverage[i] = get_ug_coverage(&ug->u.a[i], sg, coverage_cut, sources, ruIndex, primary_flag);
     }
     free(primary_flag);
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] collected ug coverages.\n", __func__);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
+    }
 }
 void hamt_destroy_utg_coverage(ma_ug_t *ug){
     if (ug->utg_coverage){
@@ -367,13 +438,9 @@ void hamt_destroy_utg_coverage(ma_ug_t *ug){
 void hamt_ug_regen(asg_t *sg, ma_ug_t **ug,
                     const ma_sub_t* coverage_cut,
                     ma_hit_t_alloc* sources, R_to_U* ruIndex){
-    if (!ug){
-        *ug = ma_ug_gen(sg);
-    }else{
-        hamt_destroy_utg_coverage(*ug);
-        ma_ug_destroy(*ug);
-        *ug = ma_ug_gen(sg);
-    }
+    hamt_destroy_utg_coverage(*ug);
+    ma_ug_destroy(*ug);
+    *ug = ma_ug_gen(sg);
     hamt_collect_utg_coverage(sg, *ug, coverage_cut, sources, ruIndex);       
 }
 
@@ -713,6 +780,102 @@ int hamt_asgarc_util_checkSimpleBubble(asg_t *g, uint32_t v0, uint32_t *dest){
     return 1;
 }
 
+int hamt_asgarc_util_checkSimpleBubble_edge(asg_t *g, uint32_t v0){
+    // check if v0 is an edge of a simple bubble (i.e. 1-vertex bubble)
+    //     (doesn't allow tip, but could've; modify if needed)
+    // RETURN
+    //     0 if no
+    //     1 if yes
+
+    uint32_t s, e, e2, sib;  // start, end, sibling
+    uint32_t nv;
+    asg_arc_t *av;
+
+    // check simple edge
+    if (hamt_asgarc_util_countPre(g, v0, 0, 0)!=1 || hamt_asgarc_util_countSuc(g, v0, 0, 0)!=1){
+        return 0;
+    }
+    // check both ends of the persumed bubble
+    if (hamt_asgarc_util_get_the_one_target(g, v0, &e, 0, 0)<0){
+        fprintf(stderr, "[ERROR::%s] e\n", __func__);fflush(stderr);
+        exit(1);
+    }
+    if (hamt_asgarc_util_get_the_one_target(g, v0^1, &s, 0, 0)<0){
+        fprintf(stderr, "[ERROR::%s] s\n", __func__);fflush(stderr);
+        exit(1);
+    }
+    s = s^1;
+    if (hamt_asgarc_util_countPre(g, e, 0, 0)!=2 || hamt_asgarc_util_countSuc(g, s, 0, 0)!=2){
+        return 0;
+    }
+    // check the sibling
+    nv = asg_arc_n(g, s);
+    av = asg_arc_a(g, s);
+    uint32_t i;
+    for (i=0; i<nv; i++){
+        if (av[i].v!=v0){
+            sib = av[i].v;
+            break;
+        }
+    }
+    assert(i!=nv);
+    if (hamt_asgarc_util_countPre(g, sib, 0, 0)!=1 || hamt_asgarc_util_countSuc(g, sib, 0, 0)!=1){
+        return 0;
+    }
+    if (hamt_asgarc_util_get_the_one_target(g, sib, &e2, 0, 0)<0){
+        fprintf(stderr, "[ERROR::%s] e2\n", __func__);fflush(stderr);
+        exit(1);
+    }
+    if (e2==e){
+        return 1;
+    }
+    return 0;
+}
+
+int hamt_asgarc_util_checkSimpleBubble_multiEddge(asg_t *sg, uint32_t v0, uint32_t *u0){
+    // check if v0 is the start of a multi-edge simple bubble (including 2-edge simple bubble)
+    // RETURN
+    //      0 if no
+    //      1 if yes (also right the end vertex to *u0)
+    uint32_t w, u_tmp, u, nv, nw;
+    int idx = 0;
+    asg_arc_t *av, *aw;
+    if (hamt_asgarc_util_countNoneTipSuc(sg, v0)<2){
+        return 0;
+    }
+    nv = asg_arc_n(sg, v0);
+    av = asg_arc_a(sg, v0);
+    for (uint32_t i=0; i<nv; i++){
+        if (av[i].del){continue;}
+        if (hamt_asgarc_util_isTip(sg, av[i].v, 0, 0)){continue;}
+        w = av[i].v;
+        if (hamt_asgarc_util_countPre(sg, w, 0, 0)!=1 || hamt_asgarc_util_countNoneTipSuc(sg, w)!=1){
+            return 0;
+        }
+        // check each edge's target
+        aw = asg_arc_a(sg, w);
+        for (uint32_t i2=0; i2<asg_arc_n(sg, w); i2++){  // find the non-tip target
+            if (aw[i2].del){continue;}
+            if (hamt_asgarc_util_isTip(sg, aw[i2].v, 0, 0)){continue;}
+            u_tmp = aw[i2].v;
+            if (idx==0){
+                u = u_tmp;
+            }else{
+                if (u_tmp!=u){
+                    return 0;
+                }
+            }
+            idx++;
+            break;
+        }
+    }
+    if (idx!=hamt_asgarc_util_countNoneTipSuc(sg, u^1)){
+        return 0;
+    }
+    *u0 = u;
+    return 1;
+}
+
 int hamt_asgarc_util_checkSimpleInvertBubble(asg_t *sg, uint32_t v0, uint32_t *w0, uint32_t *u0){
     /*
         v0->w1
@@ -992,7 +1155,7 @@ int hamt_asgarc_util_BFS_markSubgraph(asg_t *sg, int *subg_labels, uint8_t *colo
             nv = asg_arc_n(sg, v);
             av = asg_arc_a(sg, v);
             for (uint32_t i=0; i<nv; i++){
-                if (av[i].del){continue;}
+                // if (av[i].del){continue;}
                 w = av[i].v;
                 if (color[w]==0){
                     queue32_enqueue(q, w);
@@ -1144,11 +1307,10 @@ void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int ma
     int pre, suc, l, ret;
 
     asg64_v a = {0,0,0};
-
+    
     for (int i_round=0; i_round<3; i_round++)
     {
         n_del = 0;
-        n_del += asg_cut_tip(g, asm_opt.max_short_tip);
 
         // drop simple circles
         n_del += asg_arc_del_simple_circle_untig(NULL, NULL, g, 100, 0);
@@ -1156,6 +1318,9 @@ void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int ma
         // pop bubbles
         // (comment in ha was "remove isoloated single read")
         n_del += asg_arc_del_single_node_directly(g, asm_opt.max_short_tip, sources);
+
+        // tip
+        n_del += asg_cut_tip(g, asm_opt.max_short_tip);
 
         // check
         if (n_del==0)
@@ -1166,6 +1331,13 @@ void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int ma
                 fprintf(stderr, "[M::%s] removed %d locations\n", __func__, n_del);
                 fprintf(stderr, "[M::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
             }
+        }
+        
+        n_del = 0;
+        n_del = hamt_sg_pop_simpleInvertBubble(g);
+        if (VERBOSE>=1){
+            fprintf(stderr, "[M::%s] removed %d invert bubble on string graph\n", __func__, n_del);
+            fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
         }
     }
     free(a.a);
@@ -1201,8 +1373,9 @@ uint32_t* hamt_ugarc_util_v2vu_yesdirection(ma_ug_t *ug, asg_t *sg){
     return v2vu;
 }
 
-int hamt_asgarc_detect_circleDFS(asg_t *sg, uint32_t v0, uint32_t w0){ // vu0 has direction; v2vu has directions
+int hamt_asgarc_detect_circleDFS(asg_t *sg, uint32_t v0, uint32_t w0, int allow_v0){ // vu0 has direction; v2vu has directions
     // DFS on sg (could be ug's auxsg), test if vu is the start of a circle
+    // (note "start of a circle" means v0 is the "stem"; v0 shall not be part of the circle)
     // return 1 if yes, 0 otherwise
 
     uint32_t v=w0, nv, w, wu;
@@ -1238,10 +1411,14 @@ int hamt_asgarc_detect_circleDFS(asg_t *sg, uint32_t v0, uint32_t w0){ // vu0 ha
                     ret = 1;  // don't exit, we need to empty the stack to make sure the handle tig isn't in
                 }
                 if (w==v0){  // the circle shall not include the handle tig
-                    // fprintf(stderr, "HANDLE IN CIRCLE.\n");
-                    free(color);
-                    stacku32_destroy(&stack);
-                    return 0;
+                    if (!allow_v0){
+                        // fprintf(stderr, "HANDLE IN CIRCLE.\n");
+                        free(color);
+                        stacku32_destroy(&stack);
+                        return 0;
+                    }else{
+                        ;
+                    }
                 }
 
                 if (color[w]==0){
@@ -1268,10 +1445,140 @@ int hamt_asgarc_detect_circleDFS(asg_t *sg, uint32_t v0, uint32_t w0){ // vu0 ha
     return ret;
 }
 
+int hamt_asgarc_detect_circleDFS2(asg_t *sg, uint32_t v0, uint32_t w0, uint32_t *v_exclude){
+    // FUNC
+    //     check if v0 and w0 are in the same circle
+    //     if v_exclude is not NULL, it points to ONE uint32_t, and it shall not appear during the traversal
+    // RETURN
+    //     1 if yes, 0 otherwise
+    //     -1 if there might be the inversion case
+    // NOTE
+    //     might need 2 DFS.
+    stacku32_t stack;
+    stacku32_init(&stack);
+    uint8_t *color = (uint8_t*)calloc(sg->n_seq*2, 1);
+    int has_found_w0 = 0, has_found_v0 = 0, is_weird = 0, is_exhausted;
+    int is_initial_pop = 1;
+    uint32_t v, w, nv;
+    asg_arc_t *av;
+
+    // 1st direction
+    stacku32_push(&stack, v0);
+    color[v0] = 1;
+    while (1){
+        if (stacku32_pop(&stack, &v)){
+            if (color[v]==2){continue;}
+            if (!is_initial_pop){
+                if (v==w0){ has_found_w0 = 1; }
+                if (v==v0){ has_found_v0 = 1;}
+                if (v==(v0^1) || v==(w0^1)){ is_weird++; }
+            }else{
+                is_initial_pop = 0;
+            }
+            if (v_exclude && (((*v_exclude)>>1)==(v>>1)) ){
+                stacku32_destroy(&stack);
+                free(color);
+                return 0;
+            }
+            nv = asg_arc_n(sg, v);
+            av = asg_arc_a(sg, v);
+            is_exhausted = 1;
+            for (uint32_t i=0; i<nv; i++){
+                if (color[av[i].v]==0){
+                    is_exhausted = 0;
+                    break;
+                }
+            }
+            if (!is_exhausted){
+                stacku32_push(&stack, v);
+                for (uint32_t i=0; i<nv; i++){
+                    w = av[i].v;
+                    if (color[w]==0){
+                        stacku32_push(&stack, w);
+                        color[w] = 1;
+                    }
+                }
+            }else{
+                color[v] = 2;
+            }
+        }else{
+            break;
+        }
+
+    }
+    if (!has_found_w0 || !has_found_v0){
+        stacku32_destroy(&stack);
+        free(color);
+        return 0;
+    }
+    if (is_weird>=2){
+        stacku32_destroy(&stack);
+        free(color);
+        return -1;
+    }
+
+    // reset
+    stacku32_reset(&stack);
+    memset(color, 0, sg->n_seq*2*1);
+    stacku32_push(&stack, v0^1);
+    color[v0^1] = 1;
+    is_initial_pop = 1;
+    has_found_v0 = 0;
+    has_found_w0 = 0;
+
+    // 2nd direction
+    while (1){
+        if (stacku32_pop(&stack, &v)){
+            if (color[v]==2){continue;}
+            if (!is_initial_pop){
+                if (v==(w0^1)){ has_found_w0 = 1; }
+                if (v==(v0^1)){ has_found_v0 = 1;}
+            }else{
+                is_initial_pop = 0;
+            }
+            if (v_exclude && (((*v_exclude)>>1)==(v>>1)) ){
+                stacku32_destroy(&stack);
+                free(color);
+                return 0;
+            }
+            nv = asg_arc_n(sg, v);
+            av = asg_arc_a(sg, v);
+            is_exhausted = 1;
+            for (uint32_t i=0; i<nv; i++){
+                if (color[av[i].v]==0){
+                    is_exhausted = 0;
+                    break;
+                }
+            }
+            if (!is_exhausted){
+                stacku32_push(&stack, v);
+                for (uint32_t i=0; i<nv; i++){
+                    w = av[i].v;
+                    if (color[w]==0){
+                        stacku32_push(&stack, w);
+                        color[w] = 1;
+                    }
+                }
+            }else{
+                color[v] = 2;
+            }
+        }else{
+            break;
+        }
+    }
+    stacku32_destroy(&stack);
+    free(color);
+    if (has_found_w0 && has_found_v0){
+        return 1;
+    }else{
+        return 0;
+    }    
+}
 
 void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug)
 {
     int verbose = 1;  // debug
+    double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
     uint32_t v, w, nv;
@@ -1319,7 +1626,7 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug)
         }
 
         // detect circles and cut
-        if (hamt_asgarc_detect_circleDFS(auxsg, v, w)){  // note: v and w is ug with direction
+        if (hamt_asgarc_detect_circleDFS(auxsg, v, w, 0)){  // note: v and w is ug with direction
             hamt_ug_arc_del(sg, ug, v, w, 1);
             nb_cut++;
             if (verbose){
@@ -1329,14 +1636,139 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug)
 
     }
     
-    fprintf(stderr, "[M::%s] dropped %d links.\n", __func__, nb_cut);
     if (nb_cut){
         asg_cleanup(sg); asg_symm(sg);
         asg_cleanup(auxsg); asg_symm(auxsg);
     }
-    // free(primary_flag);
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] dropped %d links.\n", __func__, nb_cut);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
+    }
 }
 
+
+void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug){
+    // FUNC
+    //      when performing DFS-based circle detection,
+    //      dont require the handle to be not included in the circle
+    //      criteria
+    //         1) there exists a circling path, without touching the handle
+    //         2) the circling path involving the handle shall be much longer than the one in 1)
+    //         3) more relaxed pre/suc count requirements and coverage diff requirements
+    // NOTE
+    //     experimental, only use it after all more carefule steps have been done
+    int verbose = 1;  // debug
+    double startTime = Get_T();
+    int nb_cut = 0;
+
+    asg_t *auxsg = ug->g;
+    uint32_t v, w, nv, nw;
+    asg_arc_t *av, *aw;
+    uint32_t covs[20], cov_min, cov_max, cov_v, cov_tmp;  // TODO: tho it's probably safe enough
+
+    for (v=0; v<auxsg->n_seq*2; v++){
+        // skip tips and simple bubble starts
+        if (hamt_asgarc_util_countNoneTipSuc(auxsg, v)==0){
+            continue;
+        }
+        if (hamt_asgarc_util_checkSimpleBubble(auxsg, v, NULL)){
+            continue;
+        }
+        if (hamt_asgarc_util_checkSimpleBubble_edge(auxsg, v)){
+            continue;
+        }
+
+        av = asg_arc_a(auxsg, v);
+        nv = asg_arc_n(auxsg, v);
+        for (int iw=0; iw<nv; iw++){
+            if (av[iw].del){continue;}
+            w = av[iw].v;
+            if (hamt_asgarc_util_isTip(auxsg, w, 0, 0)){
+                continue;
+            }
+            if (hamt_asgarc_util_countPre(auxsg, w, 0, 0)<2){
+                continue;
+            }
+            // check coverage diff
+            nw = asg_arc_n(auxsg, w^1);
+            aw = asg_arc_a(auxsg, w^1);
+            int idx = 0;
+            for (int i=0; i<nw; i++){
+                if (aw[i].del){continue;}
+                if ((aw[i].v>>1)==(v>>1)){continue;}  // skip the handle
+                if (hamt_asgarc_util_isTip(auxsg, aw[i].v, 0, 0)){continue;}  // don't use tip's coverage
+                covs[idx] = (uint32_t)ug->utg_coverage[aw[i].v>>1];
+                idx++;
+            }
+            covs[idx++] = (uint32_t)ug->utg_coverage[w>>1];
+            radix_sort_ovhamt32(covs, covs+idx);
+            cov_min = covs[0];
+            cov_max = covs[idx-1];
+            cov_v = ug->utg_coverage[v>>1];
+            int yes_cut = 0;
+            if (cov_v<cov_min){
+                if ((cov_max-cov_v)>10){yes_cut = 1;}
+            }else if (cov_v<cov_max){
+                if ((cov_max-cov_v)>10 || (cov_v-cov_min)>10){yes_cut = 1;}
+            }else{
+                if ((cov_v-cov_min)>10){yes_cut = 1;}
+            }
+            if (!yes_cut){
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] failed cov diff, utg%.6d and utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
+                }
+                continue;
+            }
+
+            yes_cut = 0;
+            // passed coverage diff check, detect circling paths
+            // special case: 1-vertex circle
+            for (int i=0; i<nw; i++){
+                if (aw[i].del){continue;}
+                if ((aw[i].v>>1)==(v>>1)){continue;}  // skip the handle
+                if (aw[i].v==(w^1)){
+                    yes_cut = 1;
+                    break;
+                }
+            }
+            if (yes_cut){
+                hamt_ug_arc_del(sg, ug, v, w, 1);
+                nb_cut++;
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] special cut between utg%.6d and utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
+                }
+                continue;
+            }
+            // regular case
+            for (int i=0; i<nw; i++){
+                if (aw[i].del){continue;}
+                if ((aw[i].v>>1)==(v>>1)){continue;}  // skip the handle
+                if (hamt_asgarc_detect_circleDFS2(auxsg, w^1, aw[i].v, &v)>0){
+                    yes_cut = 1;
+                    break;
+                }
+            }
+            if (yes_cut){
+                hamt_ug_arc_del(sg, ug, v, w, 1);
+                nb_cut++;
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
+                }
+                continue;
+            }else{
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] DIDNOT cut between utg%.6d and utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
+                }
+            }
+        }
+    }
+
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] cut %d.\n", __func__, nb_cut);
+        fprintf(stderr, "[T::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
+    }
+
+}
 
 int hamt_asgarc_contain_only_simple_circle(asg_t *sg, asg_t *auxsg, int *SCC_marking, int SCC_label){
     // NOTE
@@ -1518,6 +1950,60 @@ int hamt_asgarc_rescueArcWithinSubgraph(asg_t *sg, ma_ug_t *ug, int *subg_labels
     return cnt;
 }
 
+int hamt_asgarc_rescueArcWithinCurrentSubgraph(asg_t *sg, ma_ug_t *ug, uint32_t v0){
+    // dont need to label all subgraphs, just search based on the given seed
+    int verbose = 1;
+    asg_t *auxsg = ug->g;
+    int cnt = 0;
+
+    // get the current subgraph
+    uint32_t v, nv, w;
+    asg_arc_t *av;
+    uint8_t *color = (uint8_t*)calloc(auxsg->n_seq*2, 1);
+    queue32_t q;
+    queue32_init(&q);
+    uint32_t v02[2] = {v0, v0^1};
+    for (int i=0; i<2; i++){
+        v = v02[i];
+        queue32_enqueue(&q, v);
+        color[v] = 1;
+        while(queue32_dequeue(&q, &v)){
+            if (color[v]==2){
+                continue;
+            }
+            nv = asg_arc_n(auxsg, v);
+            av = asg_arc_a(auxsg, v);
+            for (uint32_t i=0; i<nv; i++){
+                w = av[i].v;
+                if (color[w]==0){
+                    queue32_enqueue(&q, w);
+                    color[w] = 1;
+                }
+            }
+            color[v] = 2;
+        }
+    }
+
+    // rescue
+    for (uint32_t i=0; i<auxsg->n_arc; i++){
+        if (!auxsg->arc[i].del){continue;}
+        v = auxsg->arc[i].ul>>32;
+        w = auxsg->arc[i].v;
+        if (!color[v] || !color[w]){continue;}
+        hamt_ug_arc_del(sg, ug, v, w, 0);  // set arc to not deleted
+        if (verbose){
+            fprintf(stderr, "[debug::%s] rescued the arc between utg%.6d and utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
+        }
+        cnt++;
+    }
+
+    // clean up
+    free(color);
+    queue32_destroy(&q);
+
+    return cnt;  // count of rescue (by spot)
+}
+
 /////////////////// bidirectional graph SCC (broken, dont use until proven otherwise)/////////////////////
 /*
 note on the SCC thing: (Oct 25 2020)
@@ -1556,6 +2042,7 @@ void hamt_asgarc_ugTreatMultiLeaf(asg_t *sg, ma_ug_t *ug, int threshold_l){  // 
     //     remove arcs that have multiple arcs of the same direction on one side
     //     (aka try to resolve the web-like structure not much seen in other species)
     int verbose = 1;
+    double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu, nv, v, w;
@@ -1564,7 +2051,7 @@ void hamt_asgarc_ugTreatMultiLeaf(asg_t *sg, ma_ug_t *ug, int threshold_l){  // 
 
     for (vu=0; vu<auxsg->n_seq*2; vu++){
         flag = 0;
-        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0)<3 || hamt_asgarc_util_countSuc(auxsg, vu^1, 0, 0)>0){  // not the multi leaf
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0)<2 || hamt_asgarc_util_countPre(auxsg, vu, 0, 0)>0){  // not the multi leaf
             continue;
         }
         if (ug->u.a[vu>>1].len>threshold_l){  // tip too long
@@ -1584,7 +2071,7 @@ void hamt_asgarc_ugTreatMultiLeaf(asg_t *sg, ma_ug_t *ug, int threshold_l){  // 
         if (flag){
             nb_del_node++;
             if (verbose){
-                fprintf(stderr, "[debug::%s] trimmed utg%.6d\n", __func__, (int)vu>>1);
+                fprintf(stderr, "[debug::%s] trimmed utg%.6d\n", __func__, (int)(vu>>1)+1);
             }
         }
     }
@@ -1596,6 +2083,7 @@ void hamt_asgarc_ugTreatMultiLeaf(asg_t *sg, ma_ug_t *ug, int threshold_l){  // 
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] dropped %d links (%d nodes treated).\n", __func__, nb_del, nb_del_node);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 }
 
@@ -1606,6 +2094,7 @@ void hamt_asgarc_ugTreatMultiLeaf(asg_t *sg, ma_ug_t *ug, int threshold_l){  // 
 //               rescue circles (since SCC is broken, can't efficiently/reliably avoid cutting circles)
 void hamt_asgarc_ugTreatBifurcation(asg_t *sg, ma_ug_t *ug, int threshold_nread, int threshold_bp){
     int verbose = 1;
+    double startTime = Get_T();
     asg_t *auxsg = ug->g;
 
     uint8_t *color1 = (uint8_t*)calloc(auxsg->n_seq*2, 1);  // buffer for branching 1
@@ -1615,8 +2104,12 @@ void hamt_asgarc_ugTreatBifurcation(asg_t *sg, ma_ug_t *ug, int threshold_nread,
     queue32_init(&q2);
     uint32_t v0, v1, v2;  // unitig ID
     uint32_t va, vb, vc;  // vertex ID
-    int nb_cut = 0, nb_rescue = 0;
+    int nb_cut = 0, nb_rescue = 0, nb_skip = 0;
     int has_overlap = 0;
+
+    // for rescuing
+    uint8_t *color_sg = (uint8_t*)calloc(sg->n_seq*2, 1);
+    int *subg_labels = (int*)calloc(sg->n_seq*2, sizeof(int));
 
     // cut bifurcations
     for (v0=0; v0<auxsg->n_seq*2; v0++){
@@ -1663,7 +2156,7 @@ void hamt_asgarc_ugTreatBifurcation(asg_t *sg, ma_ug_t *ug, int threshold_nread,
         if (hamt_ugasgarc_util_BFS_mark(ug, v2, color2, &q2, threshold_nread, threshold_bp)){
             continue;
         }
-        // (if we reach here, v1 and v2 goes to different & long paths, cut the bifurcation)
+        // (if we reach here, v1 and v2 goes to different & long paths, consider cutting the bifurcation)
         uint32_t san_i;
         for (uint32_t i1=0; i1<auxsg->n_seq*2; i1++){
             if (color1[i1] && color2[i1]){
@@ -1679,26 +2172,57 @@ void hamt_asgarc_ugTreatBifurcation(asg_t *sg, ma_ug_t *ug, int threshold_nread,
             continue;
         }
 
-        // cut
+        // cut with circle sanchecks (the more careful way)
+        // if (hamt_asgarc_detect_circleDFS2(auxsg, v0, v1)==0){
+        //     hamt_ug_arc_del(sg, ug, v0, v1, 1);    
+        //     nb_cut++;
+        //     if (verbose){
+        //         fprintf(stderr, "[debug::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(v0>>1)+1, (int)(v1>>1)+1);
+        //     }
+        // }else{
+        //     nb_skip++;
+        // }
+        // if (hamt_asgarc_detect_circleDFS2(auxsg, v0, v0)==0){
+        //     hamt_ug_arc_del(sg, ug, v0, v2, 1);
+        //     nb_cut++;
+        //     if (verbose){
+        //         fprintf(stderr, "[debug::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(v0>>1)+1, (int)(v1>>1)+1);
+        //     }
+        // }else{
+        //     nb_skip++;
+        // }
+
+        // just cut (the more aggressive way)
         hamt_ug_arc_del(sg, ug, v0, v1, 1);
         hamt_ug_arc_del(sg, ug, v0, v2, 1);
-        nb_cut++;
-        if (verbose){
-            fprintf(stderr, "[debug::%s] cut between utg%.6d - utg%.6d/utg%.6d \n", __func__, (int)(v0>>1)+1, (int)(v1>>1)+1, (int)(v2>>1)+1);
-        }
+        fprintf(stderr, "the aggressive bifur cut: at utg%.6d, utg%.6d, utg%.6d\n", (int)(v0>>1)+1, (int)(v2>>1)+1, (int)(v2>>1)+1);
+        nb_skip++;
+        // // (exp: rescue at every cut)
+        // // (note: nope dont do it, doesn't work at all.)
+        // queue32_reset(&q1);  // repurpose
+        // memset(color_sg, 0, sg->n_seq*2*sizeof(uint8_t));
+        // memset(subg_labels, 0, sg->n_seq*2*sizeof(int));
+        // int max_label = hamt_asgarc_util_BFS_markSubgraph(sg, subg_labels, color_sg, &q1); // note: this is on the string graph
+        // int tmp_san;
+        // for (int label=0; label<max_label; label++){
+        //     nb_rescue += hamt_asgarc_rescueArcWithinCurrentSubgraph(sg, ug, v0);  // note: this is on the string graph
+        //     nb_rescue += hamt_asgarc_rescueArcWithinCurrentSubgraph(sg, ug, v1);
+        //     nb_rescue += hamt_asgarc_rescueArcWithinCurrentSubgraph(sg, ug, v2);
+        // }    
     }
 
     // rescue: if there was an arc linking two tips of the same unconnected subgraph, recover it
-    uint8_t *color_sg = (uint8_t*)calloc(sg->n_seq*2, 1);
-    int *subg_labels = (int*)calloc(sg->n_seq*2, sizeof(int));
-    queue32_reset(&q1);  // repurpose
-    int max_label = hamt_asgarc_util_BFS_markSubgraph(sg, subg_labels, color_sg, &q1); // note: this is on the string graph
-    for (int label=0; label<max_label; label++){
-        nb_rescue += hamt_asgarc_rescueArcWithinSubgraph(sg, NULL, subg_labels, label);  // note: this is on the string graph
-    }
+    // TODO: maybe this is useless if we have the above circle detection
+    //       it's also useless if a circle got more than 1 cut
+    // uint8_t *color_sg = (uint8_t*)calloc(sg->n_seq*2, 1);
+    // int *subg_labels = (int*)calloc(sg->n_seq*2, sizeof(int));
+    // queue32_reset(&q1);  // repurpose
+    // int max_label = hamt_asgarc_util_BFS_markSubgraph(sg, subg_labels, color_sg, &q1); // note: this is on the string graph
+    // for (int label=0; label<max_label; label++){
+    //     nb_rescue += hamt_asgarc_rescueArcWithinSubgraph(sg, NULL, subg_labels, label);  // note: this is on the string graph
+    // }
 
     // clean up
-    fprintf(stderr, "[M::%s] dropped bifurcation at %d locations; rescued %d arcs.\n", __func__, nb_cut, nb_rescue);
     if (nb_cut){
         asg_cleanup(sg);
         asg_cleanup(auxsg);
@@ -1712,6 +2236,10 @@ void hamt_asgarc_ugTreatBifurcation(asg_t *sg, ma_ug_t *ug, int threshold_nread,
     free(color2);
     free(subg_labels);
     free(color_sg);
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] dropped %d arcs at bifurcation point, skipped %d; rescued %d arcs.\n", __func__, nb_cut, nb_skip, nb_rescue);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
+    }
 }
 
 void hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug){
@@ -1719,34 +2247,53 @@ void hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug){
     int verbose = 1;
 
     asg_t *auxsg = ug->g;
-    uint32_t vu, wu;
+    uint32_t vu, wu, nv;
+    asg_arc_t *av;
     int nb_cut = 0;
+    int pass = 1;
     for (vu=0; vu<auxsg->n_seq*2; vu++){
         if (ug->u.a[vu>>1].len>30000){  // tip not short
             continue;
         }
-        if (!hamt_asgarc_util_isTip(auxsg, vu, 0, 0)){  // not a tip
-            continue;
-        }
-        wu = asg_arc_a(auxsg, vu)[0].v;
-        if (hamt_asgarc_util_countNoneTipSuc(auxsg, wu^1)==0){
-            if (verbose){
-                fprintf(stderr, "[debug::%s] spared tip: utg%.6d \n", __func__, (int)(vu>>1)+1);
-            }
-            continue;
-        }
-        hamt_ug_arc_del(sg, ug, vu, wu, 1);
-        nb_cut++;
 
-        if (verbose){
-            fprintf(stderr, "[debug::%s] cut tip: utg%.6d \n", __func__, (int)(vu>>1)+1);
+        // specify the tip direction: no predecessor, has sucessor
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0)==0 || hamt_asgarc_util_countPre(auxsg, vu, 0, 0)!=0){
+            continue;
+        }
+
+        // sancheck: don't drop tip if any of its sucessors has no target other than the tip
+        pass = 1;
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].del){continue;}
+            wu = av[i].v;
+            if (hamt_asgarc_util_countNoneTipSuc(auxsg, wu^1)==0){
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] spared tip: utg%.6d \n", __func__, (int)(vu>>1)+1);
+                }
+                pass = 0;
+                break;
+            }
+        }
+        if (!pass){
+            continue;
+        }
+
+        // cut
+        for (uint32_t i=0; i<nv ;i++){
+            if (av[i].del){continue;}
+            wu = av[i].v;
+            hamt_ug_arc_del(sg, ug, vu, wu, 1);
+            nb_cut++;
+            if (verbose){
+                fprintf(stderr, "[debug::%s] cut tip: utg%.6d \n", __func__, (int)(vu>>1)+1);
+            }
         }
     }
     if (nb_cut){
         asg_cleanup(sg);
         asg_cleanup(auxsg);
-        asg_symm(sg);
-        asg_symm(auxsg);
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] cut %d unitig tigs.\n", __func__, nb_cut);
@@ -1802,6 +2349,7 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug)
     // NOTE
     //     the graph is treated as if undirected, aka both directions will be touched when looking for child nodes
     int verbose = 1;
+    double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
     uint32_t v, w, nv;
@@ -1831,7 +2379,8 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug)
                 fprintf(stderr, "[debug::%s] bridge beween utg%.6d and utg%.6d\n", __func__, (int)(auxsg->arc[i].ul>>33)+1, (int)(auxsg->arc[i].v>>1)+1);
             }
         }
-        fprintf(stderr, "[debug::%s] %d out of %d arcs are bridge edges.\n", __func__, n_bridges, (int)auxsg->n_arc);
+        fprintf(stderr, "[M::%s] %d out of %d arcs are bridge edges.\n", __func__, n_bridges, (int)auxsg->n_arc);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 
     // check arcs
@@ -1864,7 +2413,7 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug)
         }
 
         // detect circles
-        if (hamt_asgarc_detect_circleDFS(auxsg, v, w)){  // note: v and w is ug with direction
+        if (hamt_asgarc_detect_circleDFS(auxsg, v, w, 0)){  // note: v and w is ug with direction
             if (hamt_asgarc_util_isTip(auxsg, v, 0, 0) && (hamt_asgarc_util_countSuc(auxsg, v, 0, 0)==1)){
                 // don't remove tips from circles
                 // (however, allow cutting if the tip is still connected to somewhere else)
@@ -1896,6 +2445,37 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug)
     free(low);
 }
 
+//////////////////////////////////////////////////////////
+//                   contig gen                         //
+//////////////////////////////////////////////////////////
+void hamt_ug_pop_simpleSoapBubble(asg_t *sg, ma_ug_t *ug){
+    // modified `drop_semi_circle`
+    // pop at the stem, not middle of the soap bubble
+
+    asg_t *auxsg = ug->g;
+    uint32_t vu, wu, uu, nvu;
+    asg_arc_t *avu;
+
+    for (vu=0; vu<auxsg->n_seq*2;vu++){
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0)==0 | hamt_asgarc_util_countPre(auxsg, vu, 0, 0)==0){
+            continue;
+        }
+        // seek to the left
+
+
+        // seek to the right
+
+
+        // is a soap bubble, remove arcs joining the stem
+
+        
+
+
+    }
+
+}
+
+
 
 //////////////////////////////////////////////////////////
 //                   interface                          //
@@ -1919,6 +2499,7 @@ void hamt_ug_pop_bubble(asg_t *sg,ma_ug_t *ug)
     // remove simple bubbles at unitig graph level
     // NOTE: only drop arcs, not deleting sequences
     int verbose = 1;
+    double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu[2], uu, nv;
@@ -1969,6 +2550,7 @@ void hamt_ug_pop_bubble(asg_t *sg,ma_ug_t *ug)
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] popped %d bubbles on unitig graph.\n", __func__, nb_cut);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
     // free(primary_flag);
 }
@@ -1979,6 +2561,7 @@ void hamt_ug_pop_miscbubble(asg_t *sg, ma_ug_t *ug){
     //   - multi-edge "bubbles"
     //   - not-strictly-a-bubble bubbles (i.e. start/end node has other linkage)
     int verbose = 1;
+    double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu[20], uu[20];
@@ -2037,9 +2620,9 @@ void hamt_ug_pop_miscbubble(asg_t *sg, ma_ug_t *ug){
                         fprintf(stderr, "[debug::%s] cut, u=utg%.6d, w=utg%.6d, u=utg%.6d\n", __func__,
                                           (int)(vu>>1)+1, (int)(wu[i2]>>1)+1, (int)(uu[i2]>>1)+1);
                     }
+                    nb_cut++;
                 }else{
                     flag = 1;
-                    nb_cut++;
                 }
             }
         }
@@ -2052,11 +2635,13 @@ void hamt_ug_pop_miscbubble(asg_t *sg, ma_ug_t *ug){
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] popped %d spots\n", __func__, nb_cut);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 }
 
-void hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug){
+int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug){
     int verbose = 1;
+    double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu, uu;
@@ -2092,5 +2677,112 @@ void hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug){
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] popped %d locations\n", __func__, nb_cut);
+        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
+    return nb_cut;
+}
+
+int hamt_sg_pop_simpleInvertBubble(asg_t *sg){
+    //  used by the hamt preclean
+    int verbose = 1;
+
+    uint32_t v, w, u;
+    int nb_cut = 0;
+
+    for (v=0; v<sg->n_seq*2; v++){
+        if (hamt_asgarc_util_checkSimpleInvertBubble(sg, v, &w, &u)){
+            asg_arc_del(sg, v, w, 1);
+            asg_arc_del(sg, w^1, v^1, 1);
+            asg_arc_del(sg, w, u, 1);
+            asg_arc_del(sg, u^1, w^1, 1);
+            nb_cut++;
+        }
+    }
+    if (nb_cut){
+        asg_cleanup(sg);
+    }
+    return nb_cut;
+}
+
+void hamt_ug_prectgTopoClean(asg_t *sg){
+    // note: will redo the unitig graph
+    // assume graph is clean
+    // pop all simple bubbles, apparent bubbles, pentagon bubbles (popping doesn't depend on coverage)
+    double startTime = Get_T();
+
+    ma_ug_t *ug = ma_ug_gen(sg);
+    asg_t *auxsg = ug->g;
+    uint32_t vu, wu, uu, nv;
+    asg_arc_t *av;
+    int nb_pop = 0, round = 0;
+
+    for (round=0; round<5; round++){
+        nb_pop = 0;
+        // 2-edge or multi-edge simple bubbles
+        for (vu=0; vu<auxsg->n_seq*2; vu++){
+            if (!hamt_asgarc_util_checkSimpleBubble_multiEddge(auxsg, vu, &uu)){
+                continue;
+            }
+            nv = asg_arc_n(auxsg, vu);
+            av = asg_arc_a(auxsg, vu);
+            int san = 0;
+            for (uint32_t i=0; i<nv; i++){
+                if (av[i].del){continue;}
+                if (hamt_asgarc_util_isTip(auxsg, av[i].v, 0, 0)){continue;}
+                wu = av[i].v;
+                hamt_ug_arc_del(sg, ug, vu, wu, 1);
+                hamt_ug_arc_del(sg, ug, wu, uu, 1);    
+                san++;
+                // fprintf(stderr, "ugpopdebug\tutg%.6d, utg%.6d, utg%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1, (int)(uu>>1)+1);
+            }
+            // keep the last edge
+            hamt_ug_arc_del(sg, ug, vu, wu, 0);
+            hamt_ug_arc_del(sg, ug, wu, uu, 0);
+            if (san>1){
+                // TODO: bug or not, this is probably caused by allowing tips and something was off
+                nb_pop++;
+            }
+        }
+        hamtdebug_add_fake_utg_coverage(ug);
+        hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 990+round);
+        free(ug->utg_coverage);
+        fprintf(stderr, "[M::%s] popped %d simple bubbles (round %d).\n", __func__, nb_pop, round);
+
+        // inverted simple bubbles
+        // nb_pop += hamt_ug_pop_simpleInvertBubble(sg, ug);
+
+        if (nb_pop==0){
+            ma_ug_destroy(ug);
+            if (VERBOSE){
+                fprintf(stderr, "[M::%s] (early termination at round %d)\n", __func__, round);
+            }
+            break;
+        }else{
+            asg_cleanup(sg);
+            ma_ug_destroy(ug); ug = ma_ug_gen(sg); auxsg = ug->g;
+            if (VERBOSE){
+                fprintf(stderr, "[M::%s] popped total %d locations (round %d).\n", __func__, nb_pop, round);
+                fprintf(stderr, "[T::%s] took %0.2fs.\n\n", __func__, Get_T()-startTime);
+
+            }
+        }
+    }
+
+}
+
+void hamt_ug_prectg_rescueShortCircuit(asg_t *sg, ma_ug_t *ug){
+    // exp
+    // addresses observations in the sheep datasets, where 2 apparent circles
+    //   are joined by one relatively short unitig (not necessarily 1-read)
+    //   if the ends of the circle actually overlap with each other, then ditch the short unitig and 
+    //   recover that arc (which was dropped during transitive reduction)
+    // FUNC
+    //    recover some arc
+    // NOTE
+    //    will regenerate the unitig graph, maybe several times
+    //    hopefully this doesn't mess up with other stuffs?
+    
+
+
+
 }

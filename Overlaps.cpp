@@ -13351,6 +13351,11 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex)
 
 void drop_semi_circle(ma_ug_t *ug, asg_t* nsg, asg_t* read_g, ma_hit_t_alloc* reverse_sources, R_to_U* ruIndex)
 {
+    // note: nst is ug->g aka the auxsg
+    // FUNC
+    //    break soap bubble
+    // NOTE
+    //    break the structure at an arbitrary point, not necessarily at the "stem"
     uint32_t v, n_vtx = nsg->n_seq*2, convex_f, convex_b, i, nv;
     long long ll, tmp, max_stop_nodeLen, max_stop_baseLen;
     asg_arc_t *av = NULL;
@@ -13360,17 +13365,19 @@ void drop_semi_circle(ma_ug_t *ug, asg_t* nsg, asg_t* read_g, ma_hit_t_alloc* re
 
     for (v = 0; v < n_vtx; ++v) 
     {
+        // require v to not be a tip
         if(get_real_length(nsg, v, NULL) == 0) continue;
         if(get_real_length(nsg, v^1, NULL) == 0) continue;
 
+        // check left side
         if(get_unitig(nsg, ug, v^1, &convex_b, &ll, &tmp, &max_stop_nodeLen, &max_stop_baseLen, 
                     1, NULL)!=MUL_INPUT)
         {
             continue;
         }
+        get_real_length(nsg, convex_b, &convex_b);  // convext_b now is the branching node on the left
 
-        get_real_length(nsg, convex_b, &convex_b);
-
+        // check right side
         av = asg_arc_a(nsg, v);
         nv = asg_arc_n(nsg, v);
         for (i = 0; i < nv; i++)
@@ -13382,10 +13389,11 @@ void drop_semi_circle(ma_ug_t *ug, asg_t* nsg, asg_t* read_g, ma_hit_t_alloc* re
             {
                 continue;
             }
-            get_real_length(nsg, convex_f, &convex_f);
+            get_real_length(nsg, convex_f, &convex_f);  // convex_f is the branching node on the right
             if(convex_f != convex_b) continue;
+            // if we reach here, v is in a "loop" (not a circle) whose "stem" or handle is convex_f (aka convex_b)
             if(check_different_haps(nsg, ug, read_g, v^1, av[i].v, 
-            reverse_sources, &b_0, &b_1, ruIndex, 2, 1) == PLOID)
+                                    reverse_sources, &b_0, &b_1, ruIndex, 2, 1) == PLOID)
             {
                 av[i].del = 1;
 		        asg_arc_del(nsg, av[i].v^1, v^1, 1);
@@ -26757,6 +26765,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 {
 	ma_sub_t *coverage_cut = *coverage_cut_ptr;
 	asg_t *sg = *sg_ptr;
+    ma_ug_t *tmp_ug;
 
     if(debug_g) goto debug_gfa;
 
@@ -26908,28 +26917,61 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         fprintf(stderr, "\n\n**********final clean**********\n");
     }
 
-    pre_clean(sources, coverage_cut, sg, bubble_dist);
+    // pre_clean(sources, coverage_cut, sg, bubble_dist);
+    hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // TESTING
+    tmp_ug = ma_ug_gen(sg);
+    hamt_collect_utg_coverage(sg, tmp_ug, coverage_cut, sources, ruIndex);
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 100); 
+
+
 
 
     asg_arc_del_short_diploi_by_suspect_edge(sg, asm_opt.max_short_tip);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 101); 
+
     asg_cut_tip(sg, asm_opt.max_short_tip);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 102); 
+
     asg_arc_del_triangular_directly(sg, asm_opt.max_short_tip, reverse_sources, ruIndex);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 103); 
+    
 
 
     asg_arc_identify_simple_bubbles_multi(sg, 0);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 104); 
+
     asg_arc_del_orthology_multiple_way(sg, reverse_sources, 0.4, asm_opt.max_short_tip, ruIndex);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 105); 
+
     asg_cut_tip(sg, asm_opt.max_short_tip);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 106); 
 
     
 
 
 
     asg_arc_identify_simple_bubbles_multi(sg, 0);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 107); 
+
     asg_arc_del_too_short_overlaps(sg, 2000, min_ovlp_drop_ratio, reverse_sources, 
-    asm_opt.max_short_tip, ruIndex);
+                                   asm_opt.max_short_tip, ruIndex);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 108); 
+
     asg_cut_tip(sg, asm_opt.max_short_tip);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 109); 
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
+    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 110); 
 
 
     if (asm_opt.flag & HA_F_VERBOSE_GFA)
@@ -26948,16 +26990,27 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     **/
  
     ///note: don't apply asg_arc_del_too_short_overlaps() after this function!!!!
-    rescue_contained_reads_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
-    mini_overlap_length, bubble_dist, 10, 1, 0, NULL, NULL);
-    rescue_missing_overlaps_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length,
-    mini_overlap_length, bubble_dist, 1, 0, NULL);
-    rescue_missing_overlaps_backward(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
-    mini_overlap_length, bubble_dist, 10, 1, 0);
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 111); 
+    // rescue_contained_reads_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
+    // mini_overlap_length, bubble_dist, 10, 1, 0, NULL, NULL);
+    // hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 112); 
+
+    // rescue_missing_overlaps_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length,
+    // mini_overlap_length, bubble_dist, 1, 0, NULL);
+    // hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 113); 
+
+    // rescue_missing_overlaps_backward(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
+    // mini_overlap_length, bubble_dist, 10, 1, 0);
+    // hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 114); 
     // rescue_wrong_overlaps_to_unitigs(NULL, sg, sources, reverse_sources, coverage_cut, ruIndex, 
     // max_hang_length, mini_overlap_length, bubble_dist, NULL);
     // rescue_no_coverage_aggressive(sg, sources, reverse_sources, &coverage_cut, ruIndex, max_hang_length, 
     // mini_overlap_length, bubble_dist, 10);
+    // hamt_destroy_utg_coverage(tmp_ug);
+    // ma_ug_destroy(tmp_ug);
 
     if (ha_opt_triobin(&asm_opt))
     {
@@ -26977,12 +27030,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     {
 
         if (asm_opt.is_use_exp_graph_cleaning){
+            int cleanID = 0;
 
             if(VERBOSE >= 1)  // debug
             {
                 char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
                 sprintf(unlean_name, "%s.beforeG", output_file_name);
-                output_read_graph(sg, coverage_cut, unlean_name, n_read);
+                // output_read_graph(sg, coverage_cut, unlean_name, n_read);
                 output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
                 free(unlean_name);
             }
@@ -26990,29 +27044,49 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             ma_ug_t *hamt_ug = ma_ug_gen(sg);
             hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
 
+            double startTime_hamt_topo = Get_T();
             // topo pre clean
             for (int i=0; i<3; i++){
                 hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
+                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
                 hamt_asgarc_ugTreatMultiLeaf(sg, hamt_ug, 30000);
+                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
                 hamt_ug_pop_miscbubble(sg, hamt_ug);  // dangerous?
+                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
                 hamt_ug_pop_simpleInvertBubble(sg, hamt_ug);
+                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            }
+            if (VERBOSE){
+                fprintf(stderr, "[T::hamtTopoclean] took %0.2f s\n\n", Get_T()-startTime_hamt_topo);
             }
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
             hamt_clean_shared_seq(sg, hamt_ug);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
             hamt_circle_cleaning(sg, hamt_ug);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
+            hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+
 
             hamt_destroy_utg_coverage(hamt_ug);
             ma_ug_destroy(hamt_ug);
         }
-
 
 
 
@@ -27023,9 +27097,15 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             output_read_graph(sg, coverage_cut, output_file_name, n_read);
         }
 
+
+        // more topo cleaning
+        hamt_ug_prectgTopoClean(sg);
+
+        // (ha's p_utg)
         output_contig_graph_primary_pre(sg, coverage_cut, output_file_name, sources, reverse_sources, 
         asm_opt.small_pop_bubble_size, asm_opt.max_short_tip, ruIndex, max_hang_length, mini_overlap_length);
 
+        // (ha's p_ctg)
         output_contig_graph_primary(sg, coverage_cut, output_file_name, sources, reverse_sources, 
         bubble_dist, (asm_opt.max_short_tip*2), 0.15, 3, ruIndex, 0.05, 0.9, max_hang_length,
         mini_overlap_length);
@@ -27038,47 +27118,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 }
 
 
-///////////////////////////////////// hamt debug etc //////////////////////////////////
-// void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
-//     fprintf(stderr, "Writing debug asg to disk... \n");
-//     double startTime = Get_T();
-//     char* index_name = (char*)malloc(strlen(read_file_name)+15);
-//     sprintf(index_name, "%s.dbg_asg", read_file_name);
-//     FILE* fp = fopen(index_name, "w");
-
-//     // asg64_v a = {0,0,0};
-// 	uint32_t n_vtx = sg->n_seq * 2, v, i;
-    
-//     uint32_t nv;
-//     asg_arc_t* av;
-
-//     // basic info of seqs
-//     for (i=0; i<rs->total_reads; i++){
-//         if (sg->seq[i].del) continue;
-//         fprintf(fp, "s\t%" PRIu32 "\t%f\t%" PRIu16 "\t%f\t%" PRIu8 "\t%" PRIu8 "\n",
-//                            i, rs->mean[i], rs->median[i], rs->std[i], rs->mask_readtype[i], rs->mask_readnorm[i]);
-//     }
-    
-//     // the graph
-// 	for (v = 0; v < n_vtx; ++v) {
-//         if (sg->seq[v>>1].del) continue;
-//         nv = asg_arc_n(sg, v);
-// 	    av = asg_arc_a(sg, v);
-//         if (nv==0) continue;
-//         for (i=0; i<nv; i++){
-//             if (av[i].del) continue;
-//             if (sg->seq[av[i].v>>1].del) continue;
-//             fprintf(fp, "l\t%" PRIu32 "\t%d\t%" PRIu32 "\t%d\t", v>>1, v&1, av[i].v>>1, av[i].v&1);  // vid, v_strand, wid, w_strand
-//             fprintf(fp, "%" PRIu8 "\n", sg->seq_vis[i]);
-//         }
-//     }
-
-//     fflush(fp);
-//     fclose(fp);
-//     fprintf(stderr, "[M::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
-//     free(index_name);
-// }
-/////////////////////////////end of hamt debug etc/////////////////////////////////////////
 
 void build_string_graph_without_clean(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
@@ -27139,3 +27178,4 @@ long long bubble_dist, int read_graph, int write)
 
     destory_R_to_U(&ruIndex);
 }
+

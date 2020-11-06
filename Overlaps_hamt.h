@@ -33,7 +33,11 @@ void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug);
 
 // interface: pre-contig-gen cleaning
 void hamt_ug_prectgTopoClean(asg_t *sg);
-void hamt_ug_prectg_rescueShortCircuit(asg_t *sg, ma_ug_t *ug);
+void hamt_ug_prectg_rescueShortCircuit(asg_t *sg, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
+                                        const ma_sub_t* coverage_cut);
+void hamt_ug_prectg_rescueLongUtg(asg_t *sg, 
+                                    ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
+                                    const ma_sub_t* coverage_cut);
 
 
 #endif // __OVERLAPS_HAMT__

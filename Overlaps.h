@@ -63,8 +63,8 @@ typedef struct {
 
 typedef struct {
 	ma_hit_t* buffer;
-    uint32_t size;
-    uint32_t length;
+    uint32_t size;  // buffer's size
+    uint32_t length;  // buffer's actual length
 	uint8_t is_fully_corrected;
 	uint8_t is_abnormal;
 } ma_hit_t_alloc;

@@ -26992,26 +26992,32 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             double startTime_hamt_topo = Get_T();
             // topo pre clean
-            for (int i=0; i<3; i++){
+            if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
+            for (int i=0; i<10; i++){
+                if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }
+                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO",cleanID); cleanID++;
+
                 hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
-                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
-                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
-
-                hamt_asgarc_ugTreatMultiLeaf(sg, hamt_ug, 30000);
-                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
-                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
-
-                hamt_ug_pop_miscbubble(sg, hamt_ug);  // dangerous?
-                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
-                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
-
+                // hamt_asgarc_ugTreatMultiLeaf(sg, hamt_ug, 50000);  // note: doesn't protect obvious end-of-path tips
+                hamt_ug_pop_miscbubble(sg, hamt_ug);
                 hamt_ug_pop_simpleInvertBubble(sg, hamt_ug);
-                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+
+                hamt_ug_pop_miscbubble_aggressive(sg, hamt_ug);
+
+
+                hamt_ug_pop_terminalSmallTip(sg, hamt_ug);
+                hamt_ug_pop_tinyUnevenCircle(sg, hamt_ug);
+
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
             }
             if (VERBOSE){
-                fprintf(stderr, "[T::hamtTopoclean] took %0.2f s\n\n", Get_T()-startTime_hamt_topo);
+                fprintf(stderr, "[T::hamtTopoclean total] took %0.2f s\n\n", Get_T()-startTime_hamt_topo);
             }
+
+
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterTOPO",cleanID); cleanID++;
+
+
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug);

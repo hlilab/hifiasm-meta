@@ -7,16 +7,24 @@ git clone https://github.com/xfengnefx/hifiasm-meta.git
 cd hifiasm-meta && make
 
 # Run
-hifiasm_meta -t32 --force-preovec -oasm reads.fq.gz 2>asm.log
+hifiasm_meta -t32 --force-preovec --exp-graph-cleaning -oasm reads.fq.gz 2>asm.log
 
-# (debug) include previous commit ID to bin files
+# (debug) to include previous commit ID to bin files
 (after git commit, do)
 ./stamp.sh; make
 ```
 
+## Current output files
+
+Raw unitig graph: asm.r\_utg\*.gfa
+
+Cleaned unitig graph: asm.p\_utg\*.gfa 
+
+Contig graph (WIP): asm.p\_ctg\*.gfa
+
 ## Special Notes
 
-Experimental routines are not efficient.
+IMPORTANT: some routines of the stable hifiasm might not present or are altered in this dev fork right now, even if you disable both read selection and experimental graph cleaning. 
 
 Certain commits may write excessive info to STDERR for dev/debug purposes (even without -V), please pipe to gzip if this is a concern.
 

@@ -11088,6 +11088,32 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int max_hang, int min_ovlp)
     kv_destroy(new_rtg_edges.a);
 }
 
+void hamt_output_unitig_graph(asg_t *sg, ma_sub_t* coverage_cut, char* output_file_name, const char *suffix,
+                              ma_hit_t_alloc* sources, R_to_U* ruIndex, int max_hang, int min_ovlp)
+{
+    kvec_asg_arc_t_warp new_rtg_edges;
+    kv_init(new_rtg_edges.a);
+
+    ma_ug_t *ug = NULL;
+    ug = ma_ug_gen(sg);
+    ma_ug_seq(ug, sg, &R_INF, coverage_cut, sources, &new_rtg_edges, max_hang, min_ovlp);
+
+    fprintf(stderr, "[M::%s] Writing GFA... \n", __func__);
+    char* gfa_name = (char*)malloc(strlen(output_file_name)+100);
+    sprintf(gfa_name, "%s.%s.gfa", output_file_name, suffix);
+    FILE* output_file = fopen(gfa_name, "w");
+    ma_ug_print(ug, &R_INF, sg, coverage_cut, sources, ruIndex, "utg", output_file);
+    fclose(output_file);
+    sprintf(gfa_name, "%s.%s.noseq.gfa", output_file_name, suffix);
+    output_file = fopen(gfa_name, "w");
+    ma_ug_print_simple(ug, &R_INF, sg, coverage_cut, sources, ruIndex, "utg", output_file);
+    fclose(output_file);
+
+    free(gfa_name);
+    ma_ug_destroy(ug);
+    kv_destroy(new_rtg_edges.a);
+}
+
 
 void merge_unitig_content(ma_utg_t* collection, ma_ug_t* ug, asg_t* read_g, kvec_asg_arc_t_warp* edge)
 {
@@ -26675,93 +26701,6 @@ int max_hang, int min_ovlp)
 }
 
 
-void hamt_clean_graph(int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
-                        long long n_read, uint64_t* readLen, long long mini_overlap_length, 
-                        long long max_hang_length, long long clean_round, long long gap_fuzz,
-                        float min_ovlp_drop_ratio, float max_ovlp_drop_ratio, char* output_file_name, 
-                        long long bubble_dist, int read_graph, R_to_U* ruIndex, asg_t **sg_ptr,   // the **sg_ptr is a NULL pointer
-                        ma_sub_t **coverage_cut_ptr)  // seems that `int debug_g` is a deprecated debug switch in ha's clean_graph
-{
-    // ~~~~~~~~~~~~init stuff (same as ha)~~~~~~~~~~~~~~~~ //
-    ma_sub_t *coverage_cut = *coverage_cut_ptr;
-	asg_t *sg = *sg_ptr;
-    renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
-    ///it's hard to say which function is better       
-    ///normalize_ma_hit_t_single_side(sources, n_read);
-    normalize_ma_hit_t_single_side_advance(sources, n_read);
-    normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
-    memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));  // no trio
-    
-    ///print_binned_reads(sources, n_read, coverage_cut);
-
-    clean_weak_ma_hit_t(sources, reverse_sources, n_read);
-    ///ma_hit_sub is just use to init coverage_cut,
-    ///it seems we do not need ma_hit_cut & ma_hit_flt
-    ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-    detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
-    ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-    ///print_binned_reads(sources, n_read, coverage_cut);
-    ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
-
-    ///fix_binned_reads(sources, n_read, coverage_cut);
-    ///just need to deal with trio here
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
-
-    ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
-
-    sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
-    asg_arc_del_trans(sg, gap_fuzz);
-    asm_opt.coverage = get_coverage(sources, coverage_cut, n_read);
-
-    if(VERBOSE >= 1)
-    {
-        char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-        sprintf(unlean_name, "%s.unclean", output_file_name);
-        output_read_graph(sg, coverage_cut, unlean_name, n_read);
-        output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-        free(unlean_name);
-    }
-
-    asg_cut_tip(sg, asm_opt.max_short_tip);
-    // ~~~~~~~~~~~~ end of init stuff (mostly same as ha)~~~~~~~~~~~~~~~~ //
-    
-
-    // ~~~~~~~~~~~~~~~~~~topo clean for several rounds~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-    if(clean_round > 0)
-    {
-        double cut_step; // used to update drop_ratio
-        if(clean_round == 1)  cut_step = max_ovlp_drop_ratio;
-        else cut_step = (max_ovlp_drop_ratio - min_ovlp_drop_ratio) / (clean_round - 1);
-
-        double drop_ratio = min_ovlp_drop_ratio;
-        int i = 0;
-        for (i = 0; i < clean_round; i++, drop_ratio += cut_step)  // main clean loop
-        {
-            drop_ratio = drop_ratio>max_ovlp_drop_ratio? max_ovlp_drop_ratio : drop_ratio;
-            if(VERBOSE >= 1)
-                {fprintf(stderr, "\n\n**********%d-th round drop: drop_ratio = %f**********\n", i, drop_ratio);}
-
-            // remove simple circles, simple bubbles, triangles, cross bubbles, and simple bubbles 
-            //  until no more such structures are presented
-            hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);// pre_clean(sources, coverage_cut, sg, bubble_dist);  
-        }
-    }
-    // ~~~~~~~~~~~~~~~~~~end of topo clean~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~final cleaning~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~end of final cleaning~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~rescue~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~end of rescue~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-
-    // ~~~~~~~~~~~~~~~~~~~write to files~~~~~~~~~~~~~~~~~~~~ //
-
-    // ~~~~~~~~~~~~~~~~~~~~ clean up ~~~~~~~~~~~~~~~~~~~~ // 
-}
-
-
 void clean_graph(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
 long long n_read, uint64_t* readLen, long long mini_overlap_length, 
@@ -26909,13 +26848,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             asg_cut_tip(sg, asm_opt.max_short_tip);
 
-            if(VERBOSE >= 1){  // debug: write temp graph
-                char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-                sprintf(unlean_name, "%s.afterRound%d", output_file_name, i);
-                output_read_graph(sg, coverage_cut, unlean_name, n_read);
-                output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-                free(unlean_name);
-            }
+            // if(VERBOSE >= 1){  // debug: write temp graph
+            //     char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+            //     sprintf(unlean_name, "%s.afterRound%d", output_file_name, i);
+            //     output_read_graph(sg, coverage_cut, unlean_name, n_read);
+            //     output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+            //     free(unlean_name);
+            // }
         }
     }
 
@@ -26928,36 +26867,36 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // TESTING
     tmp_ug = ma_ug_gen(sg);
     hamt_collect_utg_coverage(sg, tmp_ug, coverage_cut, sources, ruIndex);
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 100); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 100); 
 
 
 
 
     asg_arc_del_short_diploi_by_suspect_edge(sg, asm_opt.max_short_tip);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 101); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 101); 
 
     asg_cut_tip(sg, asm_opt.max_short_tip);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 102); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 102); 
 
     asg_arc_del_triangular_directly(sg, asm_opt.max_short_tip, reverse_sources, ruIndex);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 103); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 103); 
     
 
 
     asg_arc_identify_simple_bubbles_multi(sg, 0);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 104); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 104); 
 
     asg_arc_del_orthology_multiple_way(sg, reverse_sources, 0.4, asm_opt.max_short_tip, ruIndex);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 105); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 105); 
 
     asg_cut_tip(sg, asm_opt.max_short_tip);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 106); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 106); 
 
     
 
@@ -26965,20 +26904,20 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asg_arc_identify_simple_bubbles_multi(sg, 0);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 107); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 107); 
 
     asg_arc_del_too_short_overlaps(sg, 2000, min_ovlp_drop_ratio, reverse_sources, 
                                    asm_opt.max_short_tip, ruIndex);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 108); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 108); 
 
     asg_cut_tip(sg, asm_opt.max_short_tip);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 109); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 109); 
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
     hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 110); 
+    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 110); 
 
     hamt_destroy_utg_coverage(tmp_ug);
     ma_ug_destroy(tmp_ug);
@@ -27042,18 +26981,11 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     }
     else
     {
+        // r_utg
+        output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
 
         if (asm_opt.is_use_exp_graph_cleaning){
             int cleanID = 0;
-
-            if(VERBOSE >= 1)  // debug
-            {
-                char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-                sprintf(unlean_name, "%s.beforeG", output_file_name);
-                // output_read_graph(sg, coverage_cut, unlean_name, n_read);
-                output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-                free(unlean_name);
-            }
 
             ma_ug_t *hamt_ug = ma_ug_gen(sg);
             hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
@@ -27062,19 +26994,19 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // topo pre clean
             for (int i=0; i<3; i++){
                 hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
 
                 hamt_asgarc_ugTreatMultiLeaf(sg, hamt_ug, 30000);
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
 
                 hamt_ug_pop_miscbubble(sg, hamt_ug);  // dangerous?
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
 
                 hamt_ug_pop_simpleInvertBubble(sg, hamt_ug);
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
             }
             if (VERBOSE){
@@ -27083,48 +27015,43 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
 
             hamt_clean_shared_seq(sg, hamt_ug);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
 
             hamt_circle_cleaning(sg, hamt_ug);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
 
             hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
 
 
             hamt_destroy_utg_coverage(hamt_ug);
             ma_ug_destroy(hamt_ug);
         }
 
-
-
-        output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+        // (hifiasm's r_utg generation checkpoint)
+        // output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
 
         if(VERBOSE >= 1)
         {
             output_read_graph(sg, coverage_cut, output_file_name, n_read);
         }
 
-
         // more topo cleaning
         hamt_ug_prectgTopoClean(sg);
         hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, coverage_cut);
         hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, coverage_cut);
 
-        // (p_utg)
+        // (hifiasm's p_utg graph cleaning + generation checkpoint)
         // output_contig_graph_primary_pre(sg, coverage_cut, output_file_name, sources, reverse_sources, 
         // asm_opt.small_pop_bubble_size, asm_opt.max_short_tip, ruIndex, max_hang_length, mini_overlap_length);
-        ma_ug_t *tmpug = ma_ug_gen(sg);
-        hamt_collect_utg_coverage(sg, tmpug, coverage_cut, sources, ruIndex);
-        hamtdebug_output_unitig_graph_ug(tmpug, asm_opt.output_file_name, 999);
-        hamt_destroy_utg_coverage(tmpug);
-        ma_ug_destroy(tmpug);
+        hamt_output_unitig_graph(sg, coverage_cut, asm_opt.output_file_name, "p_utg",
+                                    sources, ruIndex, max_hang_length, mini_overlap_length);
 
         // (ha's p_ctg)
         output_contig_graph_primary(sg, coverage_cut, output_file_name, sources, reverse_sources, 

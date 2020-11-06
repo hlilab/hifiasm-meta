@@ -461,10 +461,11 @@ void hamt_destroy_utg_coverage(ma_ug_t *ug){
 void hamt_ug_regen(asg_t *sg, ma_ug_t **ug,
                     const ma_sub_t* coverage_cut,
                     ma_hit_t_alloc* sources, R_to_U* ruIndex){
-    hamt_destroy_utg_coverage(*ug);
-    ma_ug_destroy(*ug);
-    *ug = ma_ug_gen(sg);
-    hamt_collect_utg_coverage(sg, *ug, coverage_cut, sources, ruIndex);       
+    hamt_destroy_utg_coverage((*ug));
+    ma_ug_destroy((*ug));
+    ma_ug_t *tmpug = ma_ug_gen(sg);
+    (*ug) = tmpug;
+    hamt_collect_utg_coverage(sg, (*ug), coverage_cut, sources, ruIndex);       
 }
 
 
@@ -2239,6 +2240,8 @@ void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug){
         fprintf(stderr, "[M::%s] cut %d.\n", __func__, nb_cut);
         fprintf(stderr, "[T::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
     }
+    asg_cleanup(sg);
+    asg_cleanup(auxsg);
 
 }
 
@@ -2915,6 +2918,8 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug)
     free(tin);
     free(visited);
     free(low);
+    asg_cleanup(sg);
+    asg_cleanup(auxsg);
 }
 
 int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start_v, uint32_t end_v,
@@ -3386,7 +3391,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg){
 
 
         hamtdebug_add_fake_utg_coverage(ug);
-        hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 200+round);
+        // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 200+round);
         free(ug->utg_coverage);ug->utg_coverage = 0;
 
         if (nb_pop==0){
@@ -3394,7 +3399,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg){
             if (VERBOSE){
                 fprintf(stderr, "[M::%s] (early termination at round %d)\n", __func__, round);
             }
-            break;
+            return;
         }else{
             asg_cleanup(sg);
             ma_ug_destroy(ug); ug = ma_ug_gen(sg); auxsg = ug->g;
@@ -3405,6 +3410,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg){
             }
         }
     }
+    ma_ug_destroy(ug);
 
 }
 
@@ -3528,7 +3534,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
             }
         }
         hamtdebug_add_fake_utg_coverage(ug);
-        hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 210+round);
+        // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 210+round);
         free(ug->utg_coverage); ug->utg_coverage = 0;
         ma_ug_destroy(ug);
         asg_cleanup(sg);
@@ -3556,7 +3562,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
     uint8_t *color = (uint8_t*)calloc(auxsg->n_seq, 1);  // easier than fixing auxsg
 
     hamtdebug_add_fake_utg_coverage(ug);
-    hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 220);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 220);
     free(ug->utg_coverage); ug->utg_coverage = 0;
 
     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){  
@@ -3583,7 +3589,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
     }
 
     hamtdebug_add_fake_utg_coverage(ug);
-    hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 221);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 221);
     free(ug->utg_coverage);ug->utg_coverage = 0;
     ma_ug_destroy(ug);
     asg_cleanup(sg);

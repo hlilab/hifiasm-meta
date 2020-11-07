@@ -34,6 +34,8 @@ void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug);
 
 void hamt_ug_pop_tinyUnevenCircle(asg_t *sg, ma_ug_t *ug);
 void hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug);
+void hamt_ug_pop_simpleShortCut(asg_t *sg, ma_ug_t *ug);
+void hamt_ug_oneutgCircleCut(asg_t *sg, ma_ug_t *ug);
 
 // interface: pre-contig-gen cleaning
 void hamt_ug_prectgTopoClean(asg_t *sg);

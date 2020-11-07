@@ -26995,7 +26995,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             for (int i=0; i<10; i++){
                 if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }
-                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO",cleanID); cleanID++;
+                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "initalTOPO",cleanID); cleanID++;
 
                 hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
                 // hamt_asgarc_ugTreatMultiLeaf(sg, hamt_ug, 50000);  // note: doesn't protect obvious end-of-path tips
@@ -27007,6 +27007,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
                 hamt_ug_pop_terminalSmallTip(sg, hamt_ug);
                 hamt_ug_pop_tinyUnevenCircle(sg, hamt_ug);
+
+                hamt_ug_pop_simpleShortCut(sg, hamt_ug);
+                hamt_ug_oneutgCircleCut(sg, hamt_ug);
 
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
             }
@@ -27021,19 +27024,36 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug);
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
 
             hamt_clean_shared_seq(sg, hamt_ug);
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;
 
             hamt_circle_cleaning(sg, hamt_ug);
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
 
             hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug);
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, cleanID); cleanID++;
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;
+
+            {
+                hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
+                hamt_ug_pop_miscbubble(sg, hamt_ug);
+                hamt_ug_pop_simpleInvertBubble(sg, hamt_ug);
+
+                hamt_ug_pop_miscbubble_aggressive(sg, hamt_ug);
+
+                hamt_ug_pop_terminalSmallTip(sg, hamt_ug);
+                hamt_ug_pop_tinyUnevenCircle(sg, hamt_ug);
+
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
+
+                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;
+            }
 
 
             hamt_destroy_utg_coverage(hamt_ug);
@@ -27052,6 +27072,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         hamt_ug_prectgTopoClean(sg);
         hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, coverage_cut);
         hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, coverage_cut);
+        hamt_ug_oneutgCircleCut(sg, NULL);
 
         // (hifiasm's p_utg graph cleaning + generation checkpoint)
         // output_contig_graph_primary_pre(sg, coverage_cut, output_file_name, sources, reverse_sources, 

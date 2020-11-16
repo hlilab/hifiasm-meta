@@ -8168,7 +8168,6 @@ ma_ug_t *ma_ug_gen(asg_t *g)
 
 	ug = (ma_ug_t*)calloc(1, sizeof(ma_ug_t));
 	ug->g = asg_init();
-    ///each node has two directions
 	mark = (int32_t*)calloc(n_vtx, 4);
     int flag_circ = 0;
 
@@ -8319,17 +8318,20 @@ add_unitig:
 
 
 ma_ug_t *ma_ug_gen_primary(asg_t *g, uint8_t flag)
-{
+{   // in ha used by
+    //     label_tangles
+    //     recover_utg_by_coverage
+    //     output_contig_graph_primary_pre (p_utg)
+    //     output_contig_graph_primary (p_ctg)
+    //     output_contig_graph_alternative
     asg_cleanup(g);
 	int32_t *mark;
 	uint32_t i, v, n_vtx = g->n_seq * 2;
-	///is a queue
-	kdq_t(uint64_t) *q;
+	kdq_t(uint64_t) *q;  // queue
 	ma_ug_t *ug;
 
 	ug = (ma_ug_t*)calloc(1, sizeof(ma_ug_t));
 	ug->g = asg_init();
-    ///each node has two directions
 	mark = (int32_t*)calloc(n_vtx, 4);
 
     int flag_circ = 0;
@@ -8339,7 +8341,7 @@ ma_ug_t *ma_ug_gen_primary(asg_t *g, uint8_t flag)
     ///the last one may have multiple edges
 	q = kdq_init(uint64_t);
 	for (v = 0; v < n_vtx; ++v) {
-        int flag_circ = 0;
+        flag_circ = 0;
 		uint32_t w, x, l, start, end, len;
 		ma_utg_t *p;
         ///what's the usage of mark array
@@ -11676,6 +11678,7 @@ asg_t *read_sg, ma_hit_t_alloc* reverse_sources, R_to_U* ruIndex, uint32_t min_e
 int asg_arc_cut_trio_long_tip_primary(asg_t *g, ma_ug_t *ug, asg_t *read_sg, ma_hit_t_alloc* reverse_sources,
 R_to_U* ruIndex, uint32_t min_edge_length, float drop_ratio)
 {
+    // hamt note: g is auxsg
     double startTime = Get_T();
     ///the reason is that each read has two direction (query->target, target->query)
     uint32_t v, n_vtx = g->n_seq * 2, n_reduced = 0, convex, v_maxLen_i = (uint32_t)-1, flag, operation;
@@ -12865,8 +12868,10 @@ float drop_ratio)
         if(just_bubble_pop == 0)
         {
             ///need consider tangles
+            // (trim/cut tips except the longest one at each spot)
             asg_arc_cut_trio_long_tip_primary(g, ug, read_g, reverse_sources, ruIndex, 
             2, tip_drop_ratio);
+
             asg_arc_cut_trio_long_equal_tips_assembly(g, ug, read_g, reverse_sources, 2, ruIndex, (uint32_t)-1);
             asg_arc_cut_trio_long_tip_primary_complex(g, ug, read_g, reverse_sources, ruIndex,
             2, tip_drop_ratio, stops_threshold);
@@ -14964,8 +14969,12 @@ void destory_C_graph(C_graph* g)
 
 long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* coverage_cut, asg_t *g, long long circleLen, int is_drop)
 {
-    // hamt note: removes the link between any parent vertex of the node, 
-    //            and it's nearest downstream non-single path && non-end/long tig child vertex's reverse
+    // (hamt note) FUNC
+    //    treat the following topo for all vertices in g
+    //      given v, if v leads to a single path walk that ends at v, cut the arc of v^1->lastSinglePathNode
+    //      (v can have more than 2 predecessors)
+    // (hamt note) RETURN
+    //    total number of arcs cut
     uint32_t v, w, n_vtx = g->n_seq * 2, n_reduced = 0, convex, flag;
     long long ll/**, coverage**/;
     asg_arc_t *aw;
@@ -14973,7 +14982,7 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
     buf_t b;
     memset(&b, 0, sizeof(buf_t));
 
-    C_graph cg;
+    C_graph cg;  // hamt note: this is not used at all
     init_C_graph(&cg, g->n_seq);
 
     for (v = 0; v < n_vtx; ++v) 
@@ -14984,13 +14993,13 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
         // (skip if the seq itself deleted / marked)
         if (g->seq[v>>1].del) continue;
         if(is_drop && g->seq[v>>1].c == ALTER_LABLE) continue;
-        // (skip if has only 1 or no parent)
+        // (skip if has only 1 or no predecessor)
         if(get_real_length(g, v^1, NULL)<=1) continue;
 
         n_arc = get_real_length(g, v, NULL);  // number of targets of v
         if (n_arc != 1) continue;
 
-        for (i = 0; i < nv; i++)  // my note: this loop is probably just for the look: break is looks nicer than nested if-else
+        for (i = 0; i < nv; i++)  // hamt note: this loop is probably just for the look: break is looks nicer than nested if-else
         {
             ///actually there is just one un-del edge
             if (!av[i].del)
@@ -15008,9 +15017,9 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
                 if(flag != END_TIPS && flag != LONG_TIPS)  // possible tags: TWO/MUL_OUTPUT, TWO/MUL_INPUT
                 {
                     // if reach this point, either the endVertex (aka convex) has at least 2 children, or has at least 2 parents
-                    if(v == convex && b.b.n > 1)
+                    if(v == convex && b.b.n > 1)  // single path walk looped back to v, we want to step back 1 vertex
                     {
-                        convex = b.b.a[b.b.n - 2];
+                        convex = b.b.a[b.b.n - 2];  // -2 because it's index-1, aka n-1-1
                         b.b.n--;
                     }
 
@@ -15845,6 +15854,8 @@ uint32_t* r_next_uID, R_to_U* ruIndex)
     {
         return 0;
     }
+    //  hamt note:let beg not be in the middle of a single path,
+    //            or the beginning of that single path has multiple targets
     if(get_real_length(nsg, beg^1, NULL) == 1)
     {
         get_real_length(nsg, beg^1, &end);
@@ -21604,72 +21615,8 @@ void unroll_simple_case_advance(ma_ug_t *ug, asg_t* read_g, ma_hit_t_alloc* reve
         n_reduce = 0;
         ///break nearly circle, forget why...
         n_reduce += asg_arc_del_simple_circle_untig(NULL, NULL, nsg, 100, 0);
-        /**
-        for (v = 0; v < n_vtx; ++v) 
-        {
-            if (nsg->seq[v>>1].del) continue;
-            v_left = v;
-            if(asg_arc_n(nsg, v_left)<1) continue;
-            if(get_real_length(nsg, v_left, NULL)!=2) continue;
 
-            return_flag = get_unitig(nsg, NULL, v_left^1, &v_right, &ll, &tmp, &max_stop_nodeLen, 
-                            &max_stop_baseLen, 1, NULL);
-            if(return_flag == LOOP) continue;
-            if(return_flag != MUL_OUTPUT) continue;
-            if(asg_arc_n(nsg, v_right)<2) continue;
-            if(get_real_length(nsg, v_right, NULL)!=2) continue;
-            beg = end = (uint32_t)-1;
-
-            
-            aw = asg_arc_a(nsg, v_left);
-            nw = asg_arc_n(nsg, v_left);
-            is_found = 0;
-            for (i = 0, rnw = 0; i < nw; i++)
-            {
-                if(aw[i].del) continue;
-                rnw++;
-                if(aw[i].v == (v_right^1))
-                {
-                    is_found++;
-                    continue;
-                } 
-                beg = aw[i].v;
-            }
-            if(rnw != 2 || is_found != 1) continue;
-
-
-            aw = asg_arc_a(nsg, v_right);
-            nw = asg_arc_n(nsg, v_right);
-            is_found = 0;
-            for (i = 0, rnw = 0; i < nw; i++)
-            {
-                if(aw[i].del) continue;
-                rnw++;
-                if(aw[i].v == (v_left^1))
-                {
-                    is_found++;
-                    continue;
-                } 
-                end = aw[i].v;
-            }
-            if(rnw != 2 || is_found != 1) continue;
-            if((beg>>1) == (end>>1)) continue;
-            if(get_real_length(nsg, beg^1, NULL)!=1) continue;
-            if(get_real_length(nsg, end^1, NULL)!=1) continue;
-
-            asg_arc_del(nsg, v_left, v_right^1, 1);
-            asg_arc_del(nsg, v_right, v_left^1, 1);
-            n_reduce++;
-
-            // if(nsg->seq[v_left>>1].c!= ALTER_LABLE)
-            // {
-            //     fprintf(stderr, "Case3: v_left: %u, v_right: %u, w_left: %u, w_right: %u\n",
-            //     v_left>>1, v_right>>1, w_left>>1, w_right>>1);
-            // }
-        }
-        **/
-    
-        for (v = 0; v < n_vtx; ++v) 
+        for (v = 0; v < n_vtx; ++v)   // hamt note: using auxsg; read_g is only used when merging unitigs
         {
             if (nsg->seq[v>>1].del) continue;
             v_left = v;
@@ -21685,6 +21632,7 @@ void unroll_simple_case_advance(ma_ug_t *ug, asg_t* read_g, ma_hit_t_alloc* reve
 
             get_real_length(nsg, v_left, &w_left);
             get_real_length(nsg, v_right, &w_right);
+            // forbid circling
             if((v_left>>1)==(w_left>>1)||(v_left>>1)==(w_right>>1)) continue;
             if((v_right>>1)==(w_left>>1)||(v_right>>1)==(w_right>>1)) continue;
 
@@ -21696,6 +21644,7 @@ void unroll_simple_case_advance(ma_ug_t *ug, asg_t* read_g, ma_hit_t_alloc* reve
                 if(return_flag != MUL_OUTPUT) continue;
                 if(convex != (w_right^1)) continue;
 
+                // hamt note: if we reach here, w_left's single path loops all the way back to w_right^1
 
                 beg = end = (uint32_t)-1;
                 aw = asg_arc_a(nsg, w_left^1);
@@ -22431,6 +22380,7 @@ void append_utg(ma_ug_t* ptg, ma_ug_t* atg)
 
     if(num_nodes == 0) return;
 
+    // prepare memory
     ptg->u.n = ptg->u.n + num_nodes;
     if(ptg->u.n > ptg->u.m)
     {
@@ -22439,6 +22389,7 @@ void append_utg(ma_ug_t* ptg, ma_ug_t* atg)
     }
     ptg->u.n = ptg->u.n - num_nodes;
 
+    // migrate
     for (v = 0; v < atg->g->n_seq; ++v) 
     {
         if(atg->g->seq[v].del || atg->u.a[v].m == 0) continue;
@@ -22510,7 +22461,7 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex)
     ///print_untig_by_read(atg, "SRR11606870.634978", -1, NULL, NULL, "debug");
     long long R_bases = 0, C_bases = 0, C_bases_primary = 0, C_bases_alter = 0;
     long long total_C_bases = 0, total_C_bases_alter = 0;
-    for (v = 0; v < n_vtx; ++v) 
+    for (v = 0; v < n_vtx; ++v)  // hamt note: using atg's auxsg
     {
         if(nsg->seq[v].del) continue;
         u = &(atg->u.a[v]);
@@ -22583,13 +22534,13 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex)
         asg_symm(nsg);
         append_utg(*ptg, atg);
 
-
+        // reset sg's c labels
         n_vtx = read_g->n_seq;
         for (v = 0; v < n_vtx; v++)
         {
             read_g->seq[v].c = ALTER_LABLE;
         }
-        
+        // renew sg's c labels with contig graph (ptg)
         nsg = (*ptg)->g;
         n_vtx = nsg->n_seq;
         for (v = 0; v < n_vtx; ++v) 
@@ -22603,8 +22554,7 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex)
                 read_g->seq[rId].c = nsg->seq[v].c;
             }
         }
-
-
+        // delete reads that's not in the contig graph
         n_vtx = read_g->n_seq;
         for (v = 0; v < n_vtx; v++)
         {
@@ -22641,7 +22591,7 @@ kvec_asg_arc_t_warp* new_rtg_edges)
 
     drop_semi_circle((*ug), nsg, read_g, reverse_sources, ruIndex);
     asg_cleanup(nsg);
-    adjust_utg_advance(read_g, (*ug), reverse_sources, ruIndex);
+    adjust_utg_advance(read_g, (*ug), reverse_sources, ruIndex); // unroll_simple_case_advance and drop_semi_circle
      
     nsg = (*ug)->g;
     n_vtx = nsg->n_seq;
@@ -22649,15 +22599,19 @@ kvec_asg_arc_t_warp* new_rtg_edges)
     {
         if(nsg->seq[v].del) continue;
         nsg->seq[v].c = PRIMARY_LABLE;
-        EvaluateLen((*ug)->u, v) = (*ug)->u.a[v].n;
+        EvaluateLen((*ug)->u, v) = (*ug)->u.a[v].n; // ??????
     }
 
+    // bubble, tip and triangle treatments
     clean_primary_untig_graph(*ug, read_g, reverse_sources, bubble_dist, tipsLen, 
     tip_drop_ratio, stops_threshold, ruIndex, NULL, NULL, 0, 0, 0, 
     chimeric_rate, 0, 0, drop_ratio);
 
-    delete_useless_nodes(ug);
+    delete_useless_nodes(ug);  // completely remove seuqneces that: nsg->seq[v].c == ALTER_LABLE
     renew_utg(ug, read_g, new_rtg_edges);
+
+
+    #if 0
 
     if(asm_opt.purge_level_primary > 0)
     {
@@ -22754,7 +22708,7 @@ kvec_asg_arc_t_warp* new_rtg_edges)
     }
 
     recover_utg_by_coverage(ug, read_g, coverage_cut, sources, ruIndex);
-    
+    #endif
     /**
     kv_destroy(new_rtg_nodes.a);
     **/
@@ -26711,7 +26665,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 {
 	ma_sub_t *coverage_cut = *coverage_cut_ptr;
 	asg_t *sg = *sg_ptr;
-    ma_ug_t *tmp_ug;
 
     if(debug_g) goto debug_gfa;
 
@@ -26865,62 +26818,22 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     // pre_clean(sources, coverage_cut, sg, bubble_dist);
     hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // TESTING
-    tmp_ug = ma_ug_gen(sg);
-    hamt_collect_utg_coverage(sg, tmp_ug, coverage_cut, sources, ruIndex);
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 100); 
-
-
-
 
     asg_arc_del_short_diploi_by_suspect_edge(sg, asm_opt.max_short_tip);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 101); 
-
     asg_cut_tip(sg, asm_opt.max_short_tip);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 102); 
-
     asg_arc_del_triangular_directly(sg, asm_opt.max_short_tip, reverse_sources, ruIndex);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 103); 
-    
-
-
     asg_arc_identify_simple_bubbles_multi(sg, 0);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 104); 
-
     asg_arc_del_orthology_multiple_way(sg, reverse_sources, 0.4, asm_opt.max_short_tip, ruIndex);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 105); 
 
     asg_cut_tip(sg, asm_opt.max_short_tip);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 106); 
-
-    
-
-
-
     asg_arc_identify_simple_bubbles_multi(sg, 0);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 107); 
 
     asg_arc_del_too_short_overlaps(sg, 2000, min_ovlp_drop_ratio, reverse_sources, 
                                    asm_opt.max_short_tip, ruIndex);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 108); 
 
     asg_cut_tip(sg, asm_opt.max_short_tip);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 109); 
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
-    hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 110); 
-
-    hamt_destroy_utg_coverage(tmp_ug);
-    ma_ug_destroy(tmp_ug);
 
 
     if (asm_opt.flag & HA_F_VERBOSE_GFA)
@@ -26995,7 +26908,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             for (int i=0; i<10; i++){
                 if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "initalTOPO",cleanID); cleanID++;
+                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "initalTOPO",cleanID); cleanID++;
 
                 hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
                 // hamt_asgarc_ugTreatMultiLeaf(sg, hamt_ug, 50000);  // note: doesn't protect obvious end-of-path tips
@@ -27018,26 +26931,26 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             }
 
 
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterTOPO",cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterTOPO",cleanID); cleanID++;
 
 
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
 
             hamt_clean_shared_seq(sg, hamt_ug);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;
 
             hamt_circle_cleaning(sg, hamt_ug);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
 
             hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;
 
             {
                 hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
@@ -27052,7 +26965,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
 
 
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;
+                // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;
             }
 
 
@@ -27074,11 +26987,78 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, coverage_cut);
         hamt_ug_oneutgCircleCut(sg, NULL);
 
+        {  // one more round of basic topo cleaning
+            ma_ug_t *hamt_ug;
+            hamt_ug = ma_ug_gen(sg);
+            hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", 0);
+
+            hamt_ug_pop_bubble(sg, hamt_ug);  // note: include small tip cutting
+            hamt_ug_pop_miscbubble(sg, hamt_ug);
+            hamt_ug_pop_simpleInvertBubble(sg, hamt_ug);
+
+            hamt_ug_pop_miscbubble_aggressive(sg, hamt_ug);
+
+            hamt_ug_pop_terminalSmallTip(sg, hamt_ug);
+            hamt_ug_pop_tinyUnevenCircle(sg, hamt_ug);
+
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex);
+
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_after", 0);
+            hamt_destroy_utg_coverage(hamt_ug);
+            ma_ug_destroy(hamt_ug);
+            
+        }
+
+
+        /////////////exp
+        ma_ug_t *hamt_ug;
+        int nb_complex_bubble_cut;
+        for (int round_resolve=0; round_resolve<5; round_resolve++){
+            hamt_ug = ma_ug_gen(sg);
+            hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", round_resolve);
+            
+            nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug);
+            hamt_destroy_utg_coverage(hamt_ug);
+            ma_ug_destroy(hamt_ug);
+            if (nb_complex_bubble_cut==0){
+                fprintf(stderr, "debug, early termination of complex bubble pop (round %d)\n", round_resolve);
+                break;
+            }
+
+            hamt_ug = ma_ug_gen(sg);
+            hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
+            hamt_ug_pop_bubble(sg, hamt_ug);  // also cut tips
+            hamt_destroy_utg_coverage(hamt_ug);
+            ma_ug_destroy(hamt_ug);
+
+            hamt_ug = ma_ug_gen(sg);
+            hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
+            hamt_ug_resolve_oneMultiLeafSoapBubble(sg, hamt_ug);
+            hamt_destroy_utg_coverage(hamt_ug);
+            ma_ug_destroy(hamt_ug);
+
+        }
+
+        hamt_ug = ma_ug_gen(sg);
+        hamt_collect_utg_coverage(sg, hamt_ug, coverage_cut, sources, ruIndex);
+        hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeoneutgCircleCut2", 0);
+        hamt_ug_oneutgCircleCut2(sg, hamt_ug);
+        hamt_destroy_utg_coverage(hamt_ug);
+        ma_ug_destroy(hamt_ug);
+
+
         // (hifiasm's p_utg graph cleaning + generation checkpoint)
         // output_contig_graph_primary_pre(sg, coverage_cut, output_file_name, sources, reverse_sources, 
         // asm_opt.small_pop_bubble_size, asm_opt.max_short_tip, ruIndex, max_hang_length, mini_overlap_length);
         hamt_output_unitig_graph(sg, coverage_cut, asm_opt.output_file_name, "p_utg",
                                     sources, ruIndex, max_hang_length, mini_overlap_length);
+
+
+        ///////////////////////////// contig! //////////////////////////////
+        hamt_asg_reset_seq_label(sg, 0);
+        
 
         // (ha's p_ctg)
         output_contig_graph_primary(sg, coverage_cut, output_file_name, sources, reverse_sources, 

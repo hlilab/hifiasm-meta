@@ -1,6 +1,6 @@
 CXX=		g++
 CC=			gcc
-CXXFLAGS=	-g3 -O3 -msse4.2 -mpopcnt -fomit-frame-pointer -Wall -Wno-unused -Wno-unused-result #-fsanitize=address
+CXXFLAGS=	-g3 -O3 -msse4.2 -mpopcnt -fomit-frame-pointer -Wall -Wno-unused -Wno-unused-result -Wno-sign-compare #-fsanitize=address
 CFLAGS=		$(CXXFLAGS)
 CPPFLAGS=
 INCLUDES=

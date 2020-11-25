@@ -3888,6 +3888,7 @@ int hamt_ug_pop_tinyUnevenCircle(asg_t *sg, ma_ug_t *ug, int base_label, int alt
     asg_arc_t *av;
     int cov[4], diff0, diff1, diff2;
     int nb_cut = 0;
+    int san_flag;
 
     for (v[2]=0; v[2]<auxsg->n_seq*2; v[2]++){
         if (base_label>=0 && auxsg->seq_vis[v[2]>>1]!=base_label){continue;}
@@ -3923,25 +3924,37 @@ int hamt_ug_pop_tinyUnevenCircle(asg_t *sg, ma_ug_t *ug, int base_label, int alt
         // get v0 and v3
         nv = asg_arc_n(auxsg, v[1]);
         av = asg_arc_a(auxsg, v[1]);
+        san_flag = 0;
         for (uint32_t i=0; i<nv; i++){
             if (av[i].del) {continue;}
             if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label){continue;}
             if ((av[i].v>>1)==(v[2]>>1)) {continue;}
             v[0] = av[i].v;
+            san_flag = 1;
             break;
+        }
+        if (!san_flag) {
+            fprintf(stderr, "[E::%s] failed to get v0 when supposed to\n", __func__);
+            continue;
         }
         nv = asg_arc_n(auxsg, v[1]^1);
         av = asg_arc_a(auxsg, v[1]^1);
+        san_flag = 0;
         for (uint32_t i=0; i<nv; i++){
             if (av[i].del) {continue;}
             if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label){continue;}
             if ((av[i].v>>1)==(v[2]>>1)) {continue;}
             v[3] = av[i].v;
+            san_flag = 1;
             break;
+        }
+        if (!san_flag) {
+            fprintf(stderr, "[E::%s] failed to get v3 when supposed to\n", __func__);
+            continue;
         }
         
         // sancheck: v0 and v3 shall not be v1 or v2. 
-        if ((v[0]>>1)==(v[1]>>1) || (v[0]>>1)==(v[2]>>1) || (v[3]>>1)==(v[1]>>1) || (v[3]>>1)==(v[2]>>1)){
+        if ((v[0]>>1)==(v[1]>>1) || (v[0]>>1)==(v[2]>>1) || (v[3]>>1)==(v[1]>>1) || (v[3]>>1)==(v[2]>>1)){  // compiler note: is safe
             if (verbose>1) {fprintf(stderr, "[debug::%s]     failed 5\n", __func__);}
             continue;
         }

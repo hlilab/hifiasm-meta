@@ -26994,12 +26994,15 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // topo pre clean
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             for (int i=0; i<10; i++){
+                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;
                 if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeInitialTopoClean", cleanID); cleanID++;
-                hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0);
-                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                if (hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0)==0){
+                    if (VERBOSE) {fprintf(stderr, ">> topo cleaning early termination, round %d\n", i);}
+                    break;
+                }
             }
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug, 0);

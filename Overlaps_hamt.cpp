@@ -453,7 +453,7 @@ static inline void hamt_ug_arc_del(asg_t *sg, ma_ug_t *ug, uint32_t vu, uint32_t
     asg_arc_del(ug->g, wu^1, vu^1, del);
     ugasg_arc_del(sg, ug, vu, wu, del);
     ugasg_arc_del(sg, ug, wu^1, vu^1, del);
-    // fprintf(stderr, "droparc: utg%.6d->utg%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
+    fprintf(stderr, "- droparc: utg%.6d - utg%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
 }
 
 static inline void hamt_ug_utg_softdel(asg_t *sg, ma_ug_t *ug, uint32_t vu, int label){
@@ -465,8 +465,8 @@ static inline void hamt_ug_utg_softdel(asg_t *sg, ma_ug_t *ug, uint32_t vu, int 
     }
     ug->u.a[vu>>1].c = label;
     ug->g->seq_vis[vu>>1] = label;  // note seq_vis is actually n_seq*2 long
-    if (ug->u.a[vu>>1].len>100000){  // debug
-        fprintf(stderr, "softdel: utg%.6d\n", (int)(vu>>1)+1);
+    if (ug->u.a[vu>>1].len>0){  // debug
+        fprintf(stderr, "- softdel: utg%.6d (length %d), to label %d\n", (int)(vu>>1)+1, (int)ug->u.a[vu>>1].len, label);
     }
 }
 
@@ -3162,7 +3162,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     // NOTE
     //    not sure if this is always correct. Haven't seen it break in practice, but have no proof.
 
-    int verbose = 2;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu, v_tmp, nv, nw;
@@ -3398,7 +3398,7 @@ int hamt_ug_pop_complexBubble(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t 
     //    (does hamt need alternative ctg? yes)
     // RETURN
     //     number of dropped arcs
-    int verbose = 2;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     int nb_cut = 0;
@@ -4770,7 +4770,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, 
                                           int base_label, int alt_label, int is_hard_drop){
-    int verbose = 2;
+    int verbose = 0;
 
     // ma_ug_t *ug = ma_ug_gen(sg);
     asg_t *auxsg = ug->g;

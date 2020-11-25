@@ -73,7 +73,7 @@ typedef struct {
 void init_ma_hit_t_alloc(ma_hit_t_alloc* x);
 void clear_ma_hit_t_alloc(ma_hit_t_alloc* x);
 void resize_ma_hit_t_alloc(ma_hit_t_alloc* x, uint32_t size);
-void destory_ma_hit_t_alloc(ma_hit_t_alloc* x);
+void destory_ma_hit_t_alloc(ma_hit_t_alloc* x, long long total_reads);  // hamt note: the original has memory leak? (x is an array of ma_hit_t_alloc, not one ma_hit_t_alloc, but the original implementation called one free() on the pointer.)
 void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element);
 void ma_hit_sort_tn(ma_hit_t *a, long long n);
 void ma_hit_sort_qns(ma_hit_t *a, long long n);
@@ -114,6 +114,8 @@ typedef struct {
 	uint32_t m, n; // number of reads
 	uint64_t *a; // list of reads
 	char *s; // unitig sequence is not null
+	uint8_t c;  // hamt: like seq's .c
+	uint8_t subg_label;  // hamt: subgraph ID
 } ma_utg_t;
 
 
@@ -132,16 +134,12 @@ typedef struct {
 	asg_seq_t *seq;
 	uint64_t *idx;
 
-	uint8_t* seq_vis;
+	uint8_t* seq_vis;  // hamt note: size is g->n_seq*2, always calloc-ed. hamt recycles this for primary/alt labelling
 
 	uint32_t n_F_seq;
 	ma_utg_t* F_seq;
 
 	//hamt
-	uint8_t *whitelist, *blacklist;  // blacklist for nodes with 2 directions available (we want to avoid messing up the graph's traversal direction)
-	uint32_t *v2vu;
-	uint32_t usg_n_seq;
-	uint8_t *consist;  // consistency (in the sense of bidirected graph), 0 is unmarked/not determined yet(if marking is finished, 0 should be interpreted as 1), 1 is consistent, 2 is inconsistent
 } asg_t;
 
 asg_t *asg_init(void);
@@ -1093,6 +1091,7 @@ int asg_arc_del_single_node_directly(asg_t *g, long long longLen_thres, ma_hit_t
 
 void ma_ug_destroy(ma_ug_t *ug);
 ma_ug_t *ma_ug_gen(asg_t *g);
+ma_ug_t *ma_ug_gen_primary(asg_t *g, uint8_t flag);
 uint32_t get_ug_coverage(ma_utg_t* u, asg_t* read_g, const ma_sub_t* coverage_cut, 
 						 ma_hit_t_alloc* sources, R_to_U* ruIndex, uint8_t* r_flag);
 int get_arc(asg_t *g, uint32_t src, uint32_t dest, asg_arc_t* result);

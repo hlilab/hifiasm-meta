@@ -1547,8 +1547,8 @@ long long readNum, long long rescue_threshold, float cluster_threshold)
 void hap_recalculate_peaks(char* output_file_name)
 {
     destory_read_bin(&R_INF);
-    destory_ma_hit_t_alloc(R_INF.paf);
-    destory_ma_hit_t_alloc(R_INF.reverse_paf);
+    destory_ma_hit_t_alloc(R_INF.paf, R_INF.total_reads);
+    destory_ma_hit_t_alloc(R_INF.reverse_paf, R_INF.total_reads);
 
     char* gfa_name = (char*)malloc(strlen(output_file_name)+25);
 	sprintf(gfa_name, "%s.ec", output_file_name);

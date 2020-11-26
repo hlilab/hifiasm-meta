@@ -5441,8 +5441,8 @@ ma_hit_t_alloc* reverse_sources, long long min_edge_length, R_to_U* ruIndex)
         return -1;
     }
 
-    buf_t* b_min;  // nodes in the shorter edge
-    buf_t* b_max;  // nodes in the longer edge
+    buf_t* b_min;  // nodes in the shorter walk
+    buf_t* b_max;  // nodes in the longer walk
     if(l1<=l2)
     {
         b_min = &b_0;
@@ -5754,7 +5754,7 @@ float hap_rate, buf_t* b_0, buf_t* b_1, int if_drop, R_to_U* ruIndex)
     {
         untigID_a = b_min->b.a[i_a_1]>>1;
         node_a = &(ut_v->a[untigID_a]);
-        for (i_a_2 = 0; i_a_2 < node_a->n; i_a_2++)
+        for (i_a_2 = 0; i_a_2 < node_a->n; i_a_2++)  // iterate over the unitig's reads
         {
             qn = node_a->a[i_a_2]>>33;
 

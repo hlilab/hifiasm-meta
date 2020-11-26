@@ -103,7 +103,7 @@ typedef struct {
 	uint32_t ol:31, del:1;
 	uint8_t strong;
 	uint8_t el;
-	uint8_t no_l_indel;
+	uint8_t no_l_indel;  // whether the edge has a large indel
 	uint8_t is_bridge;  // hamt experimental
 } asg_arc_t;
 

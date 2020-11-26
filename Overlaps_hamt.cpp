@@ -4001,8 +4001,11 @@ int hamt_ug_pop_tinyUnevenCircle(asg_t *sg, ma_ug_t *ug, int base_label, int alt
 
 int hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
     // FUNC
-    //    if all targets of a unitig are tips
+    //    if all targets of a unitig are tips (*tips that's only connect to this one unitig!)
     //    keep only the longest one
+    // NOTE
+    //    doesn't care about haplotype, just arbitrarily take the longest one.
+    //    Name says "small" but isn't doing length check; in meta they just appeared to be all rather short.
     int verbose = 0;
 
     asg_t *auxsg = ug->g;

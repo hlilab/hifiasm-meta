@@ -1428,6 +1428,52 @@ void Output_PAF()
     fprintf(stderr, "PAF has been written.\n");
 }
 
+void Output_reversePAF()
+{
+    fprintf(stderr, "Writing reverse PAF to disk ...... \n");
+    char* paf_name = (char*)malloc(strlen(asm_opt.output_file_name)+50);
+    sprintf(paf_name, "%s.ovlp.rev.paf", asm_opt.output_file_name);
+    FILE* output_file = fopen(paf_name, "w");
+    uint64_t i, j;
+    ma_hit_t_alloc* sources = R_INF.reverse_paf;
+
+    for (i = 0; i < R_INF.total_reads; i++)
+    {
+        for (j = 0; j < sources[i].length; j++)
+        {
+            fwrite(Get_NAME(R_INF, Get_qn(sources[i].buffer[j])), 1, 
+            Get_NAME_LENGTH(R_INF, Get_qn(sources[i].buffer[j])), output_file);
+            fwrite("\t", 1, 1, output_file);
+            fprintf(output_file, "%lu\t", (unsigned long)Get_READ_LENGTH(R_INF, Get_qn(sources[i].buffer[j])));
+            fprintf(output_file, "%d\t", Get_qs(sources[i].buffer[j]));
+            fprintf(output_file, "%d\t", Get_qe(sources[i].buffer[j]));
+            if(sources[i].buffer[j].rev)
+            {
+                fprintf(output_file, "-\t");
+            }
+            else
+            {
+                fprintf(output_file, "+\t");
+            }
+            fwrite(Get_NAME(R_INF, Get_tn(sources[i].buffer[j])), 1, 
+            Get_NAME_LENGTH(R_INF, Get_tn(sources[i].buffer[j])), output_file);
+            fwrite("\t", 1, 1, output_file);
+            fprintf(output_file, "%lu\t", (unsigned long)Get_READ_LENGTH(R_INF, Get_tn(sources[i].buffer[j])));
+            fprintf(output_file, "%d\t", Get_ts(sources[i].buffer[j]));
+            fprintf(output_file, "%d\t", Get_te(sources[i].buffer[j]));
+            fprintf(output_file, "%d\t", sources[i].buffer[j].ml);
+            fprintf(output_file, "%d\t", sources[i].buffer[j].bl);
+            fprintf(output_file, "255\n");
+
+        }
+    }
+
+    free(paf_name);
+    fclose(output_file);
+
+    fprintf(stderr, "PAF has been written.\n");
+}
+
 int check_cluster(uint64_t* list, long long listLen, ma_hit_t_alloc* paf, float threshold)
 {
     long long i, k;
@@ -1617,7 +1663,7 @@ int ha_assemble(void)
 		if (!(asm_opt.flag & HA_F_SKIP_TRIOBIN) && !(asm_opt.flag & HA_F_VERBOSE_GFA)) ha_triobin(&asm_opt);
         ///if (!(asm_opt.flag & HA_F_SKIP_TRIOBIN)) ha_triobin(&asm_opt), ovlp_loaded = 2;
 		if (asm_opt.flag & HA_F_WRITE_EC) Output_corrected_reads();
-		if (asm_opt.flag & HA_F_WRITE_PAF) Output_PAF();
+		if (asm_opt.flag & HA_F_WRITE_PAF) { Output_PAF(); Output_reversePAF();}
         if (asm_opt.het_cov == -1024) hap_recalculate_peaks(asm_opt.bin_base_name), ovlp_loaded = 2;
 
         debug_printstat_read_status(&R_INF);
@@ -1693,7 +1739,7 @@ int ha_assemble(void)
 		ha_print_ovlp_stat(R_INF.paf, R_INF.reverse_paf, R_INF.total_reads);
 
 		ha_ft_destroy(ha_flt_tab);
-		if (asm_opt.flag & HA_F_WRITE_PAF) Output_PAF();
+		if (asm_opt.flag & HA_F_WRITE_PAF) {Output_PAF(); Output_reversePAF();}
 		ha_triobin(&asm_opt);
 	}
     if(ovlp_loaded == 2) ovlp_loaded = 0;

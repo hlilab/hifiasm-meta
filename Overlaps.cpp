@@ -9268,6 +9268,7 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, uint8_t* r_flag)
 {
     uint32_t k, j, rId, tn, is_Unitig;
     long long R_bases = 0, C_bases = 0;
+    long long ret;
     ma_hit_t *h;
     if(u->m == 0) return 0;
 
@@ -9305,7 +9306,9 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, uint8_t* r_flag)
         r_flag[rId] = 0;
     }
 
-    return C_bases/R_bases;
+    ret = C_bases/R_bases;
+    ret = ret==0? 1 :ret;  // waterproof division by zero
+    return ret;
 }
 
 void ma_ug_print2(const ma_ug_t *ug, All_reads *RNF, asg_t* read_g, const ma_sub_t *coverage_cut, 
@@ -27070,6 +27073,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
 
+            // hap cov cut
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", 0);
+            hamt_ug_treatBifurcation_hapCovCut(sg, hamt_ug, 0.7, 0.5, reverse_sources, 0, 1);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_destroy(hamt_ug);
         }  
 

@@ -453,7 +453,7 @@ static inline void hamt_ug_arc_del(asg_t *sg, ma_ug_t *ug, uint32_t vu, uint32_t
     asg_arc_del(ug->g, wu^1, vu^1, del);
     ugasg_arc_del(sg, ug, vu, wu, del);
     ugasg_arc_del(sg, ug, wu^1, vu^1, del);
-    // fprintf(stderr, "droparc: utg%.6d->utg%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
+    fprintf(stderr, "- droparc: utg%.6d - utg%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
 }
 
 static inline void hamt_ug_utg_softdel(asg_t *sg, ma_ug_t *ug, uint32_t vu, int label){
@@ -465,8 +465,8 @@ static inline void hamt_ug_utg_softdel(asg_t *sg, ma_ug_t *ug, uint32_t vu, int 
     }
     ug->u.a[vu>>1].c = label;
     ug->g->seq_vis[vu>>1] = label;  // note seq_vis is actually n_seq*2 long
-    if (ug->u.a[vu>>1].len>100000){  // debug
-        fprintf(stderr, "softdel: utg%.6d\n", (int)(vu>>1)+1);
+    if (ug->u.a[vu>>1].len>0){  // debug
+        fprintf(stderr, "- softdel: utg%.6d (length %d), to label %d\n", (int)(vu>>1)+1, (int)ug->u.a[vu>>1].len, label);
     }
 }
 
@@ -705,6 +705,62 @@ uint32_t asg_arc_get_complementaryID(asg_t *sg, asg_arc_t *arc){
     }
     fprintf(stderr, "[%s] unexpected.\n", __func__);
     exit(1);
+}
+
+int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
+                       ma_hit_t_alloc *reverse_sources)
+{
+    // FUNC
+    //     (similar to check_if_diploid)
+    //     Check if vu1 and vu2 appears to be haplotigs.
+    // NOTE
+    //     Doesn't do topo check for vu1 and vu2. 
+    //     The caller is responsible for checking topo context.
+    // RETURN
+    //     -1 if no hit at all
+    //     1 if yes
+    //     0 if no
+    asg_t *auxsg = ug->g;
+    uint32_t vu_short, vu_long;
+    uint32_t qn, qn2, tn;
+    int nb_targets;
+    int found, cnt_total=0, cnt_hit=0;
+    float ratio = ratio0<0? 0.3 : ratio0;
+    
+    if (ug->u.a[vu1>>1].len < ug->u.a[vu2>>1].len){
+        vu_short = vu1;
+        vu_long = vu2;
+    }else{
+        vu_short = vu2;
+        vu_long = vu1;
+    }
+
+    for (int i=0; i<ug->u.a[vu_short>>1].n; i++){  // iterate over reads in the shorter unitig
+        qn = ug->u.a[vu_short>>1].a[i]>>33;
+
+        // check if there's any read in the other unitig that targets the read 
+        found = 0;
+        for (int j=0; j<ug->u.a[vu_long>>1].n; j++){  // iterate over reads in the other unitig
+            qn2 = ug->u.a[vu_long>>1].a[j]>>33;
+            nb_targets = reverse_sources[qn2].length;
+            for (int i_target=0; i_target<nb_targets; i_target++) {  // check all existed inter-haplotype targets of this read
+                if (reverse_sources[qn2].buffer[i_target].tn == qn){
+                    found = 1;
+                    break;
+                }
+            }
+            if (found){break;}
+        }
+
+        // update stats
+        cnt_total++;
+        if (found){
+            cnt_hit++;
+        }
+    }
+    if (cnt_hit==0){return -1;}
+    if ((float)cnt_hit/cnt_total > ratio ){return 1;}
+    return 0;
 }
 
 /////////////////////////
@@ -2897,6 +2953,49 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
     return nb_cut;
 }
 
+int hamt_ug_cut_shortTips_arbitrary(asg_t *sg, ma_ug_t *ug, int max_length, int base_label){
+    // FUNC
+    //     cut simple tips shorter than max_length, regardless of whether their targets have no non-tip linkage
+    // NOTE
+    //     this is meant to be a companion of complex bubble resolve function,
+    //     some very short tip may remain after cutting and they may not get treatment
+    //     if the complex bubble handle is a tip && is the given tip's target's predecessor.
+    //     like
+    /*
+                     ---(complex bubble edges).........
+                    /              .....               \
+         start(tip)-------v1 (->complex bubble edges)..end------
+                           \
+                            ---v0(THE TIP   )
+        (since v1^1 apparently has no non-tip targets, v0 will be spared by `hamt_ug_cut_shortTips`,
+         which would let this complex bubble remain unresolved in the next round.)
+    */
+    asg_t *auxsg = ug->g;
+    int nb_cut = 0;
+    uint32_t nv;
+    asg_arc_t *av;
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (ug->u.a[vu>>1].len>max_length){continue;}
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)==0){continue;}
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (uint32_t i=0; i<nv; i++){
+            // don't need to check stuff, simply call arc del is fine.
+            hamt_ug_arc_del(sg, ug, vu, av[i].v, 1);
+        }
+        nb_cut++;
+    }
+    if (nb_cut){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] dropped %d tips (length threshold is %d)\n", __func__, nb_cut, max_length);
+    }
+    return nb_cut;
+}
+
+
 void hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t v, uint32_t v_parent, int *DFStime, uint8_t *visited, int *tin, int *low, int base_label){
     // initended to be called (only) by hamt_asgarc_markBridges
     uint32_t w;
@@ -3162,7 +3261,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     // NOTE
     //    not sure if this is always correct. Haven't seen it break in practice, but have no proof.
 
-    int verbose = 2;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu, v_tmp, nv, nw;
@@ -3398,7 +3497,7 @@ int hamt_ug_pop_complexBubble(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t 
     //    (does hamt need alternative ctg? yes)
     // RETURN
     //     number of dropped arcs
-    int verbose = 2;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     int nb_cut = 0;
@@ -4104,6 +4203,8 @@ int hamt_ug_pop_simpleShortCut(asg_t *sg, ma_ug_t *ug, int base_label, int alt_l
         // check topo (the targeting on v2)
         if (hamt_asgarc_util_get_the_one_target(auxsg, v1, &w, 0, 0, base_label)<0){fprintf(stderr, "ERROR %s\n", __func__); fflush(stderr); exit(1);}
         if (w==v2){
+            // check length: otherwise might break stuff
+            if (ug->u.a[v1>>1].len>50000){continue;}
             // cut
             if (is_hard_drop){
                 hamt_ug_arc_del(sg, ug, v0, v1, 1);
@@ -4773,7 +4874,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, 
                                           int base_label, int alt_label, int is_hard_drop){
-    int verbose = 2;
+    int verbose = 0;
 
     // ma_ug_t *ug = ma_ug_gen(sg);
     asg_t *auxsg = ug->g;
@@ -4838,6 +4939,7 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
     int tip_round = 0;
     while (nb_cut_tip>0 || nb_cut_tiny_circle>0){
         nb_cut_tip = hamt_ugasg_cut_shortTips(sg, ug, base_label, alt_label, is_hard_drop);
+        nb_cut_tip += hamt_ug_cut_shortTips_arbitrary(sg, ug, 30000, base_label);
         nb_cut_tiny_circle = hamt_ug_pop_tinyUnevenCircle(sg, ug, base_label, alt_label, is_hard_drop);
         if (VERBOSE){
             fprintf(stderr, "[M::%s] topo clean up, dropped %d tips, %d tiny uneven circles (round %d)\n", __func__, nb_cut_tip, nb_cut_tiny_circle, tip_round);
@@ -4906,6 +5008,99 @@ int hamt_ug_resolve_small_multileaf_with_covcut(asg_t *sg, ma_ug_t *ug, int max_
     }
     return nb_cut;
 }
+
+
+int hamt_ug_treatBifurcation_hapCovCut(asg_t *sg, ma_ug_t *ug, float covdiff_ratio, float haplo_ratio, 
+                                        ma_hit_t_alloc *reverse_sources,
+                                        int base_label, int alt_label){
+    // FUNC
+    //    if vertex vu has 2 targets and they appeart to form a pair of haplotigs,
+    //    check coverage, if one of the targets appears to have a compatible coverage with vu,
+    //    cut the other arc.
+    // RETURN
+    //    nb_cut
+    int verbose = 0;
+
+    asg_t *auxsg = ug->g;
+    int nb_cut = 0, san, idx;
+    uint32_t wu[2], nv;
+    asg_arc_t *av;
+
+    float r1, r2;  // for checking coverage diff
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        // specify topo: forward bifurcation
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=2){continue;}
+        san = 0;
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].del){continue;}
+            if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label){continue;}
+            if (san>=2){
+                fprintf(stderr, "[E::%s] sancheck failed (1); skip and continue. (san: %d)\n", __func__, san);
+            }
+            wu[san] = av[i].v;
+            san++;
+        }
+        if (san!=2){
+            fprintf(stderr, "[E::%s] sancheck failed (2); skip and continue. (san: %d)\n", __func__, san);
+            continue;
+        }
+
+        // only treat long unitigs
+        if (ug->u.a[vu>>1].len<100000 || ug->u.a[wu[0]>>1].len<100000 || ug->u.a[wu[1]>>1].len<100000){continue;}
+
+
+        if (verbose) {fprintf(stderr, "[debug::%s] at utg%.6d, targeting utg%.6d and utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(wu[0]>>1)+1, (int)(wu[1]>>1)+1);}
+
+        // check coverage
+        // (don't check haplo if coverage won't fulfill the criteira anyway)
+        if (ug->utg_coverage[vu>>1] < ug->utg_coverage[wu[0]>>1]){
+            r1 = (float)ug->utg_coverage[vu>>1]/ug->utg_coverage[wu[0]>>1];
+        }else{
+            r1 = (float)ug->utg_coverage[wu[0]>>1]/ug->utg_coverage[vu>>1];
+        }
+        if (ug->utg_coverage[vu>>1] < ug->utg_coverage[wu[1]>>1]){
+            r2 = (float)ug->utg_coverage[vu>>1]/ug->utg_coverage[wu[1]>>1];
+        }else{
+            r2 = (float)ug->utg_coverage[wu[1]>>1]/ug->utg_coverage[vu>>1];
+        }
+        if (r1<covdiff_ratio && r2<covdiff_ratio){
+            if (verbose) {fprintf(stderr, "[debug::%s]     didn't pass coverage check\n", __func__);}
+            continue;
+        }
+        if (r1>=covdiff_ratio && r2>=covdiff_ratio){
+            if (verbose) {fprintf(stderr, "[debug::%s]     both passed coverage check, don't touch to be safe\n", __func__);}
+            continue;
+        }
+        idx = r1>r2? 1:0;  // wu[idx] is the target with more coverage diff
+        if (verbose) {fprintf(stderr, "[debug::%s]     coverage check: might remove utg%.6d\n", __func__, (int)(wu[idx]>>1)+1);}
+        
+        // check if the two form a pair of haplotigs
+        if (hamt_check_diploid(ug, wu[0], wu[1], haplo_ratio, reverse_sources)>0){
+            // cut
+            hamt_ug_arc_del(sg, ug, vu, wu[idx], 1);
+            // hamt_ug_utg_softdel(sg, ug, wu[idx], alt_label);  // DON'T!
+            nb_cut++;
+            if (verbose) {fprintf(stderr, "[debug::%s]     CUT\n", __func__);}
+        }else{
+            if (verbose) {fprintf(stderr, "[debug::%s]     didn't pass hap check\n", __func__);}
+        }
+        
+    }
+    if (nb_cut){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] treated %d spots\n", __func__, nb_cut);
+    }
+    return nb_cut;
+}
+
+
+
 
 int hamt_ug_basic_topoclean(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
     int nb_cut = 0;

@@ -27071,15 +27071,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeRescueAggressive", 0);
             hamt_ug_prectg_rescueShortCircuit_simpleAggressive(sg, hamt_ug, sources, reverse_sources, coverage_cut, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
 
             // hap cov cut
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", 0);
             hamt_ug_treatBifurcation_hapCovCut(sg, hamt_ug, 0.7, 0.5, reverse_sources, 0, 1);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
+            hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
             hamt_ug_destroy(hamt_ug);
         }  
 

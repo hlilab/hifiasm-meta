@@ -406,7 +406,7 @@ int stack32_is_in_stack(stacku32_t *stack, uint32_t d){
 //                        helper routines                           //
 //////////////////////////////////////////////////////////////////////
 
-int does_ovlp_ever_exist(ma_hit_t_alloc *sources, uint32_t v0, uint32_t w0, ma_hit_t **h0){
+int does_ovlp_ever_exist(ma_hit_t_alloc *sources, uint32_t v0, uint32_t w0, ma_hit_t **h0, ma_hit_t **h0_rev){
     // NOTE
     //     sources is effectively R_INF.paf
     // FUNC
@@ -414,17 +414,32 @@ int does_ovlp_ever_exist(ma_hit_t_alloc *sources, uint32_t v0, uint32_t w0, ma_h
     // RETURN
     //     1 if yes
     //     0 if no
-    ma_hit_t *h;
-    for (uint32_t i=0; i<sources->length; i++){
-        h = &sources->buffer[i];
-        if ( ((uint32_t)(h->qns>>32)) == (v0>>1) ){
-            if ( h->tn == (w0>>1) ){
-                // TODO should check directions etc
-                *h0 = h;
-                return 1;
-            }
+    int verbose = 1;
+
+    int nb_targets;
+    int found = 0;
+    // v0 to w0
+    nb_targets = sources[v0>>1].length;
+    for (int i=0; i<nb_targets; i++){
+        if (sources[v0>>1].buffer[i].tn==(w0>>1)){
+            if (verbose){fprintf(stderr, "[debug::%s] found (direction 1)\n", __func__);}
+            found++;
+            *h0 = &sources[v0>>1].buffer[i];
+            break;
         }
     }
+    // w0^1 to v0^1
+    nb_targets = sources[w0>>1].length;
+    for (int i=0; i<nb_targets; i++){
+        if (sources[w0>>1].buffer[i].tn==(v0>>1)){
+            if (verbose){fprintf(stderr, "[debug::%s] found (direction 2)\n", __func__);}
+            found++;
+            *h0_rev = &sources[w0>>1].buffer[i];
+            break;
+        }
+    }
+    if (found==2){return 1;}
+    if (verbose){fprintf(stderr, "[debug::%s] failed\n", __func__);}
     return 0;
 }
 
@@ -3148,8 +3163,8 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
     asg_cleanup(auxsg);
 }
 
-int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start_v, uint32_t end_v,
-                                    ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
+int hamt_ug_recover_ovlp_if_existed_core(asg_t *sg, ma_ug_t *ug, uint32_t start_v, uint32_t end_v,
+                                    ma_hit_t_alloc *sources, 
                                     const ma_sub_t* coverage_cut, int yes_recover_it){
     // NOTE
     //    start_v and end_v are vertex IDs (with direction)
@@ -3157,94 +3172,137 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start_v, ui
     // FUNC
     //    check if overlap ever existed, push or not push it back to the asg
     // RETURN
-    //    1 upon detected/recovered an now removed overlap
-    //    0 if not
+    //    1 if an arc can be or was recovered 
+    //    0 if overlap existed, but the arc is suboptimal (e.g. containment)
+    //    -1 if overlap was not available
+    int verbose = 1;
+    if (verbose){
+        fprintf(stderr, "[debug::%s] start %.*s, end %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, start_v>>1), Get_NAME(R_INF, start_v>>1),
+                                                                        (int)Get_NAME_LENGTH(R_INF, end_v>>1), Get_NAME(R_INF, end_v>>1));
+    }
+
     int yes_push_arc = 0, yes_push_arc_rev = 0;
-    ma_hit_t *h, *h_rev;
-    for (int i_source=0; i_source<R_INF.total_reads; i_source++){
-        if (does_ovlp_ever_exist(&sources[i_source], end_v, start_v, &h)){
-            yes_push_arc = 1;
-        }else if (does_ovlp_ever_exist(&reverse_sources[i_source], end_v, start_v, &h)){
-            yes_push_arc = 1;
-        }
-        if (yes_push_arc){
-            break;
-        }
+    ma_hit_t *h=NULL, *h_rev=NULL;
+    if (does_ovlp_ever_exist(sources, end_v, start_v, &h, &h_rev)){
+        yes_push_arc = 1;
+    }else{
+        return -1;
     }
-    if (yes_push_arc){
-        asg_arc_t t, *p;
-        int ql = coverage_cut[Get_qn(*h)].e - coverage_cut[Get_qn(*h)].s;
-        int tl = coverage_cut[Get_tn(*h)].e - coverage_cut[Get_tn(*h)].s;
-        int r = ma_hit2arc(h, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
+    if (!h || !h_rev) {return 0;}  // (suppress compiler warning)
+    asg_arc_t t, *p;
+    int ql = coverage_cut[Get_qn(*h)].e - coverage_cut[Get_qn(*h)].s;
+    int tl = coverage_cut[Get_tn(*h)].e - coverage_cut[Get_tn(*h)].s;
+    int r = ma_hit2arc(h, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
+    if (r>=0){
+        // push the 1st direction to the asg
+        if (yes_recover_it){
+            p = asg_arc_pushp(sg);
+            *p = t;
+        }
+        // push the other direction
+        ql = coverage_cut[Get_qn(*h_rev)].e - coverage_cut[Get_qn(*h_rev)].s;
+        tl = coverage_cut[Get_tn(*h_rev)].e - coverage_cut[Get_tn(*h_rev)].s;
+        r = ma_hit2arc(h_rev, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
         if (r>=0){
-            // check the other direction (it should exist)
-            for (int i_source=0; i_source<R_INF.total_reads; i_source++){
-                if (does_ovlp_ever_exist(&sources[i_source], start_v^1, end_v^1, &h_rev)){
-                    yes_push_arc_rev = 1;
-                }else if (does_ovlp_ever_exist(&reverse_sources[i_source], start_v^1, end_v^1, &h_rev)){
-                    yes_push_arc_rev = 1;
-                }
-                if (yes_push_arc_rev){
-                    break;
-                }
+            if (yes_recover_it){
+                p = asg_arc_pushp(sg);
+                *p = t;
             }
-            if (!yes_push_arc_rev){
-                fprintf(stderr, "[W::%s] found only 1 side of an overlap, continue anyway\n", __func__);
-            }else{  // okay, recover the overlap
-                // push the 1st direction to the asg
-                if (yes_recover_it){
-                    p = asg_arc_pushp(sg);
-                    *p = t;
-                }
-                // push the other direction
-                ql = coverage_cut[Get_qn(*h_rev)].e - coverage_cut[Get_qn(*h_rev)].s;
-                tl = coverage_cut[Get_tn(*h_rev)].e - coverage_cut[Get_tn(*h_rev)].s;
-                r = ma_hit2arc(h_rev, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
-                if (r>=0){
-                    if (yes_recover_it){
-                        p = asg_arc_pushp(sg);
-                        *p = t;
-                    }
-                    return 1;
-                }else{
-                    fprintf(stderr, "error at %s (a)\n", __func__);
-                }
-            }
+            fprintf(stderr, "[debug::%s] success\n", __func__);
+            return 1;
         }else{
-            fprintf(stderr, "error at %s (b)\n", __func__);
+            fprintf(stderr, "[W::%s] tried to recover arc via a not-so-good overlap (a)\n", __func__);
+            return 0;
         }
-    }
-    return 0;
-    
+    }else{
+        fprintf(stderr, "[W::%s] tried to recover arc via a not-so-good overlap (b)\n", __func__);
+        return 0;
+    }    
 }
 
-int hamt_ug_recover_ovlp_if_existed2(asg_t *sg, ma_ug_t *ug, uint32_t vu,
-                                    ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
-                                    const ma_sub_t* coverage_cut, int yes_recover_it){
+
+int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint32_t end,
+                                    ma_hit_t_alloc *sources, 
+                                    const ma_sub_t* coverage_cut, int search_span){
     // FUNC
-    //    wrapper of hamt_ug_recover_ovlp_if_existed, 
-    //    instead of checking only the start and end vertex of ONE unitig, not a unitig single path
+    //     check if vu could've formed a circle, and modify arcs accordingly if so
+    // PAR
+    //     search_span : how many reads to search if the overlap of start/end pair 
+    //                     is suboptimal (e.g. containment) & couldn't directly form the arc.
+    // NOTE
+    //     Topo context of vu will NOT be checked; caller is responsible for sanchecks.
+    //     Will search more than start/end vertex - since we can't add arc if the overlap was containment etc.
+    //       if all recoverble overlaps were not ideal, do nothing.
+    //     After recovering the arc, also trim off reads involved in containment. (reads will be DELETED)
     // RETURN
-    //    1 upon detected/recovered an now removed overlap
-    //    0 if not
-    // NOTE / TODO
-    //    this was intended to be used on a long unitig (like >1Mb), (by `hamt_ug_prectg_rescueLongUtg`)
-    int verbose = 0;
+    //     1 upon covereing an arc (+cleanup)
+    //     0 if no termination criteria met, but ran out of search_span
+    //     -1 if we shouldn't recover stuff
+    int verbose = 1;
 
-    uint32_t start_v, end_v, v, w, u;
+    uint32_t v, w, v_start, v_end;
+    asg_t *auxsg = ug->g;
+    int status;
 
-    start_v = ug->u.a[vu>>1].start;
-    end_v = ug->u.a[vu>>1].end^1;
-    v =start_v;
-    w = end_v;
-
-    // check if there's anything
-    if (hamt_ug_recover_ovlp_if_existed(sg, ug, v, w, sources, reverse_sources, coverage_cut, yes_recover_it)>0){
+    v = start;
+    w = end;
+    status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 1);
+    if (status<0){
+        return -1;
+    }else if (status>0){
         return 1;
     }
-        
+    if (search_span<0){  // for more generic usage
+        return 0;
+    }
+
+    // there was overlap, but wasn't able to form the arc
+    // search other pairs: step at the unitig end
+    if (hamt_asgarc_util_countSuc(sg, v^1, 0, 0, -1)!=1){return 0;}  // assuming v is the end^1 vertex of a unitig (w is a unitig start)
+    if (hamt_asgarc_util_get_the_one_target(sg, v^1, &v, 0, 0, -1)<0) {
+        fprintf(stderr, "[W::%s] hamt_asgarc_util_get_the_one_target failed\n", __func__);
+        return -1;
+    }
+    v ^= 1;
+    for (int i=0; i<search_span-1; i++){
+        status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 1);
+        if (status>0){
+            return 1;
+        }else if (status<0){  // encounter any non-overlapping pairs and we're done
+            break;
+        }
+        if (hamt_asgarc_util_countSuc(sg, v^1, 0, 0, -1)!=1){return 0;}
+        if (hamt_asgarc_util_get_the_one_target(sg, v^1, &v, 0, 0, -1)<0) {
+            fprintf(stderr, "[W::%s] hamt_asgarc_util_get_the_one_target failed\n", __func__);
+            return -1;
+        }
+        v ^= 1;
+    }
+
+    v = start;
+    w = end;
+    // search other pairs: step at the unitig start
+    if (hamt_asgarc_util_countSuc(sg, w, 0, 0, -1)!=1){return 0;}  // assuming v is the end^1 vertex of a unitig (w is a unitig start)
+    if (hamt_asgarc_util_get_the_one_target(sg, w, &w, 0, 0, -1)<0) {
+        fprintf(stderr, "[W::%s] hamt_asgarc_util_get_the_one_target failed\n", __func__);
+        return -1;
+    }
+    for (int i=0; i<search_span-1; i++){
+        status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 1);
+        if (status>0){
+            return 1;
+        }else if (status<0){  // encounter any non-overlapping pairs and we're done
+            return -1;
+        }
+        if (hamt_asgarc_util_countSuc(sg, w, 0, 0, -1)!=1){return 0;}
+        if (hamt_asgarc_util_get_the_one_target(sg, w, &w, 0, 0, -1)<0) {
+            fprintf(stderr, "[W::%s] hamt_asgarc_util_get_the_one_target failed\n", __func__);
+            return -1;
+        }
+    }
     return 0;
 }
+
 
 //////////////////////////////////////////////////////////////
 //               resolve tangles etc                        //
@@ -4722,7 +4780,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
                         fprintf(stderr, "[debug::%s]     start vertex is %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, start_v>>1), Get_NAME(R_INF, start_v>>1));
                     }
                     // check if overlap ever existed
-                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, start_v, end_v, sources, reverse_sources, coverage_cut, 1)>0){
+                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, 5)>0){
                         // drop old links
                         hamt_ug_arc_del(sg, ug, vu, wu, 1);
                         hamt_ug_arc_del(sg, ug, wu, uu, 1);
@@ -4792,7 +4850,7 @@ void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug,
                     // check if there's ever an overlap 
                     v = ug->u.a[wu>>1].start;
                     w = ug->u.a[wu>>1].end^1;
-                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, v, w, sources, reverse_sources, coverage_cut, 1)>0){
+                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, w, v, sources, coverage_cut, 5)>0){
                         if (verbose){
                             fprintf(stderr, "[debug::%s] treated utg%.6d\n", __func__, (int)(wu>>1)+1);
                         }
@@ -4828,7 +4886,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
     //    if a long unitig is not connected and non-circular,
     //    try the ends and add a link if there was an overlap in the paf
     //    Obviously more aggressive than hamt_ug_prectg_rescueShortCircuit, which required more topo checks. 
-    int verbose = 0;
+    int verbose = 1;
 
     ma_ug_t *ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
     asg_t *auxsg = ug->g;
@@ -4851,8 +4909,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
         if (verbose) {fprintf(stderr, "rescueLong\tat utg%.6d\n", (int)(vu>>1)+1);}
         start_v = ug->u.a[vu>>1].start;
         end_v = ug->u.a[vu>>1].end^1;
-        if (hamt_ug_recover_ovlp_if_existed(sg, ug, start_v, end_v, sources, reverse_sources, coverage_cut, 1)>0){
-        // if (hamt_ug_recover_ovlp_if_existed2(sg, ug, 10, vu, sources, reverse_sources, coverage_cut, 1)>0){  // SLOW, check the first few and last few reads
+        if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, 20)>0){
             nb_treated++;
             color[vu>>1] = 1;
             if (verbose){
@@ -4862,8 +4919,13 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
     }
 
     // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 221);
+    if (nb_treated){
+        free(sg->idx);
+        sg->idx = 0;
+        sg->is_srt = 0;
+        asg_cleanup(sg);
+    }
     hamt_ug_destroy(ug);
-    asg_cleanup(sg);
 
     free(color);
     if (VERBOSE){

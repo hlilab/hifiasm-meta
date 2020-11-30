@@ -27081,6 +27081,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ugasg_cut_shortTips(sg, hamt_ug, 0, 1, 0);
+            hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             hamt_ug_destroy(hamt_ug);
         }  

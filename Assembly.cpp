@@ -569,6 +569,7 @@ static void worker_ovec(void *data, long i, int tid)
     ////////////////////////////////
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 	int fully_cov, abnormal;
+    int e1, e2;
 
 	ha_get_new_candidates(b->ab, i, &b->self_read, &b->olist, &b->clist, 0.02, asm_opt.max_n_chain, 1);
     ///ha_get_new_candidates(b->ab, i, &b->self_read, &b->olist, &b->clist, 0.08, asm_opt.max_n_chain, 1);
@@ -586,9 +587,14 @@ static void worker_ovec(void *data, long i, int tid)
 	push_cigar(R_INF.cigars, i, &b->cigar1);
 	push_cigar(R_INF.second_round_cigar, i, &b->round2.cigar);
 
+    e1 = get_cigar_errors(&b->cigar1);
+    e2 = get_cigar_errors(&b->round2.cigar);
+    R_INF.nb_error_corrected[i] += (uint16_t)e1 + (uint16_t)e2;
+
 	R_INF.paf[i].is_fully_corrected = 0;
 	if (fully_cov) {
-		if (get_cigar_errors(&b->cigar1) == 0 && get_cigar_errors(&b->round2.cigar) == 0)
+		// if (get_cigar_errors(&b->cigar1) == 0 && get_cigar_errors(&b->round2.cigar) == 0)
+        if (e1==0 && e2==0)
 			R_INF.paf[i].is_fully_corrected = 1;
 	}
 	R_INF.paf[i].is_abnormal = abnormal;
@@ -1720,6 +1726,8 @@ int ha_assemble(void)
 
 		// error correction
 		assert(asm_opt.number_of_round > 0);
+        R_INF.nb_error_corrected = (uint16_t*)calloc(R_INF.total_reads, sizeof(uint16_t));
+        fprintf(stderr, "alloc %d uint16_t\n", (int)R_INF.total_reads);
 		for (r = 0; r < asm_opt.number_of_round; ++r) {
 			ha_opt_reset_to_round(&asm_opt, r); // this update asm_opt.roundID and a few other fields
 			ha_overlap_and_correct(r, asm_opt.preovec_coverage);

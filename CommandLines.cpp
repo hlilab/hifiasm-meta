@@ -44,6 +44,8 @@ static ko_longopt_t long_options[] = {
     { "lowq-3", ko_required_argument, 411}, // lower 3% quantile threshold,
     { "preovec", ko_no_argument, 412},  // switch
 
+    { "debug-gfa", ko_no_argument, 413},  // write intermediate gfa files
+
     { 0, 0, 0 }
 };
 
@@ -165,6 +167,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->lowq_thre_10 = 150;
     asm_opt->lowq_thre_5 = -1;  // disable
     asm_opt->lowq_thre_3 = -1;  // disable
+    asm_opt->write_debug_gfa = 0;  // disable
     // end of hamt
 }
 
@@ -501,6 +504,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 410) {asm_opt->lowq_thre_5 = atoi(opt.arg);asm_opt->is_preovec_readselection = 1; }
         else if (c == 411) {asm_opt->lowq_thre_3 = atoi(opt.arg);asm_opt->is_preovec_readselection = 1; }
         else if (c == 412) {asm_opt->is_preovec_readselection = 1; }
+        else if (c == 413) {asm_opt->write_debug_gfa = 1;}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

@@ -51,7 +51,7 @@ Levenshtein_distance.o: Levenshtein_distance.h
 Output.o: Output.h CommandLines.h
 Overlaps.o: Overlaps.h kvec.h kdq.h ksort.h Process_Read.h CommandLines.h
 Overlaps.o: Hash_Table.h htab.h Correct.h Levenshtein_distance.h POA.h
-Overlaps.o: Purge_Dups.h Overlaps_hamt.h
+Overlaps.o: Purge_Dups.h Overlaps_hamt.h kthread.h
 POA.o: POA.h Hash_Table.h htab.h Process_Read.h Overlaps.h kvec.h kdq.h
 POA.o: CommandLines.h Correct.h Levenshtein_distance.h
 Process_Read.o: Process_Read.h Overlaps.h kvec.h kdq.h CommandLines.h

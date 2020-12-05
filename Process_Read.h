@@ -140,6 +140,7 @@ typedef struct
     uint64_t *statpack;  // pack stat with readID for sorting
     uint64_t *nb_target_reads;  // experimental! guessed number of candiates, for triggering read selection
     int is_has_nothing, is_has_lengths, is_all_in_mem;
+    uint16_t *nb_error_corrected;  // collect number of error corrected during ovec
 } All_reads;
 
 extern All_reads R_INF;

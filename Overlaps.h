@@ -55,10 +55,10 @@
 typedef struct {
 	uint64_t qns;
 	uint32_t qe, tn, ts, te;
-	uint32_t ml:31, rev:1;
+	uint32_t ml:31, rev:1;  // ml: whether overlap is strong(1) or weak(0)
 	uint32_t bl:31, del:1;
-	uint8_t el;
-	uint8_t no_l_indel;
+	uint8_t el;  // whether overlap is exact (1) or inexact (0)
+	uint8_t no_l_indel;  // "no large indels"
 } ma_hit_t;
 
 typedef struct {

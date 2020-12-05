@@ -396,9 +396,10 @@ int stack32_is_in_stack(stacku32_t *stack, uint32_t d){
 
 
 
-//////////////////////////////////////////////////////////////////////
-//                        helper structs                           //
-//////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+//                        anything before asg                           //
+//////////////////////////////////////////////////////////////////////////
+
 
 
 
@@ -1189,7 +1190,7 @@ int hamt_asgarc_util_checkSimpleBubble_edge(asg_t *g, uint32_t v0, int base_labe
         }
     }
     assert(i!=nv);
-    if (hamt_asgarc_util_countPre(g, sib, 0, 0, base_label)!=1 || hamt_asgarc_util_countSuc(g, sib, 0, 0, base_label)!=1){
+    if (hamt_asgarc_util_countPre(g, sib, 0, 0, base_label)!=1 || hamt_asgarc_util_countSuc(g, sib, 0, 0, base_label)!=1){  // compile note: is safe
         return 0;
     }
     if (hamt_asgarc_util_get_the_one_target(g, sib, &e2, 0, 0, base_label)<0){
@@ -2040,7 +2041,6 @@ asg_t *hamt_asggraph_util_gen_transpose(asg_t *g0){
 }
 
 int hamt_sg_pop_simpleInvertBubble(asg_t *sg){
-    //  used by the hamt preclean
     int verbose = 0;
 
     uint32_t v, w, u;
@@ -2062,8 +2062,6 @@ int hamt_sg_pop_simpleInvertBubble(asg_t *sg){
 }
 
 void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int max_arcs, int max_length){
-    // rationale: tips could hinder simple bubble detection, 
-    //            and hamt doesn't need to be too careful with both of them (i think) (Sep 17)  
     double startTime = Get_T();
     uint32_t n_vtx = g->n_seq*2, v;
     uint32_t n_del;
@@ -3265,8 +3263,25 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     }
     v ^= 1;
     for (int i=0; i<search_span-1; i++){
-        status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 1);
+        status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 0);
         if (status>0){
+            // step the other side
+            uint32_t w_end = w;
+            int idx = 0;
+            for (int j=0; j<search_span-1; j++){
+                // step
+                if (hamt_asgarc_util_countSuc(sg, w, 0, 0, -1)!=1){break;}
+                if (hamt_asgarc_util_get_the_one_target(sg, w, &w, 0, 0, -1)<0){break;}
+                // check
+                status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 0);
+                if (status>0){
+                    w_end = w;
+                    idx = j;
+                }else if (status<0){break;}
+            }
+            if (idx==(search_span-1)){fprintf(stderr, "[W::%s] search span not big enough?\n", __func__);}
+            status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w_end, sources, coverage_cut, 1);
+            assert(status==1);
             return 1;
         }else if (status<0){  // encounter any non-overlapping pairs and we're done
             break;
@@ -3290,6 +3305,24 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     for (int i=0; i<search_span-1; i++){
         status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 1);
         if (status>0){
+            // step the other side
+            uint32_t v_end = v;
+            int idx = 0;
+            for (int j=0; j<search_span-1; j++){
+                // step
+                if (hamt_asgarc_util_countSuc(sg, v^1, 0, 0, -1)!=1){break;}
+                if (hamt_asgarc_util_get_the_one_target(sg, v^1, &v, 0, 0, -1)<0){break;}
+                v^=1;
+                // check
+                status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 0);
+                if (status>0){
+                    v_end = v;
+                    idx = j;
+                }else if (status<0){break;}
+            }
+            if (idx==(search_span-1)){fprintf(stderr, "[W::%s] search span not big enough?\n", __func__);}
+            status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v_end, w, sources, coverage_cut, 1);
+            assert(status==1);
             return 1;
         }else if (status<0){  // encounter any non-overlapping pairs and we're done
             return -1;
@@ -4559,7 +4592,7 @@ int hamt_ug_drop_midsizeTips(asg_t *sg, ma_ug_t *ug, int fold, int base_label){
             fprintf(stderr, "[E::%s] didn't found uu when should've\n", __func__);
             continue;
         }
-        if (hamt_asgarc_util_countSuc(auxsg, uu, 0, 0, base_label)==0 || hamt_asgarc_util_countPre(auxsg, uu, 0, 0, base_label)!=1){continue;}
+        if (hamt_asgarc_util_countSuc(auxsg, uu, 0, 0, base_label)==0 || hamt_asgarc_util_countPre(auxsg, uu, 0, 0, base_label)!=1){continue;}  // compile note: is safe
 
         // check length
         if (ug->u.a[wu>>1].len>(ug->u.a[vu>>1].len*r) || ug->u.a[uu>>1].len>(ug->u.a[vu>>1].len*r)){
@@ -4595,7 +4628,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg,
     int nb_pop = 0, round = 0;
 
     for (round=0; round<5; round++){
-        hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-TOPO", round);
+        if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-TOPO", round);
 
         nb_pop = 0;
 
@@ -4694,7 +4727,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
         asg_t *auxsg = ug->g;
 
         // debug
-        hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-resShortCircuit", round);
+        if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-resShortCircuit", round);
 
         for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
             if (verbose){
@@ -4894,7 +4927,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
     int nb_treated = 0;
     uint8_t *color = (uint8_t*)calloc(auxsg->n_seq, 1);  // easier than fixing auxsg
 
-    hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-rescueLongUtg",0);
+    if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-rescueLongUtg",0);
 
     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){  
         if (color[vu>>1]){continue;}
@@ -4994,7 +5027,7 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
         hamt_ug_cleanup_arc_by_labels(sg, ug);
     }
 
-    hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "resolveTangle_middle", 0);
+    if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "resolveTangle_middle", 0);
 
     // cut tips
     int nb_cut_tip = 1, nb_cut_tiny_circle = 1;

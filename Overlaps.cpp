@@ -13,6 +13,9 @@
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
 #include "Overlaps_hamt.h"
+#include "kthread.h"
+
+KRADIX_SORT_INIT(hamtu64, uint64_t, uint64_t, 8)  // hamt
 
 // (hifiasm: filter short potential unitigs)
 #define ASG_ET_MERGEABLE 0
@@ -1525,6 +1528,42 @@ void collect_sides(ma_hit_t_alloc* paf, uint64_t rLen, ma_sub_t* max_left, ma_su
     }
 }
 
+uint64_t collect_sides_also_count(ma_hit_t_alloc* paf, uint64_t rLen, ma_sub_t* max_left, ma_sub_t* max_right)
+{
+    long long j;
+    uint32_t qs, qe;
+    uint64_t bp_left=0, bp_right=0, cnt_left=0, cnt_right=0;
+    for (j = 0; j < paf->length; j++)
+    {
+        if(paf->buffer[j].del) continue;
+
+        qs = Get_qs(paf->buffer[j]);
+        qe = Get_qe(paf->buffer[j]);
+
+
+        ///overlaps from left side
+        if(qs == 0)
+        {
+            if(qs < max_left->s) max_left->s = qs;
+            if(qe > max_left->e) max_left->e = qe;
+            bp_left+=qe-qs;
+        }
+
+        ///overlaps from right side
+        if(qe == rLen)
+        {
+            if(qs < max_right->s) max_right->s = qs;
+            if(qe > max_right->e) max_right->e = qe;
+            bp_right+=qe-qs;
+        }
+        ///note: if (qs == 0 && qe == rLen)
+        ///this overlap would be added to both b_left and b_right
+        ///that is what we want
+    }
+    
+    return bp_left<<32 | bp_right;
+}
+
 void collect_contain(ma_hit_t_alloc* paf1, ma_hit_t_alloc* paf2, uint64_t rLen, 
 ma_sub_t* max_left, ma_sub_t* max_right, float overlap_rate)
 {
@@ -1597,6 +1636,45 @@ ma_sub_t* max_left, ma_sub_t* max_right, float overlap_rate)
     max_right->s = new_right_s;
 }
 
+
+uint32_t collect_contain_also_count(ma_hit_t_alloc* paf1, uint64_t rLen, 
+                                ma_sub_t* max_left, ma_sub_t* max_right, float overlap_rate)
+{
+    long long j, new_left_e, new_right_s;
+    new_left_e = max_left->e;
+    new_right_s = max_right->s;
+    uint32_t qs, qe;
+    ma_hit_t_alloc* paf;
+
+    uint32_t bp_mid = 0, cnt=0;
+
+    paf = paf1;
+    for (j = 0; j < paf->length; j++)
+    {
+        if(paf->buffer[j].del) continue;
+        qs = Get_qs(paf->buffer[j]);
+        qe = Get_qe(paf->buffer[j]);
+        ///check contained overlaps
+        if(qs != 0 && qe != rLen)
+        {
+            bp_mid += qe-qs;
+            ///[qs, qe), [max_left.s, max_left.e)
+            if(qs < max_left->e && qe > max_left->e && max_left->e - qs > (overlap_rate * (qe -qs)))
+            {
+                ///if(qe > max_left->e) max_left->e = qe;
+                if(qe > max_left->e && qe > new_left_e) new_left_e = qe;
+            }
+
+            ///[qs, qe), [max_right.s, max_right.e)
+            if(qs < max_right->s && qe > max_right->s && qe - max_right->s > (overlap_rate * (qe -qs)))
+            {
+                ///if(qs < max_right->s) max_right->s = qs;
+                if(qs < max_right->s && qs < new_right_s) new_right_s = qs;
+            }
+        }
+    }
+    return bp_mid/cnt;
+}
 
 
 int intersection_check(ma_hit_t_alloc* paf, uint64_t rLen, uint32_t interval_s, uint32_t interval_e)
@@ -1788,6 +1866,517 @@ ma_sub_t* coverage_cut, float shift_rate)
         __func__, Get_T()-startTime, n_simple_remove, n_complex_remove_real, n_complex_remove);
     }
 }
+
+
+int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, long long i_read, uint64_t *readLen, int overhang_allowance){
+    // RETURN
+    //    1 if yes
+    //    0 if perfectly no
+    //    -1 if imperfectly no
+    //    -2 if max overhang is larger than overhang_allowance
+    // NOTE
+    //    Collect_sides_also_count touches only ideal hits (i.e. start is 0 or end is readlength),
+    //    but here we might have to deal with erroneours reads that's not actually an end read & doesn't overlap well however.
+    ma_hit_t_alloc *paf_of_read = &sources[i_read];
+    uint64_t readlength = readLen[i_read]; 
+
+    ma_sub_t max_left, max_right;
+    ma_hit_t *handle;
+    max_left.s = max_right.s = readlength;
+    max_left.e = max_right.e = 0;
+    collect_sides_also_count(paf_of_read, readlength, &max_left, &max_right);
+    
+    if( max_left.s==0 && max_right.e==readlength){return 0;}
+    else {
+        uint32_t left_passed=0, right_passed=0, t_lefthang, t_righthang;
+        uint32_t qs, qe;
+        uint64_t t_readlength;
+        for (int i=0; i<paf_of_read->length; i++){
+            if (paf_of_read->buffer[i].del) {continue;}
+            handle = &paf_of_read->buffer[i];
+            qs = (uint32_t)handle->qns;
+            qe = handle->qe;
+            t_readlength = readLen[handle->tn];
+
+            if (handle->rev==0){  // "left" assumes laying the query left to right and use the orientation observed
+                t_lefthang = handle->ts;
+                t_righthang = t_readlength - handle->te;
+            }else{
+                t_lefthang = t_readlength - handle->te;
+                t_righthang = handle->ts;
+            }
+            // fprintf(stderr, "    check target %.*s, lefthang:%d, righthang:%d\n", (int)Get_NAME_LENGTH(R_INF, handle->tn), Get_NAME(R_INF, handle->tn),
+                            // t_lefthang, t_righthang);
+
+            // sancheck
+            if (qs>overhang_allowance && (readlength-qe)>overhang_allowance &&
+                t_lefthang>overhang_allowance && t_righthang>overhang_allowance){
+                return -2;
+            }
+            // check coordinates
+            if (t_lefthang>=qs){left_passed = 1;}
+            if (t_righthang>=(readlength-qe)) {right_passed = 1;}
+        }
+        if (left_passed && right_passed){
+            // this is effectively: query read maps with some other reads in the middle,
+            //                      but towards the end they don't match.
+            return -1;
+        }
+    }
+    return 1;
+}
+
+int hamt_ovlp_is_contained_read(ma_hit_t_alloc* paf_of_read, long long readlength){
+    ma_sub_t max_left, max_right;
+    max_left.s = max_right.s = readlength;
+    max_left.e = max_right.e = 0;
+    collect_sides_also_count(paf_of_read, readlength, &max_left, &max_right);
+    if(max_left.s == 0 && max_right.s == 0 && max_left.e==readlength && max_right.e==readlength) {return 1;}
+    else {return 0;}
+}
+int hamt_ovlp_is_contained_read2(ma_hit_t_alloc* sources, long long i_read, uint64_t *readLen){
+    return hamt_ovlp_is_contained_read(&sources[i_read], readLen[i_read]);
+}
+
+int hamt_ovlp_contains_howmany_reads(ma_hit_t_alloc* sources, long long i_read, uint64_t *readLen){
+    ma_hit_t *h;
+    int ret = 0;
+    for (int i=0; i<sources[i_read].length; i++){
+        h = &sources[i_read].buffer[i];
+        if (h->del) {continue;}
+        if ( (h->ts==0 && h->te==readLen[h->tn]) || (h->ts==readLen[h->tn] && h->te==0) ){
+            ret+=1;
+        }
+    }
+    return ret;
+}
+
+inline uint16_t hamt_count_error(long long i_read){
+    // NOTE
+    //    cigar and round2.cigar are temporary buffer during ovec, fully corrected reads will have them as all zero
+    return R_INF.nb_error_corrected[i_read];
+}
+
+void detect_chimeric_reads_conservative(ma_hit_t_alloc* paf, long long n_read, uint64_t* readLen, 
+ma_sub_t* coverage_cut, float shift_rate)
+{
+    // hamt NOTE
+    //     Added conservative heuristic for the simple case, because we observed read chain breaking at
+    //       spots that only supported by one read, with or without other complications,
+    //       in species/strain with low coverage. 
+    double startTime = Get_T();
+    init_aux_table();
+    long long i, rLen, /**cov,**/ n_simple_remove = 0, n_complex_remove = 0, n_complex_remove_real = 0;
+    uint32_t interval_s, interval_e;
+    ma_sub_t max_left, max_right;
+    kvec_t(char) b_q = {0,0,0};
+    kvec_t(char) b_t = {0,0,0};
+
+    uint64_t est_cov;  // "estimated coverage"
+    uint32_t est_cov_left, est_cov_right, est_cov_mid;
+
+    for (i = 0; i < n_read; ++i) 
+    {
+        coverage_cut[i].c = PRIMARY_LABLE;
+        rLen = readLen[i];
+
+        max_left.s = max_right.s = rLen;
+        max_left.e = max_right.e = 0;
+
+        est_cov = collect_sides_also_count(&(paf[i]), rLen, &max_left, &max_right);
+        
+        if(max_left.s == rLen || max_right.s == rLen)  // the read is a end node
+        {
+            continue;
+        }
+
+        collect_contain(&(paf[i]), NULL, rLen, &max_left, &max_right, 0.1);
+        ///collect_contain(&(paf[i]), &(rev_paf[i]), rLen, &max_left, &max_right, 0.1);
+
+        ////shift_rate should be (asm_opt.max_ov_diff_final*2)
+        ///this read is a normal read
+        if (max_left.e > max_right.s && (max_left.e - max_right.s >= rLen * shift_rate))
+        {
+            continue;
+        }
+
+        ///simple chimeric reads
+        if(max_left.e <= max_right.s)
+        {
+            //////////// extra check: 
+            // don't drop if 1) both sides are low coverage
+            //               2) the read in question had little error before ovec
+            // check estimated coverage
+            est_cov_left = ((uint32_t)(est_cov>>32)) / (max_left.e-max_left.s);
+            est_cov_right = (uint32_t)est_cov / (max_right.e-max_right.s);
+            if (est_cov_left<=5 && est_cov_right<=5){
+                fprintf(stderr, "chimera: sparing read %.*s\n", (int)Get_NAME_LENGTH(R_INF, i), Get_NAME(R_INF, i));
+                continue;
+            }
+
+            // all clear, drop it
+            delete_all_edges(paf, coverage_cut, i);            
+            n_simple_remove++;
+            continue;
+        }
+
+        ///now max_left.e >  max_right.s && max_left.e - max_right.s is small enough
+        //[interval_s, interval_e)
+        interval_s = max_right.s;
+        interval_e = max_left.e;
+
+        /**
+        cov = 0;
+        cov += intersection_check(&(paf[i]), rLen, interval_s, interval_e);
+        cov += intersection_check(&(rev_paf[i]), rLen, interval_s, interval_e);
+        if(interval_e - interval_s < WINDOW && cov <= 2)
+        {
+            coverage_cut[i].del = 1;
+            paf[i].length = 0;
+            n_complex_remove_real++;
+        }
+        else**/
+        {
+            kv_resize(char, b_q, WINDOW*4+20);
+            kv_resize(char, b_t, WINDOW*4+20);
+            if(intersection_check_by_base(&(paf[i]), rLen, interval_s, interval_e, b_q.a, b_t.a)
+              /**||
+              intersection_check_by_base(&(rev_paf[i]), rLen, interval_s, interval_e, b_q.a, b_t.a)**/)
+            {
+                delete_all_edges(paf, coverage_cut, i); 
+                n_complex_remove_real++;
+            }
+        }
+
+        n_complex_remove++;
+    }
+
+    free(b_q.a);
+    free(b_t.a);
+
+    if(VERBOSE >= 1)
+    {
+        fprintf(stderr, "[M::%s] takes %0.2f s, n_simple_remove: %lld, n_complex_remove: %lld/%lld\n\n", 
+        __func__, Get_T()-startTime, n_simple_remove, n_complex_remove_real, n_complex_remove);
+    }
+}
+
+typedef struct {
+    ma_hit_t_alloc *sources;
+    long long n_read;
+    uint64_t *readLen;
+    ma_sub_t *coverage_cut;
+    int counter;  // NOTE this might RACE during update, but it's an output and not used elsewhere
+}hitcontain_aux_t;
+
+static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callback for kt_for()
+    hitcontain_aux_t *d = (hitcontain_aux_t*)data;
+    ma_hit_t_alloc *sources = d->sources;
+    long long n_read = d->n_read;
+    uint64_t *readLen = d->readLen;
+    ma_sub_t *coverage_cut = d->coverage_cut;
+
+
+    // aux
+    int nb_reads_contained;
+    ma_hit_t *h, *hh;
+    kvec_t(float) buf;
+    kvec_t(uint32_t) IDs_contained;
+    kv_init(buf);
+    kv_init(IDs_contained);
+    int flag_passed, flag_total;
+    float current_error_rate, tmp_error_rate;
+    uint16_t current_error_count, tmp_error_count;
+    uint32_t tn_flank;
+    int readtype;
+
+    // for interval merge
+    kvec_t(uint64_t) spans;
+    kv_init(spans);
+
+
+    buf.n = 0;  // TODO: buffer reset, but this is ugly
+    IDs_contained.n = 0;  // TODO: buffer reset, but this is ugly
+
+    if (R_INF.mask_readnorm[i_r] & 1){return;}
+
+    // topo check
+    // readtype = hamt_ovlp_is_end_read(sources, i_r, readLen, 500);  // dont do
+    // if (hamt_ovlp_is_contained_read2(sources, i_r, readLen)){continue;}  // dont do
+    nb_reads_contained = hamt_ovlp_contains_howmany_reads(sources, i_r, readLen);
+    if (nb_reads_contained==0){return;}
+    // if (verbose){fprintf(stderr, "[debug::%s] at read %.*s \n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));}
+    // if (verbose){fprintf(stderr, "[debug::%s]     topo passed\n", __func__);}
+
+    // check number of bases corrected for reads contained by the queryread
+    // NOTE: using very crude criteria for now (Dec 2 2020)
+    flag_passed = flag_total = 0;
+    current_error_count = hamt_count_error(i_r);
+    current_error_rate = (float)100*current_error_count/readLen[i_r];
+    if (current_error_count<50 || current_error_rate<0.05){return;}
+    // if (verbose) {fprintf(stderr, "[debug::%s]    current error count is %d, percentage rate %f\n", __func__, (int)current_error_count, current_error_rate);}
+    for (int i=0; i<sources[i_r].length; i++){
+        h = &sources[i_r].buffer[i];
+        if (h->del) {continue;}
+        if ( (h->ts==0 && h->te==readLen[h->tn]) /*|| (h->ts==readLen[h->tn] && h->te==0)*/ ){  // target is contained
+            kv_push(uint32_t, IDs_contained, h->tn);
+            kv_push(uint64_t, spans, h->qns<<32 | (uint64_t)h->qe );
+
+            tmp_error_count = hamt_count_error(h->tn);
+            tmp_error_rate = (float)100*tmp_error_count/readLen[h->tn];
+            if (current_error_rate<tmp_error_rate*2){
+                // if (verbose) {fprintf(stderr, "    failed ec check: target %.*s, cnt %d\n", (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn), tmp_error_count);}
+                flag_passed++;  // query read isn't too erroneous
+            }
+            flag_total++;
+        }else if (h->ts==0 || h->te==readLen[h->tn]){  // ideal overlap
+            kv_push(uint64_t, spans, h->qns<<32 | (uint64_t)h->qe );
+        }else{  // non-ideal overlap; TODO: better heuristic if more examples found
+            uint32_t adj_s, adj_e;  // "adjusted start/end"
+            if (h->rev==0){
+                adj_s = ((uint32_t)h->qns - h->ts)<0 ? 0 : ((uint32_t)h->qns - h->ts);
+                adj_e = h->qe+(readLen[h->tn]-h->te)>readLen[i_r]? readLen[i_r] : h->qe+(readLen[h->tn]-h->te);
+            }else{
+                adj_s = (uint32_t)h->qns-(readLen[h->tn]-h->te)<0 ? 0:((uint32_t)h->qns-(readLen[h->tn]-h->te));
+                adj_e = h->qe+h->ts>readLen[i_r]? readLen[i_r] : h->qe+h->ts;
+            }
+            kv_push(uint64_t, spans, ((uint64_t)adj_s)<<32 | (uint64_t)adj_e);
+        }
+    }
+
+
+    if ((float)flag_passed/flag_total > 0.5){
+        // if (verbose) {fprintf(stderr, "query ok won't cut, passed %d, total %d\n", flag_passed, flag_total);}
+        return;
+    }
+    // if (verbose) {fprintf(stderr, "[debug::%s]    query read erroneous, consider cutting\n", __func__);}
+
+    // check if the current read could be fully covered by its contained reads and outgoing targets
+    // TODO: oneshot, but a wrapper would look nicer
+    radix_sort_hamtu64(spans.a, spans.a+spans.n);
+    if (spans.n==0){
+        fprintf(stderr, "[E::%s] span buffer is empty, this shouldn't happen\n", __func__);
+        return;
+    }
+    int tmp_n = 0, bp_uncovered = 0;
+    uint32_t prev_end=(uint32_t)spans.a[0], prev_start=(uint32_t)(spans.a[0]>>32), tmp_start, tmp_end;
+    if (spans.n==1){
+        tmp_n = 1;
+    }else{
+        for (int i=1; i<spans.n; i++){
+            tmp_start = (uint32_t)(spans.a[i]>>32);
+            tmp_end = (uint32_t)spans.a[i];
+            if (tmp_start>prev_end){
+                bp_uncovered += tmp_start - prev_end;
+                // log (recycle the vector's buffer)
+                spans.a[tmp_n] = ((uint64_t)prev_start)<<32 | (uint64_t)prev_end;
+                prev_end = tmp_end;
+                prev_start = tmp_start;
+                tmp_n++;
+            }else{
+                prev_end = tmp_end;
+            }
+        }
+        // last one
+        spans.a[tmp_n] = ((uint64_t)prev_start)<<32 | (uint64_t)prev_end;
+        tmp_n++;
+    }
+    if (bp_uncovered>500 || spans.n>=3){
+        // if (verbose) {fprintf(stderr, "[debug::%s]     query erroneous but itself ill covered,don't cut\n", __func__);}
+        return;
+    }
+    
+    // if we reach here, it's safe to favore the contained reads over the current longer read
+    delete_all_edges(sources, coverage_cut, (uint32_t)i_r);
+    // if (verbose){
+    //     fprintf(stderr, "[debug::%s] ditched read %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
+    //     fprintf(stderr, "[debug::%s]     (there were %d contained reads)\n", __func__, (int)IDs_contained.n);
+    // }
+    d->counter++;
+
+    kv_destroy(buf);
+    kv_destroy(IDs_contained);
+    kv_destroy(spans);
+
+}
+
+
+void hamt_hit_contained_multi(ma_hit_t_alloc* sources, long long n_read, uint64_t *readLen,
+                        ma_sub_t *coverage_cut, R_to_U* ruIndex, int max_hang, int min_ovlp)
+{
+// multithread ver of hamt_hit_contained
+    double startTime = Get_T();
+
+    hitcontain_aux_t aux;
+    aux.sources = sources;
+    aux.n_read = n_read;
+    aux.readLen = readLen;
+    aux.coverage_cut = coverage_cut;
+    aux.counter = 0;
+
+    kt_for(asm_opt.thread_num, hamt_hit_contained_worker, &aux, (long)n_read);
+
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \nnext: regular ma_hit_contained_advance\n\n", __func__, Get_T()-startTime, aux.counter);
+    }
+
+    // the regular containment treatment
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang, min_ovlp);
+}
+
+
+void hamt_hit_contained(ma_hit_t_alloc* sources, long long n_read, uint64_t *readLen,
+                        ma_sub_t *coverage_cut, R_to_U* ruIndex, int max_hang, int min_ovlp)
+{
+    // hamt NOTE:
+    //    This alternative function was introduced because sometimes shorter reads might be considered
+    //      contained by a longer but actually erroneous read (not sequencing error, but shared subsequences
+    //      between similar species etc), which, if ends up in the unitig, might terminate the single walk incorrectly.
+    //     
+    // NOTE
+    //     First, for each read that contains other reads && is not contained by any other reads,
+    //            compare its number of bases corrected to the reads it contains. If the contained reads are
+    //            obviously better, *consider* drop the read (see code for additional criteria), or just mark
+    //            some overlaps as removed.
+    //     Then, perform the regualr contained reads removal.
+    
+    double startTime = Get_T();
+    int verbose = 1;
+
+    ////////// hamt special /////////////////
+    int nb_reads_contained;
+    ma_hit_t *h, *hh;
+    kvec_t(float) buf;
+    kvec_t(uint32_t) IDs_contained;
+    kv_init(buf);
+    kv_init(IDs_contained);
+    int flag_passed, flag_total;
+    float current_error_rate, tmp_error_rate;
+    uint16_t current_error_count, tmp_error_count;
+    uint32_t tn_flank;
+    int readtype;
+
+    // for interval merge
+    kvec_t(uint64_t) spans;
+    kv_init(spans);
+
+    if (verbose>1){
+        for (long long i_r=0; i_r<n_read; i_r++){
+            fprintf(stderr, "%.*s, %d\n", (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r), (int)R_INF.nb_error_corrected[i_r]);
+        }
+    }
+
+	for (long long i_r=0; i_r<n_read; i_r++){
+        buf.n = 0;  // TODO: buffer reset, but this is ugly
+        IDs_contained.n = 0;  // TODO: buffer reset, but this is ugly
+
+        if (R_INF.mask_readnorm[i_r] & 1){continue;}
+
+        // topo check
+        // readtype = hamt_ovlp_is_end_read(sources, i_r, readLen, 500);  // dont do
+        // if (hamt_ovlp_is_contained_read2(sources, i_r, readLen)){continue;}  // dont do
+        nb_reads_contained = hamt_ovlp_contains_howmany_reads(sources, i_r, readLen);
+        if (nb_reads_contained==0){continue;}
+        if (verbose){fprintf(stderr, "[debug::%s] at read %.*s \n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));}
+        if (verbose){fprintf(stderr, "[debug::%s]     topo passed\n", __func__);}
+
+        // check number of bases corrected for reads contained by the queryread
+        // NOTE: using very crude criteria for now (Dec 2 2020)
+        flag_passed = flag_total = 0;
+        current_error_count = hamt_count_error(i_r);
+        current_error_rate = (float)100*current_error_count/readLen[i_r];
+        if (current_error_count<50 || current_error_rate<0.05){continue;}
+        if (verbose) {fprintf(stderr, "[debug::%s]    current error count is %d, percentage rate %f\n", __func__, (int)current_error_count, current_error_rate);}
+        for (int i=0; i<sources[i_r].length; i++){
+            h = &sources[i_r].buffer[i];
+            if (h->del) {continue;}
+            if ( (h->ts==0 && h->te==readLen[h->tn]) /*|| (h->ts==readLen[h->tn] && h->te==0)*/ ){  // target is contained
+                kv_push(uint32_t, IDs_contained, h->tn);
+                kv_push(uint64_t, spans, h->qns<<32 | (uint64_t)h->qe );
+
+                tmp_error_count = hamt_count_error(h->tn);
+                tmp_error_rate = (float)100*tmp_error_count/readLen[h->tn];
+                if (current_error_rate<tmp_error_rate*2){
+                    if (verbose) {fprintf(stderr, "    failed ec check: target %.*s, cnt %d\n", (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn), tmp_error_count);}
+                    flag_passed++;  // query read isn't too erroneous
+                }
+                flag_total++;
+            }else if (h->ts==0 || h->te==readLen[h->tn]){  // ideal overlap
+                kv_push(uint64_t, spans, h->qns<<32 | (uint64_t)h->qe );
+            }else{  // non-ideal overlap; TODO: better heuristic if more examples found
+                uint32_t adj_s, adj_e;  // "adjusted start/end"
+                if (h->rev==0){
+                    adj_s = ((uint32_t)h->qns - h->ts)<0 ? 0 : ((uint32_t)h->qns - h->ts);
+                    adj_e = h->qe+(readLen[h->tn]-h->te)>readLen[i_r]? readLen[i_r] : h->qe+(readLen[h->tn]-h->te);
+                }else{
+                    adj_s = (uint32_t)h->qns-(readLen[h->tn]-h->te)<0 ? 0:((uint32_t)h->qns-(readLen[h->tn]-h->te));
+                    adj_e = h->qe+h->ts>readLen[i_r]? readLen[i_r] : h->qe+h->ts;
+                }
+                kv_push(uint64_t, spans, ((uint64_t)adj_s)<<32 | (uint64_t)adj_e);
+            }
+        }
+
+
+        if ((float)flag_passed/flag_total > 0.5){
+            if (verbose) {fprintf(stderr, "query ok won't cut, passed %d, total %d\n", flag_passed, flag_total);}
+            continue;
+        }
+        if (verbose) {fprintf(stderr, "[debug::%s]    query read erroneous, consider cutting\n", __func__);}
+
+        // check if the current read could be fully covered by its contained reads and outgoing targets
+        // TODO: oneshot, but a wrapper would look nicer
+        radix_sort_hamtu64(spans.a, spans.a+spans.n);
+        if (spans.n==0){
+            fprintf(stderr, "[E::%s] span buffer is empty, this shouldn't happen\n", __func__);
+            continue;
+        }
+        int tmp_n = 0, bp_uncovered = 0;
+        uint32_t prev_end=(uint32_t)spans.a[0], prev_start=(uint32_t)(spans.a[0]>>32), tmp_start, tmp_end;
+        if (spans.n==1){
+            tmp_n = 1;
+        }else{
+            for (int i=1; i<spans.n; i++){
+                tmp_start = (uint32_t)(spans.a[i]>>32);
+                tmp_end = (uint32_t)spans.a[i];
+                if (tmp_start>prev_end){
+                    bp_uncovered += tmp_start - prev_end;
+                    // log (recycle the vector's buffer)
+                    spans.a[tmp_n] = ((uint64_t)prev_start)<<32 | (uint64_t)prev_end;
+                    prev_end = tmp_end;
+                    prev_start = tmp_start;
+                    tmp_n++;
+                }else{
+                    prev_end = tmp_end;
+                }
+            }
+            // last one
+            spans.a[tmp_n] = ((uint64_t)prev_start)<<32 | (uint64_t)prev_end;
+            tmp_n++;
+        }
+        if (bp_uncovered>500 || spans.n>=3){
+            if (verbose) {fprintf(stderr, "[debug::%s]     query erroneous but itself ill covered,don't cut\n", __func__);}
+            continue;
+        }
+        
+        // if we reach here, it's safe to favore the contained reads over the current longer read
+        delete_all_edges(sources, coverage_cut, (uint32_t)i_r);
+        if (verbose){
+            fprintf(stderr, "[debug::%s] ditched read %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
+            fprintf(stderr, "[debug::%s]     (there were %d contained reads)\n", __func__, (int)IDs_contained.n);
+        }
+    }
+    kv_destroy(buf);
+    kv_destroy(IDs_contained);
+    kv_destroy(spans);
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] done, takes %0.2f s; next: regular ma_hit_contained_advance\n\n", __func__, Get_T()-startTime);
+    }
+
+    // the regular containment treatment
+    // TODO: correctly multithread this - why `set_R_to_U`?
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang, min_ovlp);
+}
+
 
 
 void ma_hit_cut(ma_hit_t_alloc* sources, long long n_read, uint64_t* readLen, 
@@ -26779,14 +27368,20 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     ///ma_hit_sub is just use to init coverage_cut,
     ///it seems we do not need ma_hit_cut & ma_hit_flt
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-    detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
+    if (asm_opt.is_use_exp_graph_cleaning){
+        // hamt: spare some low coverage simple cases
+        detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
+    }else{
+        detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
+    }
     ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     ///print_binned_reads(sources, n_read, coverage_cut);
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
     ///fix_binned_reads(sources, n_read, coverage_cut);
     ///just need to deal with trio here
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
+    hamt_hit_contained_multi(sources, n_read, readLen, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
+    // ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
 
@@ -26997,7 +27592,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // topo pre clean
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             for (int i=0; i<10; i++){
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;
+                if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;
                 if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 if (hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0)==0){
@@ -27005,29 +27600,29 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                     break;
                 }
             }
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
 
             hamt_clean_shared_seq(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;
 
             hamt_circle_cleaning(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
 
             hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;
 
             // topo
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;
 
 
             // more topo cleaning
@@ -27037,17 +27632,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // one more round of basic topo cleaning
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", 0);
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", 0);
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
 
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_after", 0);
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_after", 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // resolve complex bubble
             int nb_complex_bubble_cut;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
-                hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", round_resolve);
+                if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", round_resolve);
                 
                 nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug, 0, 1, 0);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips(sg, hamt_ug, 5, 0);
@@ -27068,12 +27663,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // rescues
             hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, ruIndex, coverage_cut, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeRescueAggressive", 0);
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeRescueAggressive", 0);
             hamt_ug_prectg_rescueShortCircuit_simpleAggressive(sg, hamt_ug, sources, reverse_sources, coverage_cut, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // hap cov cut
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", 0);
+            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", 0);
             hamt_ug_treatBifurcation_hapCovCut(sg, hamt_ug, 0.7, 0.5, reverse_sources, 0, 1);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
@@ -27084,6 +27679,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ugasg_cut_shortTips(sg, hamt_ug, 0, 1, 0);
             hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
+            // het recovery
 
             hamt_ug_destroy(hamt_ug);
         }  
@@ -27147,7 +27744,7 @@ long long bubble_dist, int read_graph, int write)
     if (asm_opt.flag & HA_F_VERBOSE_GFA)
     {
         // if(load_debug_graph(&sg, &sources, &coverage_cut, output_file_name, &reverse_sources, &ruIndex))
-        if(load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read))  // ?????? leak
+        if(load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read))
         {
             fprintf(stderr, "debug gfa has been loaded\n");
             

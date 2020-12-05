@@ -63,6 +63,8 @@ void init_All_reads(All_reads* r)
 	r->is_all_in_mem = 0;
 	r->is_has_lengths = 0;
 	r->is_has_nothing = 1;
+	// meta graph cleaning aux
+	r->nb_error_corrected = 0;  // log info during ovec
 }
 
 void reset_All_reads(All_reads *r){
@@ -96,6 +98,9 @@ void destory_All_reads(All_reads* r)
 	free(r->read_length);
 	free(r->trio_flag);
 	// meta
+	if (r->nb_error_corrected){
+		free(r->nb_error_corrected);
+	}
 	if (r->mean)
 		free(r->mean);
 	if (r->median)
@@ -208,6 +213,10 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	fwrite(r->std, sizeof(double), r->total_reads, fp);
 	fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
 	fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
+
+	// hamt special 2: read error correction info
+	fwrite(r->nb_error_corrected, sizeof(uint16_t), r->total_reads, fp);
+
 	free(index_name);
 	fflush(fp);
     fclose(fp);
@@ -364,6 +373,7 @@ int load_All_reads(All_reads* r, char* read_file_name)
 		r->lowq = (uint16_t*)malloc(r->total_reads*sizeof(uint16_t));
 		r->mask_readnorm = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
 		r->mask_readtype = (uint8_t*)malloc(r->total_reads*sizeof(uint8_t));
+		r->nb_error_corrected = (uint16_t*)malloc(r->total_reads*sizeof(uint16_t));
 		
 		f_flag_hamt += fread(r->mean, sizeof(double), r->total_reads, fp_hamt);
 		f_flag_hamt += fread(r->median, sizeof(uint16_t), r->total_reads, fp_hamt);
@@ -371,10 +381,14 @@ int load_All_reads(All_reads* r, char* read_file_name)
 		f_flag_hamt += fread(r->std, sizeof(double), r->total_reads, fp_hamt);
 		f_flag_hamt += fread(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp_hamt);
 		f_flag_hamt += fread(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp_hamt);
+		f_flag_hamt += fread(r->nb_error_corrected, sizeof(uint16_t), r->total_reads, fp_hamt);
 		
 		free(index_name_hamt);
 		fprintf(stderr, "Loaded hamt bin.\n"); fflush(stderr);
 	} 
+	else{
+		r->nb_error_corrected = (uint16_t*)calloc(r->total_reads, sizeof(uint16_t));
+	}
 	if (asm_opt.is_disable_diginorm){// no bin file, or ignoring bin file's read mask
 		if (fp_hamt){
 			r->mask_readnorm = (uint8_t*)realloc(r->mask_readnorm, r->total_reads*sizeof(uint8_t));
@@ -428,6 +442,7 @@ int destory_read_bin(All_reads* r)
 	free(r->trio_flag);
 	free(r->cigars);
 	free(r->second_round_cigar);
+	free(r->nb_error_corrected);
 	return 1;
 }
 
@@ -445,6 +460,8 @@ void ha_insert_read_len(All_reads *r, int read_len, int name_len)
 		r->read_length = (uint64_t*)realloc(r->read_length, sizeof(uint64_t) * r->index_size);
 		r->name_index_size = r->name_index_size * 2 + 2;
 		r->name_index = (uint64_t*)realloc(r->name_index, sizeof(uint64_t) * r->name_index_size);
+		// hamt-not-read-selection
+		// r->nb_error_corrected = (uint16_t*)realloc(r->nb_error_corrected, sizeof(uint16_t) * r->index_size);
 	}
 	if (r->hamt_stat_buf_size < r->total_reads + 2){  // because I'm doing multiple passes where only the 1st one will fill the buffers
 		// meta

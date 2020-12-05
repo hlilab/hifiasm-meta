@@ -100,6 +100,7 @@ typedef struct {
     int lowq_thre_5;
     int lowq_thre_3;
 
+    int write_debug_gfa;
     // end of hamt
     
 } hifiasm_opt_t;

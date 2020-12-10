@@ -66,9 +66,14 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 int hamt_ug_resolve_oneMultiLeafSoapBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 // (hap)
+int hamt_ug_rescueLowCovHapGap_simple(asg_t *sg, ma_ug_t *ug, 
+                              ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, 
+                              const ma_sub_t* coverage_cut, uint64_t *readLen);
 int hamt_ug_treatBifurcation_hapCovCut(asg_t *sg, ma_ug_t *ug, float covdiff_ratio, float haplo_ratio, 
                                         ma_hit_t_alloc *reverse_sources,
                                         int base_label, int alt_label);
-
+void hamt_ughit_rescueLowCovHapGap(asg_t *sg, ma_ug_t *ug, 
+                                         ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, const ma_sub_t* coverage_cut,
+                                         long long n_read, uint64_t *readLen, int read_cov_threshold);
 
 #endif // __OVERLAPS_HAMT__

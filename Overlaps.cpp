@@ -399,7 +399,7 @@ void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element)
 }
 
 
-long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)  // with last bit indicating direction
+long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)  // note: qn and tn doesn't have direction, it's read ID
 {
     long long i;
     for (i = 0; i < x->length; i++){
@@ -409,51 +409,17 @@ long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)  // 
     return -1;
 }
 
-
-
-inline void set_reverse_overlap(ma_hit_t* dest, ma_hit_t* source)
-{
-    // dest is either a placeholder, or the slot to be overwirtten
-    dest->qns = Get_tn(*source);
-    dest->qns = dest->qns << 32;
-    dest->qns = dest->qns | Get_ts(*source);
-    dest->qe = Get_te(*source);
-
-
-    dest->tn = Get_qn(*source);
-    dest->ts = Get_qs(*source);
-    dest->te = Get_qe(*source);
-
-    dest->rev = source->rev;
-    dest->el = source->el;
-
-
-    /****************************may have bugs********************************/
-    /**
-    if(dest->ml == 0 || source->ml == 0)
-    {
-        dest->ml = source->ml = 0;
+ma_hit_t *get_specific_overlap_handle(ma_hit_t_alloc *sources, uint32_t qn, uint32_t tn){  // note: no direction bit
+    for (int i=0; i<sources[qn].length; i++){
+        // if (sources[qn].buffer[i].del){continue;}
+        if (sources[qn].buffer[i].tn == tn){
+            return &sources[qn].buffer[i];
+        }
     }
-    else
-    {
-        dest->ml = source->ml = 1;
-    }
-
-
-    if(dest->no_l_indel == 0 || source->no_l_indel == 0)
-    {
-        dest->no_l_indel = source->no_l_indel = 0;
-    }
-    else
-    {
-        dest->no_l_indel = source->no_l_indel = 1;
-    }
-    **/
-    dest->ml = source->ml;
-    dest->no_l_indel = source->no_l_indel;
-    /****************************may have bugs********************************/
-    dest->bl = Get_qe(*dest) - Get_qs(*dest);
+    return NULL;
 }
+
+
 
 
 /////////////////////////////////
@@ -1868,7 +1834,7 @@ ma_sub_t* coverage_cut, float shift_rate)
 }
 
 
-int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, long long i_read, uint64_t *readLen, int overhang_allowance){
+int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, ma_hit_t_alloc *reverse_sources, long long i_read, uint64_t *readLen, int overhang_allowance){
     // RETURN
     //    1 if yes
     //    0 if perfectly no
@@ -1878,6 +1844,8 @@ int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, long long i_read, uint64_t *r
     //    Collect_sides_also_count touches only ideal hits (i.e. start is 0 or end is readlength),
     //    but here we might have to deal with erroneours reads that's not actually an end read & doesn't overlap well however.
     ma_hit_t_alloc *paf_of_read = &sources[i_read];
+    ma_hit_t_alloc *paf_of_read_rev;
+    if (reverse_sources!=NULL) {paf_of_read_rev = &reverse_sources[i_read];}
     uint64_t readlength = readLen[i_read]; 
 
     ma_sub_t max_left, max_right;
@@ -1891,6 +1859,7 @@ int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, long long i_read, uint64_t *r
         uint32_t left_passed=0, right_passed=0, t_lefthang, t_righthang;
         uint32_t qs, qe;
         uint64_t t_readlength;
+        // intra-haplotype
         for (int i=0; i<paf_of_read->length; i++){
             if (paf_of_read->buffer[i].del) {continue;}
             handle = &paf_of_read->buffer[i];
@@ -1917,6 +1886,36 @@ int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, long long i_read, uint64_t *r
             if (t_lefthang>=qs){left_passed = 1;}
             if (t_righthang>=(readlength-qe)) {right_passed = 1;}
         }
+        // inter-haplotype
+        if (reverse_sources!=NULL){
+            for (int i=0; i<paf_of_read_rev->length; i++){
+                if (paf_of_read_rev->buffer[i].del) {continue;}
+                handle = &paf_of_read_rev->buffer[i];
+                qs = (uint32_t)handle->qns;
+                qe = handle->qe;
+                t_readlength = readLen[handle->tn];
+
+                if (handle->rev==0){  // "left" assumes laying the query left to right and use the orientation observed
+                    t_lefthang = handle->ts;
+                    t_righthang = t_readlength - handle->te;
+                }else{
+                    t_lefthang = t_readlength - handle->te;
+                    t_righthang = handle->ts;
+                }
+                // fprintf(stderr, "    check target %.*s, lefthang:%d, righthang:%d\n", (int)Get_NAME_LENGTH(R_INF, handle->tn), Get_NAME(R_INF, handle->tn),
+                                // t_lefthang, t_righthang);
+
+                // sancheck
+                if (qs>overhang_allowance && (readlength-qe)>overhang_allowance &&
+                    t_lefthang>overhang_allowance && t_righthang>overhang_allowance){
+                    return -2;
+                }
+                // check coordinates
+                if (t_lefthang>=qs){left_passed = 1;}
+                if (t_righthang>=(readlength-qe)) {right_passed = 1;}
+            }
+        }
+
         if (left_passed && right_passed){
             // this is effectively: query read maps with some other reads in the middle,
             //                      but towards the end they don't match.
@@ -2202,7 +2201,7 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
 
 
 void hamt_hit_contained_multi(ma_hit_t_alloc* sources, long long n_read, uint64_t *readLen,
-                        ma_sub_t *coverage_cut, R_to_U* ruIndex, int max_hang, int min_ovlp)
+                        ma_sub_t *coverage_cut)
 {
 // multithread ver of hamt_hit_contained
     double startTime = Get_T();
@@ -2219,9 +2218,6 @@ void hamt_hit_contained_multi(ma_hit_t_alloc* sources, long long n_read, uint64_
     if (VERBOSE){
         fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \nnext: regular ma_hit_contained_advance\n\n", __func__, Get_T()-startTime, aux.counter);
     }
-
-    // the regular containment treatment
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang, min_ovlp);
 }
 
 
@@ -2482,6 +2478,17 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
     }
     
 }
+
+
+// typedef struct{
+//     ma_hit_t_alloc *sources;
+//     ma_hit_t_alloc *reverse_sources;
+//     long long n_read;
+//     uint64_t *readLen;
+//     int cov_nbreads;
+//     int counter;  // might RACE but doesn't matter
+// }hitres_hapgap_t;  // "hit rescue haplotype gap"
+
 
 
 
@@ -27380,13 +27387,34 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     ///fix_binned_reads(sources, n_read, coverage_cut);
     ///just need to deal with trio here
-    hamt_hit_contained_multi(sources, n_read, readLen, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
-    // ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
+    hamt_hit_contained_multi(sources, n_read, readLen, coverage_cut);
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
 
     sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
     asg_arc_del_trans(sg, gap_fuzz);
+
+    ////////// experimental
+    // ma_ug_t *ug_rescue;
+    // ug_rescue = ma_ug_gen(sg);
+    // hamt_ughit_rescueLowCovHapGap(sg, ug_rescue, sources, reverse_sources, coverage_cut, n_read, readLen, 10);
+    // ma_ug_destroy(ug_rescue);
+    // renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
+    // normalize_ma_hit_t_single_side_advance(sources, n_read);  // ?????? this is pretty slow
+    // normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
+    // clean_weak_ma_hit_t(sources, reverse_sources, n_read);
+    // ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
+    // detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
+    // ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
+    // ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
+    // hamt_hit_contained_multi(sources, n_read, readLen, coverage_cut);
+    // ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
+    // sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
+    // asg_arc_del_trans(sg, gap_fuzz);
+    /////////////////////////////////////////
+
+
     asm_opt.coverage = get_coverage(sources, coverage_cut, n_read);
 
     if(VERBOSE >= 1)
@@ -27498,7 +27526,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     }
 
     // pre_clean(sources, coverage_cut, sg, bubble_dist);
-    hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // TESTING
+    hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);
 
     asg_arc_del_short_diploi_by_suspect_edge(sg, asm_opt.max_short_tip);
     asg_cut_tip(sg, asm_opt.max_short_tip);
@@ -27589,10 +27617,30 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             ma_ug_t *hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
 
+            // // rescue stuff
+            // {
+            //     char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+            //     sprintf(unlean_name, "%s.sgbefore", output_file_name);
+            //     output_read_graph(sg, coverage_cut, unlean_name, n_read);
+            //     output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+            //     free(unlean_name);
+            // }
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_hapgap", cleanID);
+            // hamt_ug_rescueLowCovHapGap_simple(sg, hamt_ug, sources, reverse_sources, coverage_cut, readLen);
+            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_hapgap", cleanID);
+            // {
+            //     char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+            //     sprintf(unlean_name, "%s.sgafters", output_file_name);
+            //     output_read_graph(sg, coverage_cut, unlean_name, n_read);
+            //     output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+            //     free(unlean_name);
+            // }
+
             // topo pre clean
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             for (int i=0; i<10; i++){
-                if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;}
                 if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 if (hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0)==0){
@@ -27600,29 +27648,29 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                     break;
                 }
             }
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;}
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
 
             hamt_clean_shared_seq(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;}
 
             hamt_circle_cleaning(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
 
             hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;}
 
             // topo
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;}
 
 
             // more topo cleaning
@@ -27632,17 +27680,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // one more round of basic topo cleaning
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", 0);}
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
 
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_after", 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_after", 0);}
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // resolve complex bubble
             int nb_complex_bubble_cut;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
-                if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", round_resolve);
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", round_resolve);}
                 
                 nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug, 0, 1, 0);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips(sg, hamt_ug, 5, 0);
@@ -27663,12 +27711,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // rescues
             hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, ruIndex, coverage_cut, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeRescueAggressive", 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeRescueAggressive", 0);}
             hamt_ug_prectg_rescueShortCircuit_simpleAggressive(sg, hamt_ug, sources, reverse_sources, coverage_cut, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // hap cov cut
-            if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", 0);}
             hamt_ug_treatBifurcation_hapCovCut(sg, hamt_ug, 0.7, 0.5, reverse_sources, 0, 1);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
@@ -27680,7 +27728,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            // het recovery
 
             hamt_ug_destroy(hamt_ug);
         }  

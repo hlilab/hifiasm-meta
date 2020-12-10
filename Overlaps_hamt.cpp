@@ -397,10 +397,26 @@ int stack32_is_in_stack(stacku32_t *stack, uint32_t d){
 
 
 //////////////////////////////////////////////////////////////////////////
-//                        anything before asg                           //
+//                        routines for overlaps                         //
 //////////////////////////////////////////////////////////////////////////
 
-
+int hamt_ovlp_read_coverage_nbreads(ma_hit_t_alloc *sources, long long i_read, uint32_t qs, uint32_t qe){
+    // FUNC
+    //     Roughly estimate read ocverage by counting overlap lengths of the given read.
+    if (qe<=qs){return 0;}
+    float ret=0; 
+    ma_hit_t *h;
+    uint32_t s, e;
+    for (int i=0; i<sources[i_read].length; i++){
+        h = &sources[i_read].buffer[i];
+        if (h->del) {continue;}
+        s = (uint32_t)h->qns > qs? (uint32_t)h->qns : qs;
+        e = h->qe < qe? h->qe : qe;
+        if (e>s) {ret+=e-s;}
+    }
+    ret = ret/(qe-qs);
+    return ret<=1? 1 : (int)ret;  // waterproof zero for easier use
+}
 
 
 //////////////////////////////////////////////////////////////////////
@@ -415,7 +431,7 @@ int does_ovlp_ever_exist(ma_hit_t_alloc *sources, uint32_t v0, uint32_t w0, ma_h
     // RETURN
     //     1 if yes
     //     0 if no
-    int verbose = 1;
+    int verbose = 0;
 
     int nb_targets;
     int found = 0;
@@ -3173,7 +3189,7 @@ int hamt_ug_recover_ovlp_if_existed_core(asg_t *sg, ma_ug_t *ug, uint32_t start_
     //    1 if an arc can be or was recovered 
     //    0 if overlap existed, but the arc is suboptimal (e.g. containment)
     //    -1 if overlap was not available
-    int verbose = 1;
+    int verbose = 0;
     if (verbose){
         fprintf(stderr, "[debug::%s] start %.*s, end %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, start_v>>1), Get_NAME(R_INF, start_v>>1),
                                                                         (int)Get_NAME_LENGTH(R_INF, end_v>>1), Get_NAME(R_INF, end_v>>1));
@@ -3223,7 +3239,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
                                     ma_hit_t_alloc *sources, 
                                     const ma_sub_t* coverage_cut, int search_span){
     // FUNC
-    //     check if vu could've formed a circle, and modify arcs accordingly if so
+    //     check if start->end could've formed an arc. Add the arc accordingly if so
     // PAR
     //     search_span : how many reads to search if the overlap of start/end pair 
     //                     is suboptimal (e.g. containment) & couldn't directly form the arc.
@@ -3233,7 +3249,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     //       if all recoverble overlaps were not ideal, do nothing.
     //     After recovering the arc, also trim off reads involved in containment. (reads will be DELETED)
     // RETURN
-    //     1 upon covereing an arc (+cleanup)
+    //     1 upon recovereing an arc (+cleanup)
     //     0 if no termination criteria met, but ran out of search_span
     //     -1 if we shouldn't recover stuff
     int verbose = 1;
@@ -3248,6 +3264,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     if (status<0){
         return -1;
     }else if (status>0){
+        fprintf(stderr, "ideal recovery\n");
         return 1;
     }
     if (search_span<0){  // for more generic usage
@@ -3282,6 +3299,8 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
             if (idx==(search_span-1)){fprintf(stderr, "[W::%s] search span not big enough?\n", __func__);}
             status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w_end, sources, coverage_cut, 1);
             assert(status==1);
+            fprintf(stderr, "stepped recovery, read pair: %.*s - %.*s\n", (int)Get_NAME_LENGTH(R_INF, v>>1), Get_NAME(R_INF, v>>1),
+                                                                           (int)Get_NAME_LENGTH(R_INF, w_end>>1), Get_NAME(R_INF, w_end>>1));
             return 1;
         }else if (status<0){  // encounter any non-overlapping pairs and we're done
             break;
@@ -3323,6 +3342,8 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
             if (idx==(search_span-1)){fprintf(stderr, "[W::%s] search span not big enough?\n", __func__);}
             status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v_end, w, sources, coverage_cut, 1);
             assert(status==1);
+            fprintf(stderr, "stepped recovery, read pair: %.*s - %.*s\n", (int)Get_NAME_LENGTH(R_INF, v_end>>1), Get_NAME(R_INF, v_end>>1),
+                                                                           (int)Get_NAME_LENGTH(R_INF, w>>1), Get_NAME(R_INF, w>>1));
             return 1;
         }else if (status<0){  // encounter any non-overlapping pairs and we're done
             return -1;
@@ -3352,11 +3373,11 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     // NOTE
     //    not sure if this is always correct. Haven't seen it break in practice, but have no proof.
 
-    int verbose = 0;
+    int verbose = 2;
 
     asg_t *auxsg = ug->g;
-    uint32_t vu, wu, v_tmp, nv, nw;
-    asg_arc_t *av, *aw;
+    uint32_t vu, wu, v_tmp, nv, nw, tmp_nv;
+    asg_arc_t *av, *aw, *tmp_av;
     int nb_nodes_visited = 0;
     vu = v0;
 
@@ -3372,8 +3393,23 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
         if (av[i].del){continue;}
         if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label) {continue;}
         if (hamt_asgarc_util_countPre(auxsg, av[i].v, 0, 0, base_label)!=1){
-            if (verbose) {fprintf(stderr, "[debug::%s]     exit bc target backward bifur\n", __func__);}
-            return 0;
+            // allow backward tip
+            int san = 0;
+            tmp_nv = asg_arc_n(auxsg, av[i].v^1);
+            tmp_av = asg_arc_a(auxsg, av[i].v^1);
+            for (int i_tmp=0; i_tmp<tmp_nv; i_tmp++){
+                if (tmp_av[i_tmp].del){continue;}
+                if (base_label>=0 && auxsg->seq_vis[tmp_av[i_tmp].v>>1]!=base_label) {continue;}
+                if (tmp_av[i_tmp].v^1 == vu){continue;}  // note: must check direction
+                if (hamt_asgarc_util_countSuc(auxsg, tmp_av[i_tmp].v, 0, 0, base_label)>0){  // the backward bifurcation leads to non-tip tig
+                    san=1;
+                    break;
+                }
+            }
+            if (san){
+                if (verbose) {fprintf(stderr, "[debug::%s]     exit bc target backward bifur\n", __func__);}
+                return 0;
+            }
         }
     }
     // // (backward direction)
@@ -3479,10 +3515,15 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
                 for (iw=0; iw<nw; iw++){
                     if (aw[iw].del){continue;}
                     if (base_label>=0 && auxsg->seq_vis[aw[iw].v>>1]!=base_label) {continue;}
-                    if (!(color[aw[iw].v] || color[aw[iw].v^1])){  // not all predecessors have been seen; take back vu (if not already have) and don't push wu
-                        vu_not_passing = 1;
-                        if (verbose) {fprintf(stderr, "[debug::%s]     -> wu utg%.6d did not pass pred check\n", __func__, (int)(wu>>1)+1);}
-                        break;
+                    if (hamt_asgarc_util_countSuc(auxsg, aw[iw].v, 0, 0,base_label)==0 &&
+                        hamt_asgarc_util_countPre(auxsg, aw[iw].v, 0, 0, base_label)==1) {  // ignore simple tip predecessors
+                        color[aw[iw].v] = 2;
+                    }else{
+                        if (!(color[aw[iw].v] || color[aw[iw].v^1])){  // not all predecessors have been seen; take back vu (if not already have) and don't push wu
+                            vu_not_passing = 1;
+                            if (verbose) {fprintf(stderr, "[debug::%s]     -> wu utg%.6d did not pass pred check\n", __func__, (int)(wu>>1)+1);}
+                            break;
+                        }
                     }
                 }
                 if (vu_not_passing){break;}
@@ -3500,13 +3541,20 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
                 if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label) {continue;}
                 wu = av[i].v;
                 if (color[wu]!=0) {continue;}
+                // set to finished if the child is a simple tip (in the current walking direction)
+                if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, base_label)==0 &&
+                    hamt_asgarc_util_countPre(auxsg, wu, 0, 0, base_label)==1){  // note: must check pre, since the actual end vertex might be a tip (with more than 1 pre)
+                    color[wu] = 2;
+                    continue;
+                }
                 nw = asg_arc_n(auxsg, wu^1);
                 aw = asg_arc_a(auxsg, wu^1);
                 uint32_t iw;
                 for (iw=0; iw<nw; iw++){
                     if (aw[iw].del){continue;}
                     if (base_label>=0 && auxsg->seq_vis[aw[iw].v>>1]!=base_label) {continue;}
-                    if (!(color[aw[iw].v] || color[aw[iw].v^1])){ // predecessor checking 
+                    // on pardon predecessor-unseen-but-its-a-tip condition: it should already have been colored black
+                    if (!(color[aw[iw].v] || color[aw[iw].v^1])){ // predecessor check
                         break;
                     }
                 }
@@ -3588,7 +3636,7 @@ int hamt_ug_pop_complexBubble(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t 
     //    (does hamt need alternative ctg? yes)
     // RETURN
     //     number of dropped arcs
-    int verbose = 0;
+    int verbose = 2;
 
     asg_t *auxsg = ug->g;
     int nb_cut = 0;
@@ -3635,8 +3683,14 @@ int hamt_ug_pop_complexBubble(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t 
                 break;
             }
             if (color[av[i].v]==0){
-                is_exhausted = 0;
-                break;
+                // if the unseen child is a tip (in the current walking direction), set it to finished
+                if (hamt_asgarc_util_countSuc(auxsg, av[i].v, 0, 0, base_label)==0 &&
+                    hamt_asgarc_util_countPre(auxsg, av[i].v, 0, 0, base_label)==1){  // need to count predecessor, in case the end happens to be a tip
+                    color[av[i].v] = 2;
+                }else{
+                    is_exhausted = 0;
+                    break;
+                }
             }
         }
         if (yes_break) {break;}
@@ -4628,7 +4682,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg,
     int nb_pop = 0, round = 0;
 
     for (round=0; round<5; round++){
-        if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-TOPO", round);
+        if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-TOPO", round);}
 
         nb_pop = 0;
 
@@ -4727,7 +4781,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
         asg_t *auxsg = ug->g;
 
         // debug
-        if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-resShortCircuit", round);
+        if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-resShortCircuit", round);}
 
         for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
             if (verbose){
@@ -4927,7 +4981,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
     int nb_treated = 0;
     uint8_t *color = (uint8_t*)calloc(auxsg->n_seq, 1);  // easier than fixing auxsg
 
-    if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-rescueLongUtg",0);
+    if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-rescueLongUtg",0);}
 
     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){  
         if (color[vu>>1]){continue;}
@@ -4969,7 +5023,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, 
                                           int base_label, int alt_label, int is_hard_drop){
-    int verbose = 0;
+    int verbose = 2;
 
     // ma_ug_t *ug = ma_ug_gen(sg);
     asg_t *auxsg = ug->g;
@@ -5027,7 +5081,7 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
         hamt_ug_cleanup_arc_by_labels(sg, ug);
     }
 
-    if (asm_opt.write_debug_gfa) hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "resolveTangle_middle", 0);
+    if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "resolveTangle_middle", 0);}
 
     // cut tips
     int nb_cut_tip = 1, nb_cut_tiny_circle = 1;
@@ -5222,3 +5276,385 @@ int hamt_ug_basic_topoclean_simple(asg_t *sg, ma_ug_t *ug, int base_label, int a
     nb_cut += hamt_ug_oneutgCircleCut(sg, ug, base_label);
     return nb_cut;
 }
+
+#if 0
+//
+//  NOTE
+//     Form chimeric haplotype for low coverage regions that would otherwise end up with 2 or more unitigs.
+//     Has performance issues (could be resolve by using kt_pipeline or rewrite),
+//       and seems to matter very little for most cases: if a speicies has too many this 
+//       kind of spots, the whole assembly will still be fragmented even if we rescue - too many real gaps.
+//     TODO - come back to this if more examples emerge. (Dec 9 2020; example: zymo(std), Candida)
+//
+int hamt_ug_rescueLowCovHapGap_simple(asg_t *sg, ma_ug_t *ug, 
+                              ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, 
+                              const ma_sub_t* coverage_cut, uint64_t *readLen){
+    // Join two low coverage unitigs if a het arc is available
+    // WILL modify sources.
+    int verbose = 1;
+
+    int nb_treated = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t start, end;
+    int ret;
+    ma_hit_t *handle, handle_rev;
+
+    vecu64_t seen;
+    vecu64_init(&seen);
+    vecu32_t treated;
+    vecu32_init(&treated);
+    uint64_t key;
+
+    // collect unitig end info
+    // -1 if unitig is not a tip
+    // 1 if the end is simple (won't have more than 1 target candidate even if consider all overlaps)
+    // 0 otherwise
+    int32_t *read2utg = (int32_t*)calloc(sg->n_seq, sizeof(int32_t));  // TODO: use ruIndex?
+    memset(read2utg, -1, sg->n_seq*sizeof(int32_t));
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1) {continue;}
+        for (int i=0; i<ug->u.a[vu>>1].n; i++){
+            read2utg[ug->u.a[vu>>1].a[i]>>33] = vu>>1;
+        }
+    }
+    int8_t *buf = (int8_t*)calloc(auxsg->n_seq, 1);
+    memset(buf, 0, auxsg->n_seq*1);
+    uint32_t prv_utg_ID;
+    int breakout=0;
+    uint32_t v;
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        breakout = 0;
+        if (vu&1) {continue;}
+        fprintf(stderr, "marksimple\tutg%.6d\t", (int)(vu>>1)+1);
+
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, -1)>0){
+            buf[vu>>1] = -1; 
+            fprintf(stderr, "-1\n");
+            continue;
+        }
+        v = ug->u.a[vu>>1].end^1;
+        // vu has no target in the current unitig graph; check overlaps
+        prv_utg_ID = vu>>1;
+        for (int i=0; i<sources[v>>1].length; i++){
+            if (read2utg[sources[v>>1].buffer[i].tn]==-1){continue;}
+            if (prv_utg_ID==(vu>>1) && read2utg[sources[v>>1].buffer[i].tn]!=(vu>>1)) {
+                prv_utg_ID = read2utg[sources[v>>1].buffer[i].tn];
+                fprintf(stderr, " (set: %.*s)\n", (int)Get_NAME_LENGTH(R_INF, sources[v>>1].buffer[i].tn), 
+                                                             Get_NAME(R_INF, sources[v>>1].buffer[i].tn));
+                continue;
+            }
+            if (read2utg[sources[v>>1].buffer[i].tn]!=prv_utg_ID){
+                buf[vu>>1] = 0;
+                fprintf(stderr, "0\n");
+                fprintf(stderr, " (violation: %.*s)\n", (int)Get_NAME_LENGTH(R_INF, sources[v>>1].buffer[i].tn), 
+                                                             Get_NAME(R_INF, sources[v>>1].buffer[i].tn));
+                breakout = 1;
+                // break;
+            }
+        }
+        if (!breakout) {
+            // check het ovlp
+            for (int i=0; i<reverse_sources[v>>1].length; i++){
+                if (read2utg[reverse_sources[v>>1].buffer[i].tn]==-1){continue;}
+                if (prv_utg_ID==(vu>>1) && read2utg[reverse_sources[v>>1].buffer[i].tn]!=(vu>>1)) {
+                    prv_utg_ID = read2utg[reverse_sources[v>>1].buffer[i].tn];
+                    fprintf(stderr, " (set: %.*s)\n", (int)Get_NAME_LENGTH(R_INF, reverse_sources[v>>1].buffer[i].tn), 
+                                                             Get_NAME(R_INF, reverse_sources[v>>1].buffer[i].tn));
+                    continue;
+                }
+                if (read2utg[reverse_sources[v>>1].buffer[i].tn]!=prv_utg_ID){
+                    buf[vu>>1] = 0;
+                    breakout = 1;
+                    fprintf(stderr, "0\n");
+                    fprintf(stderr, " (violation: %.*s)\n", (int)Get_NAME_LENGTH(R_INF, reverse_sources[v>>1].buffer[i].tn), 
+                                                             Get_NAME(R_INF, reverse_sources[v>>1].buffer[i].tn));
+                    // break;
+                }
+            }
+            if (!breakout){
+                buf[vu>>1] = 1;
+                fprintf(stderr, "1\n");
+            }
+        }
+    }
+    free(read2utg);
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1) {continue;}// (only check vu's targets here, the other direction will be addressed by the iteration)
+        // ovlp topo check: 
+        if (buf[vu>>1]!=1){continue;}  // unitig's end might target more than one other unitigs
+
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)!=0){continue;}
+        for (uint32_t wu=0; wu<auxsg->n_seq*2; wu++){
+            if ((vu>>1)==(wu>>1)){continue;}
+            key = vu<wu? (((uint64_t)vu>>1)<<32 | (wu>>1)) : (((uint64_t)wu>>1)<<32 | (vu>>1)) ;
+            if (vecu64_is_in_vec(&seen, key)){continue;}
+            vecu64_push(&seen, key);
+            if (verbose) {fprintf(stderr, "[debug::%s] at utg%.6d vs utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);}
+
+            // wu forward
+            if (hamt_asgarc_util_countPre(auxsg, wu, 0, 0, 0)==0){
+                start = ug->u.a[vu>>1].end^1;
+                end = ug->u.a[wu>>1].start;
+                if ( (hamt_ovlp_read_coverage_nbreads(sources, start>>1, 0, readLen[start>>1]) + 
+                      hamt_ovlp_read_coverage_nbreads(reverse_sources, start>>1, 0, readLen[end>>1])) <= 10){
+                    // if (verbose) {fprintf(stderr, "cov check passed\n");}
+                    ret = hamt_ug_recover_ovlp_if_existed(sg, ug, start, end, reverse_sources, coverage_cut, 10);
+                    if (ret>0) {
+                        nb_treated++;
+                        // modify sources
+                        handle = get_specific_overlap_handle(reverse_sources, start>>1, end>>1);
+                        assert(handle>0);
+                        add_ma_hit_t_alloc(&sources[start>>1], handle);
+                        set_reverse_overlap(&handle_rev, handle);
+                        add_ma_hit_t_alloc(&sources[end>>1], &handle_rev);
+                        if (verbose){
+                            fprintf(stderr, "wu backward sucess %d, %.*s - %.*s\n", ret, 
+                                                    (int)Get_NAME_LENGTH(R_INF, start>>1), Get_NAME(R_INF, start>>1),
+                                                    (int)Get_NAME_LENGTH(R_INF, end>>1), Get_NAME(R_INF, end>>1));
+                        }
+                        vecu32_push(&treated, wu>>1);
+                        continue;  
+                    }
+                }
+            }
+
+            // wu backward
+            if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, 0)==0){
+                start = ug->u.a[vu>>1].end^1;
+                end = ug->u.a[wu>>1].end;
+                if ( (hamt_ovlp_read_coverage_nbreads(sources, start>>1, 0, readLen[start>>1]) + 
+                      hamt_ovlp_read_coverage_nbreads(reverse_sources, start>>1, 0, readLen[end>>1])) > 10) {continue;}  // not low coverage
+                // if (verbose) {fprintf(stderr, "cov check passed\n");}
+                ret = hamt_ug_recover_ovlp_if_existed(sg, ug, start, end, reverse_sources, coverage_cut, 10);
+                if (ret>0) {
+                    nb_treated++;
+                    // modify sources
+                    handle = get_specific_overlap_handle(reverse_sources, start>>1, end>>1);
+                    assert(handle>0);
+                    add_ma_hit_t_alloc(&sources[start>>1], handle);
+                    set_reverse_overlap(&handle_rev, handle);
+                    add_ma_hit_t_alloc(&sources[end>>1], &handle_rev);
+                    if (verbose){
+                        fprintf(stderr, "wu backward sucess %d, %.*s - %.*s\n", ret, 
+                                                (int)Get_NAME_LENGTH(R_INF, start>>1), Get_NAME(R_INF, start>>1),
+                                                (int)Get_NAME_LENGTH(R_INF, end>>1), Get_NAME(R_INF, end>>1));
+                    }  
+                    vecu32_push(&treated, wu>>1);
+                }
+                
+            }
+        }        
+    }
+    vecu64_destroy(&seen);
+    vecu32_destroy(&treated);
+    if (nb_treated){
+        free(sg->idx);
+        sg->idx = 0;
+        sg->is_srt = 0;
+        asg_cleanup(sg);
+        asg_arc_del_multi(sg);
+
+        asg_cut_tip(sg, asm_opt.max_short_tip);
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[debug::%s] treated %d spots\n", __func__, nb_treated);
+    }
+    return nb_treated;
+
+}
+
+
+int hamt_ughit_rescueLowCovHapGap_core(asg_t *sg, ma_ug_t *ug,
+                                            ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, const ma_sub_t* coverage_cut,
+                                            long long n_read, uint64_t *readLen,
+                                            long i_v, long i_w, int read_cov_threshold){
+    // RETRURN
+    //     1 if the arc should be recovered
+    //     0 otherwise
+    // SIDE EFFECT
+    //     will copy overlap and set .del status accordingly for source and reverse_sources
+    // NOTE
+    //     Currently when looking for bridge read, this function only pick the 1st
+    //       qualified candidate and doesn't check if there's more. This shouldn't
+    //       matter too much?
+    int verbose = 1;
+    asg_t *auxsg = ug->g;
+
+    if (hamt_ovlp_read_coverage_nbreads(sources, i_v, 0, readLen[i_v])>read_cov_threshold) {return 0;}  // coverage not low enough
+    if (hamt_ovlp_read_coverage_nbreads(sources, i_w, 0, readLen[i_w])>read_cov_threshold) {return 0;}  // coverage not low enough
+
+    uint32_t tn, qn;
+    ma_hit_t *handle1, *handle2;
+    int found=0, is_reverse_1, is_reverse_2;
+    int iov_1, iov_2;
+
+    ma_hit_t *placeholder1, *placeholder2;
+
+    if (verbose) {fprintf(stderr, "[debug::%s] %.*s vs %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, i_v), Get_NAME(R_INF, i_v),
+                                                                          (int)Get_NAME_LENGTH(R_INF, i_w), Get_NAME(R_INF, i_w));}
+    // sancheck: the two reads to be bridged shall not overlap with each other
+    if (does_ovlp_ever_exist(sources, i_v<<1, (uint32_t)i_w<<1, &placeholder1, &placeholder2) ||
+        does_ovlp_ever_exist(reverse_sources, i_v<<1, (uint32_t)i_w<<1, &placeholder1, &placeholder2) ){
+            if (verbose) {fprintf(stderr, "[debug::%s]     failed, bc two reads overlapped with each other\n", __func__);}
+            return 0;
+    }
+
+    // search if there's a read linking query read (v) and target read (w)
+    // (note: one of the overlap could be intra-haplotype, since phasing requires a few (3) reads.
+    //        Therefore here we check both inter+inter and intra+inter cases.)
+    for (iov_1=0; iov_1<reverse_sources[i_v].length; iov_1++){
+        handle1 = &reverse_sources[i_v].buffer[iov_1];
+        if (handle1->del){continue;}
+        tn = handle1->tn;
+        qn = (uint32_t)(handle1->qns>>32);
+        if (verbose) {fprintf(stderr, "[debug::%s]     bridge is %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, qn), Get_NAME(R_INF, qn));}
+        for (iov_2=0; iov_2<reverse_sources[i_w].length; iov_2++){
+            handle2 = &reverse_sources[i_w].buffer[iov_2];
+            if (handle2->del){continue;}
+            if ( ((uint32_t)(handle2->qns>>32))!=qn && handle2->tn==tn){
+                if (hamt_ovlp_read_coverage_nbreads(sources, tn, 0, readLen[tn]) + 
+                    hamt_ovlp_read_coverage_nbreads(reverse_sources, tn, 0, readLen[tn]) > read_cov_threshold) {continue;}
+                found = 1; is_reverse_1=1; is_reverse_2=1;
+                break;
+            }
+        }
+        if (found) {break;}
+        for (iov_2=0; iov_2<sources[i_w].length; iov_2++){
+            handle2 = &sources[i_w].buffer[iov_2];
+            if (handle2->del){continue;}
+            if (handle2->tn==tn){
+                if (hamt_ovlp_read_coverage_nbreads(sources, tn, 0, readLen[tn]) + 
+                    hamt_ovlp_read_coverage_nbreads(reverse_sources, tn, 0, readLen[tn]) > read_cov_threshold) {continue;}
+                found = 1; is_reverse_1=1; is_reverse_2=0;
+                break;
+            }
+        }
+        if (found) {break;}
+    }
+    if (!found){
+        for (iov_1=0; iov_1<sources[i_v].length; iov_1++){
+            handle1 = &sources[i_v].buffer[iov_1];
+            if (handle1->del){continue;}
+            tn = handle1->tn;
+            qn = (uint32_t) (handle1->qns>>32);
+            for (iov_2=0; iov_2<reverse_sources[i_w].length; iov_2++){
+                handle2 = &reverse_sources[i_w].buffer[iov_2];
+                if (handle2->del){continue;}
+                if ( ((uint32_t)(handle2->qns>>32))!=qn && handle2->tn==tn){
+                    if (hamt_ovlp_read_coverage_nbreads(sources, tn, 0, readLen[tn]) + 
+                        hamt_ovlp_read_coverage_nbreads(reverse_sources, tn, 0, readLen[tn]) > read_cov_threshold) {continue;}
+                    found = 1; is_reverse_1=0; is_reverse_2=1;
+                    break;
+                }
+            }
+            if (found){break;}
+        }
+    }
+
+    if (found){  // found the bridging (also low-cov) read
+        ma_hit_t handle_tmp;
+
+        // add the overlaps to intra-haplotype collection && mark het counterparts as deleted
+        if (is_reverse_1) {
+            add_ma_hit_t_alloc(&sources[i_v], handle1);
+            set_reverse_overlap(&handle_tmp, handle1);
+            add_ma_hit_t_alloc(&sources[tn], &handle_tmp);
+            handle1->del = 1;
+        }
+        if (is_reverse_2) {
+            add_ma_hit_t_alloc(&sources[i_w], handle2);
+            set_reverse_overlap(&handle_tmp, handle2);
+            add_ma_hit_t_alloc(&sources[tn], &handle_tmp);
+            handle2->del = 1;
+        }
+
+        fprintf(stderr, "hapgap closes: %.*s and %.*s\n", (int)Get_NAME_LENGTH(R_INF, i_v), Get_NAME(R_INF, i_v),
+                                                            (int)Get_NAME_LENGTH(R_INF, i_w), Get_NAME(R_INF, i_w));
+
+        // TODO: maybe don't need sorting...
+        ma_hit_sort_tn(sources[i_v].buffer, sources[i_v].length);
+        ma_hit_sort_tn(sources[i_w].buffer, sources[i_w].length);
+
+        // modify graph
+        if (is_reverse_1) {hamt_ug_recover_ovlp_if_existed_core(sg, ug, i_v<<1, tn<<1, reverse_sources, coverage_cut, 1);}  // note: shift is dummy, the last bit doesn't matter
+        else{hamt_ug_recover_ovlp_if_existed_core(sg, ug, i_v<<1, tn<<1, sources, coverage_cut, 1);}
+        if (is_reverse_2){hamt_ug_recover_ovlp_if_existed_core(sg, ug, i_w<<1, tn<<1, reverse_sources, coverage_cut, 1);}
+        else{hamt_ug_recover_ovlp_if_existed_core(sg, ug, i_w<<1, tn<<1, sources, coverage_cut, 1);}
+
+        return 1;
+    }else{
+        return 0;
+    }
+}
+void hamt_ughit_rescueLowCovHapGap(asg_t *sg, ma_ug_t *ug, 
+                                         ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, const ma_sub_t* coverage_cut,
+                                         long long n_read, uint64_t *readLen, int read_cov_threshold){
+    // FUNC
+    //     Sometimes a low coverage region need to use overlaps between different haplotypes to
+    //       not break into multiple unitigs. Although joining them isn't ideal, it's still preferable.
+    //     This function treats such spots, where the gap can be closed by one read.
+    // NOTE
+    //     Will move the inter-haplotype overlap(s) to the intra-haplotype set as needed.
+    // TODO
+    //     Log ^this info. Might be useful for users.
+    double startTime = Get_T();
+    int verbose = 1;
+
+    int nb_treated = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t vid, wid;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1){continue;}  // only need to check utg in one direction
+        if (verbose) {fprintf(stderr, "[debug::%s] at utg%.6d\n", __func__, (int)(vu>>1)+1);}
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, -1)==0){
+            vid = ug->u.a[vu>>1].start>>1;
+            for (uint32_t wu=0; wu<auxsg->n_seq*2; wu++){
+                // the two unitigs to be joined shall not be a pair of haplotigs
+                if (hamt_check_diploid(ug, vu, wu, 0.7, sources) || hamt_check_diploid(ug, vu, wu, 0.7, reverse_sources)){continue;}
+                if (hamt_asgarc_util_countPre(auxsg, wu, 0, 0, -1)==0){  // left side of wu
+                    wid = ug->u.a[wu>>1].start>>1;
+                    nb_treated += hamt_ughit_rescueLowCovHapGap_core(sg, ug, sources, reverse_sources, coverage_cut, 
+                                                       n_read, readLen, vid, wid, read_cov_threshold);          
+                }
+                if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, -1)==0){  // right side of wu
+                    wid = ug->u.a[wu>>1].end>>1;
+                    nb_treated += hamt_ughit_rescueLowCovHapGap_core(sg, ug, sources, reverse_sources, coverage_cut, 
+                                                       n_read, readLen, vid, wid, read_cov_threshold);
+                }
+            }
+        }
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, -1)==0){
+            vid = ug->u.a[vu>>1].end>>1;
+            for (uint32_t wu=0; wu<auxsg->n_seq*2; wu++){
+                // the two unitigs to be joined shall not be a pair of haplotigs
+                if (hamt_check_diploid(ug, vu, wu, 0.7, sources) || hamt_check_diploid(ug, vu, wu, 0.7, reverse_sources)){continue;}
+                if (hamt_asgarc_util_countPre(auxsg, wu, 0, 0, -1)==0){  // left side of wu
+                    wid = ug->u.a[wu>>1].start>>1;
+                    nb_treated += hamt_ughit_rescueLowCovHapGap_core(sg, ug, sources, reverse_sources, coverage_cut, 
+                                                       n_read, readLen, vid, wid, read_cov_threshold);
+                }
+                if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, -1)==0){  // right side of wu
+                    wid = ug->u.a[wu>>1].end>>1;
+                    nb_treated += hamt_ughit_rescueLowCovHapGap_core(sg, ug, sources, reverse_sources, coverage_cut, 
+                                                       n_read, readLen, vid, wid, read_cov_threshold);
+                }
+            }
+        }
+
+    }
+
+    if (nb_treated){
+        free(sg->idx);
+        sg->idx = 0;
+        sg->is_srt = 0;
+        asg_cleanup(sg);
+    }
+
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] done, %d spots involved. Took %0.2f s\n\n", __func__, nb_treated, Get_T()-startTime);
+    }
+}
+#endif
+

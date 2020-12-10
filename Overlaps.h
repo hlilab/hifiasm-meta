@@ -1088,6 +1088,49 @@ void output_read_graph(asg_t *sg, ma_sub_t* coverage_cut, char* output_file_name
 void output_unitig_graph(asg_t *sg, ma_sub_t* coverage_cut, char* output_file_name, 
 						 ma_hit_t_alloc* sources, R_to_U* ruIndex, int max_hang, int min_ovlp);
 int asg_arc_del_single_node_directly(asg_t *g, long long longLen_thres, ma_hit_t_alloc* sources);
+inline void set_reverse_overlap(ma_hit_t* dest, ma_hit_t* source)
+{
+    // dest is either a placeholder, or the slot to be overwirtten
+    dest->qns = Get_tn(*source);
+    dest->qns = dest->qns << 32;
+    dest->qns = dest->qns | Get_ts(*source);
+    dest->qe = Get_te(*source);
+
+
+    dest->tn = Get_qn(*source);
+    dest->ts = Get_qs(*source);
+    dest->te = Get_qe(*source);
+
+    dest->rev = source->rev;
+    dest->el = source->el;
+
+
+    /****************************may have bugs********************************/
+    /**
+    if(dest->ml == 0 || source->ml == 0)
+    {
+        dest->ml = source->ml = 0;
+    }
+    else
+    {
+        dest->ml = source->ml = 1;
+    }
+
+
+    if(dest->no_l_indel == 0 || source->no_l_indel == 0)
+    {
+        dest->no_l_indel = source->no_l_indel = 0;
+    }
+    else
+    {
+        dest->no_l_indel = source->no_l_indel = 1;
+    }
+    **/
+    dest->ml = source->ml;
+    dest->no_l_indel = source->no_l_indel;
+    /****************************may have bugs********************************/
+    dest->bl = Get_qe(*dest) - Get_qs(*dest);
+}
 
 void ma_ug_destroy(ma_ug_t *ug);
 ma_ug_t *ma_ug_gen(asg_t *g);
@@ -1095,6 +1138,8 @@ ma_ug_t *ma_ug_gen_primary(asg_t *g, uint8_t flag);
 uint32_t get_ug_coverage(ma_utg_t* u, asg_t* read_g, const ma_sub_t* coverage_cut, 
 						 ma_hit_t_alloc* sources, R_to_U* ruIndex, uint8_t* r_flag);
 int get_arc(asg_t *g, uint32_t src, uint32_t dest, asg_arc_t* result);
+ma_hit_t *get_specific_overlap_handle(ma_hit_t_alloc *sources, uint32_t qn, uint32_t tn);
+int asg_arc_del_multi(asg_t *g);
 ///////////////////////////////////////////////////////
 
 #endif

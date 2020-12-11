@@ -27706,6 +27706,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_oneutgCircleCut2(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_oneutgCircleCut(sg, hamt_ug, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
 
             // rescues

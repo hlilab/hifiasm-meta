@@ -183,7 +183,6 @@ void queue32_init(queue32_t *q){
     q->m = 16;
     q->i_head = 0;
     q->i_tail = 0;
-    q->earlywrap = 0;
     q->prev_m = q->m;
 }
 
@@ -192,13 +191,19 @@ void queue32_destroy(queue32_t *q){
 }
 
 void queue32_enqueue(queue32_t *q, uint32_t d){
-    if ((q->n+2)>=q->m){
-        q->a = (uint32_t*)realloc(q->a, sizeof(uint32_t)*(q->m + (q->m>>1)));
+    if ((q->n+1)>=q->m){
+        uint32_t shift = (q->m>>1);
+        q->a = (uint32_t*)realloc(q->a, sizeof(uint32_t)*(q->m + shift));
         assert(q->a);
         q->prev_m = q->m;
-        q->m = q->m + (q->m>>1);
+        q->m = q->m + shift;
         if (q->i_head>q->i_tail){
-            q->earlywrap = 1;
+            // need to shift the content between head and prev_m 
+            for (int idx=q->prev_m-1; idx>=q->i_head; idx--){
+                q->a[idx+shift] = q->a[idx];
+            }
+            q->i_head += shift;
+
         }
     }
     q->a[q->i_tail] = d;
@@ -216,19 +221,10 @@ int queue32_dequeue(queue32_t *q, uint32_t *d){
     }
     *d = q->a[q->i_head];
     q->n--;
-    if (!q->earlywrap){  // regular case
-        if (q->i_head==(q->m-1)){
-            q->i_head = 0;
-        }else{
-            q->i_head++;
-        }
+    if (q->i_head==(q->m-1)){
+        q->i_head = 0;
     }else{
-        if (q->i_head==(q->prev_m-1)){
-            q->i_head = 0;
-            q->earlywrap = 0;
-        }else{
-            q->i_head++;
-        }
+        q->i_head++;
     }
     return 1;
 }
@@ -237,7 +233,6 @@ void queue32_reset(queue32_t *q){
     q->n = 0;
     q->i_head = 0;
     q->i_tail = 0;
-    q->earlywrap = 0;
     q->prev_m = q->m;
 }
 
@@ -254,18 +249,10 @@ int queue32_is_in_queue(queue32_t *q, uint32_t d){
     int i = q->i_head;
     while (i!=q->i_tail){
         if (q->a[i]==d){return 1;}
-        if (!q->earlywrap){
-            if (i==(q->m-1)){
-                i = 0;
-            }else{
-                i++;
-            }
+        if (i==(q->m-1)){
+            i = 0;
         }else{
-            if (i==(q->prev_m-1)){
-                i = 0;
-            }else{
-                i++;
-            }
+            i++;
         }
     }
     if (q->a[i]==d){return 1;}
@@ -1898,10 +1885,14 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
         if (color[v0]){
             continue;
         }
+        if (verbose){
+            fprintf(stderr, "[debug::%s] seed utg%.6d\n", __func__, (int)(v0>>1)+1);
+        }
         if (base_label>=0 && sg->seq_vis[v0>>1]!=base_label){continue;}
         tmp = 0;
         queue32_reset(q);
         queue32_enqueue(q, v0);
+        // queue32_enqueue(q, v0^1);
         color[v0] = 1;
         color[v0^1] = 1;
         tmp++;
@@ -1909,14 +1900,16 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
         subg_labels[v0^1] = label;
         while(queue32_dequeue(q, &v)){
             if (color[v]==2){
+                if (verbose) {fprintf(stderr, "[debug::%s]    skip utg%.6d bcs color\n", __func__, (int)(v>>1)+1);}
                 continue;
             }
-            if (base_label>=0 && sg->seq_vis[v>>1]!=base_label){continue;}
+            if (verbose) {fprintf(stderr, "[debug::%s]    dequeue utg%.6d, n %d, m %d, head %d, tail %d\n", __func__, (int)(v>>1)+1, (int)q->n, (int)q->m, (int)q->i_head, (int)q->i_tail);}
             // 1st direction
+            if (verbose) {fprintf(stderr, "[debug::%s]    check 1st dir\n", __func__);}
             nv = asg_arc_n(sg, v);
             av = asg_arc_a(sg, v);
             for (uint32_t i=0; i<nv; i++){
-                // if (av[i].del){continue;}
+                if (av[i].del){continue;}
                 if (base_label>=0 && sg->seq_vis[av[i].v>>1]!=base_label) {continue;}
                 w = av[i].v;
                 if (color[w]==0){
@@ -1926,13 +1919,15 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
                     tmp++;
                     subg_labels[w] = label;
                     subg_labels[w^1] = label;
+                    if (verbose) {fprintf(stderr, "[debug::%s]    push utg%.6d, n %d, m %d, head %d, tail %d\n", __func__, (int)(w>>1)+1, (int)q->n, (int)q->m, (int)q->i_head, (int)q->i_tail);}
                 }
             }
             // 2nd direction
+            if (verbose) {fprintf(stderr, "[debug::%s]    check 2nd dir\n", __func__);}
             nv = asg_arc_n(sg, v^1);
             av = asg_arc_a(sg, v^1);
             for (uint32_t i=0; i<nv; i++){
-                // if (av[i].del){continue;}
+                if (av[i].del){continue;}
                 if (base_label>=0 && sg->seq_vis[av[i].v>>1]!=base_label) {continue;}
                 w = av[i].v;
                 if (color[w]==0){
@@ -1942,6 +1937,7 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
                     tmp++;
                     subg_labels[w] = label;
                     subg_labels[w^1] = label;
+                    if (verbose) {fprintf(stderr, "[debug::%s]    push utg%.6d, n %d, m %d, head %d, tail %d\n", __func__, (int)(w>>1)+1, (int)q->n, (int)q->m, (int)q->i_head, (int)q->i_tail);}
                 }
             }
             color[v] = 2;
@@ -1949,7 +1945,7 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
         }
         label++;
         if (verbose){
-            fprintf(stderr, "[debug::%s] subgraph #%d, %d reads.\n", __func__, label, tmp);
+            fprintf(stderr, "[debug::%s] subgraph #%d, %d reads/tigs.\n", __func__, label, tmp);
         }
     }
 
@@ -3373,7 +3369,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     // NOTE
     //    not sure if this is always correct. Haven't seen it break in practice, but have no proof.
 
-    int verbose = 2;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu, v_tmp, nv, nw, tmp_nv;
@@ -3386,6 +3382,8 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     // basic topo checks, requiring vu to be a articulation-vertex-like vertex
     // (note that to this point, we should have no trivial tips.)
     // (forward direction)
+    // NOTE: 
+    //     disabling this check will select a single path many-tips-joined-together cases
     if (hamt_asgarc_util_countNoneTipSuc(auxsg, vu, base_label)<2){return 0;}
     nv = asg_arc_n(auxsg, vu);
     av = asg_arc_a(auxsg, vu);
@@ -3400,7 +3398,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
             for (int i_tmp=0; i_tmp<tmp_nv; i_tmp++){
                 if (tmp_av[i_tmp].del){continue;}
                 if (base_label>=0 && auxsg->seq_vis[tmp_av[i_tmp].v>>1]!=base_label) {continue;}
-                if (tmp_av[i_tmp].v^1 == vu){continue;}  // note: must check direction
+                if ((tmp_av[i_tmp].v^1) == vu){continue;}  // note: must check direction
                 if (hamt_asgarc_util_countSuc(auxsg, tmp_av[i_tmp].v, 0, 0, base_label)>0){  // the backward bifurcation leads to non-tip tig
                     san=1;
                     break;
@@ -3636,7 +3634,7 @@ int hamt_ug_pop_complexBubble(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t 
     //    (does hamt need alternative ctg? yes)
     // RETURN
     //     number of dropped arcs
-    int verbose = 2;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     int nb_cut = 0;
@@ -4377,7 +4375,8 @@ int hamt_ug_pop_simpleShortCut(asg_t *sg, ma_ug_t *ug, int base_label, int alt_l
 
 int hamt_ug_oneutgCircleCut(asg_t *sg, ma_ug_t *ug, int base_label){
     // if a long unitig forms a circle on its own, and is only linked to other subgraphs
-    // by 1 arc (the target also has only this one predecessor), cut it off regardless of coverage diff
+    // by one or multiple arc(s) shooting from ONE end /(the target also has only this one predecessor)/,
+    // cut it off regardless of coverage diff
     int verbose = 0;
     asg_t *auxsg = ug->g;
     uint32_t vu, vu_, wu, nv;
@@ -4385,30 +4384,27 @@ int hamt_ug_oneutgCircleCut(asg_t *sg, ma_ug_t *ug, int base_label){
     int nb_cut = 0;
     for (vu=0; vu<auxsg->n_seq*2; vu++){
         if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=1){continue;}
-        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=2){continue;}
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)<2/*!=2*/){continue;}
         if (hamt_asgarc_util_get_the_one_target(auxsg, vu, &vu_, 0, 0, base_label)<0){fprintf(stderr, "ERROR %s\n", __func__); fflush(stderr); exit(0);}
         if (vu_!=vu){continue;}  // check circling
         nv = asg_arc_n(auxsg, vu^1);
         av = asg_arc_a(auxsg, vu^1);
-        int san = 0;
         for (uint32_t i=0; i<nv; i++){
             if (av[i].del){continue;}
             if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label) {continue;}
             if ((av[i].v^1)==vu){continue;}
-            san = 1;
             wu = av[i].v;
+            if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, base_label)==0){  // spare if is long tip
+                if (ug->u.a[wu>>1].len>100000){
+                    continue;
+                }
+            }  
+            // cut
+            hamt_ug_arc_del(sg, ug, vu^1, wu, 1);  // compile note: safe by assertion
+            nb_cut++;
         }
-        assert(san);
-        if (hamt_asgarc_util_countPre(auxsg, wu, 0, 0, base_label)!=1){continue;}  // backward branching
-        if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, base_label)==0){  // spare if is long tip
-            if (ug->u.a[wu>>1].len>100000){
-                continue;
-            }
-        }  
 
         // topo check passed, cut
-        hamt_ug_arc_del(sg, ug, vu^1, wu, 1);  // compile note: safe by assertion
-        nb_cut++;
         if (verbose){
             fprintf(stderr, "[M::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
         }
@@ -5023,7 +5019,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, 
                                           int base_label, int alt_label, int is_hard_drop){
-    int verbose = 2;
+    int verbose = 0;
 
     // ma_ug_t *ug = ma_ug_gen(sg);
     asg_t *auxsg = ug->g;

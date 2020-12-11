@@ -115,7 +115,7 @@ typedef struct {
 	uint64_t *a; // list of reads
 	char *s; // unitig sequence is not null
 	uint8_t c;  // hamt: like seq's .c
-	uint8_t subg_label;  // hamt: subgraph ID
+	int subg_label;  // hamt: subgraph ID
 } ma_utg_t;
 
 

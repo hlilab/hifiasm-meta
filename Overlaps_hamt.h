@@ -22,10 +22,10 @@ void hamtdebug_output_unitig_graph_ug(ma_ug_t *ug, char *base_fn, const char *su
 void hamt_ug_init_seq_vis(ma_ug_t *ug, uint8_t flag);
 void hamt_asg_reset_seq_label(asg_t *sg, uint8_t flag);
 void hamt_asg_reset_seq_vis(asg_t *sg, uint8_t flag);
-
+void hamt_debug_dump(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources);
 
 // file output helper routines
-void hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label);
+int hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label);
 
 // exp routines 
 void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int max_arcs, int max_length);
@@ -41,6 +41,8 @@ void hamt_circle_cleaning(asg_t *sg, ma_ug_t *ug, int base_label);
 void hamt_clean_shared_seq(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 int hamt_ug_basic_topoclean(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 int hamt_ug_basic_topoclean_simple(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
+int hamt_ug_special_toploclean(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
+int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug, int base_label);
 
 int hamt_ug_pop_simpleShortCut(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
@@ -65,6 +67,10 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 int hamt_ug_resolve_oneMultiLeafSoapBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
+
+// exp
+int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
+
 // (hap)
 int hamt_ug_rescueLowCovHapGap_simple(asg_t *sg, ma_ug_t *ug, 
                               ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, 

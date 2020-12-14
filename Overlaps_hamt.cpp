@@ -472,7 +472,7 @@ static inline void hamt_ug_arc_del(asg_t *sg, ma_ug_t *ug, uint32_t vu, uint32_t
     asg_arc_del(ug->g, wu^1, vu^1, del);
     ugasg_arc_del(sg, ug, vu, wu, del);
     ugasg_arc_del(sg, ug, wu^1, vu^1, del);
-    fprintf(stderr, "- droparc: utg%.6d - utg%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
+    // fprintf(stderr, "- droparc: utg%.6d - utg%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
 }
 
 static inline void hamt_ug_utg_softdel(asg_t *sg, ma_ug_t *ug, uint32_t vu, int label){
@@ -485,7 +485,7 @@ static inline void hamt_ug_utg_softdel(asg_t *sg, ma_ug_t *ug, uint32_t vu, int 
     ug->u.a[vu>>1].c = label;
     ug->g->seq_vis[vu>>1] = label;  // note seq_vis is actually n_seq*2 long
     if (ug->u.a[vu>>1].len>0){  // debug
-        fprintf(stderr, "- softdel: utg%.6d (length %d), to label %d\n", (int)(vu>>1)+1, (int)ug->u.a[vu>>1].len, label);
+        // fprintf(stderr, "- softdel: utg%.6d (length %d), to label %d\n", (int)(vu>>1)+1, (int)ug->u.a[vu>>1].len, label);
     }
 }
 
@@ -566,7 +566,7 @@ int hamt_ug_arc_flip_between(asg_t *sg, ma_ug_t *ug, uint32_t start, uint32_t en
                 queue32_enqueue(&q, av[i].v);
             }
             // mark
-            if (av[i].v!=end){
+            if ((av[i].v>>1)!=(end>>1) && (av[i].v>>1)!=(start>>1)){
                 hamt_ug_utg_softdel(sg, ug, av[i].v, new_label);
             }
             nb_cut++;
@@ -613,6 +613,8 @@ void hamt_ug_cleanup_arc_by_labels(asg_t *sg, ma_ug_t *ug){
     // NOTE
     //     ma_ug_gen_primary only looks at the label when seeding unitig,
     //     so for soft cut we still need to drop some arcs.
+    //     Normaly routines should handle arc removal themselves,
+    //       this function meant for waterproof/debug.
     asg_t *auxsg = ug->g;
     uint32_t vu, wu;
     int cnt = 0;
@@ -825,6 +827,28 @@ static inline int hamt_asgarc_util_countSuc(asg_t *g, uint32_t v, int include_de
     return nv;
 }
 
+int hamt_ug_arc_del_selfcircle(asg_t *sg, ma_ug_t *ug, uint32_t vu, int base_label){
+    // NOTE: caller is responsible for more topo context sanchecks.
+    asg_t *auxsg = ug->g;
+    // if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)==1 &&
+    //     hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)==1){
+    //         fprintf(stderr, "[W::%s] tried to cut an unconnected circle\n", __func__);
+    //         return 0;
+    // }
+    uint32_t nv;
+    asg_arc_t *av;
+    nv = asg_arc_n(auxsg, vu);
+    av = asg_arc_a(auxsg, vu);
+    for (int i=0; i<nv; i++){
+        if (av[i].v==vu){
+            av[i].del = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
 int hamt_asgarc_util_isTip(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc, int base_label){
     // FUNC
     //     check if v is a tip (or orphan), in either direction
@@ -899,8 +923,11 @@ int hamt_asgutil_detect_strict_single_long_path(asg_t *sg, uint32_t begNode, uin
 
 
 int hamt_asgarc_util_get_the_one_target(asg_t *g, uint32_t v, uint32_t *w, int include_del_seq, int include_del_arc, int base_label){
-    // v as exactly one target (sucessor), given the `include_del_seq` and `include_del_arc` (NOT tested in this function)
-    // get that vertex's index in av (NOT vertex ID)
+    // v has exactly one target (sucessor)
+    // SIDE EFFECT
+    //     store the target vertex ID in w
+    // RETURN
+    //     av idx of the target vertex
     int nv = asg_arc_n(g, v);
     asg_arc_t *av = asg_arc_a(g, v);
     int i;
@@ -918,8 +945,6 @@ int hamt_asgarc_util_get_the_one_target(asg_t *g, uint32_t v, uint32_t *w, int i
 }
 int hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(asg_t *g, uint32_t v, uint32_t *w, 
                                                           int include_del_seq, int include_del_arc, int base_label){
-    // v as exactly one target (sucessor), given the `include_del_seq` and `include_del_arc` (NOT tested in this function)
-    // get that vertex's index in av (NOT vertex ID)
     int nv = asg_arc_n(g, v);
     asg_arc_t *av = asg_arc_a(g, v);
     int i;
@@ -935,6 +960,28 @@ int hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(asg_t *g, uint32_t v, 
     }
     // fprintf(stderr, "[E::%s] unexpected.\n", __func__); exit(1);
     return -1;
+}
+
+void hamt_asgarc_util_get_the_two_targets(asg_t *g, uint32_t v, uint32_t *w, uint32_t *u,
+                                         int include_del_seq, int include_del_arc, int base_label){
+    int nv = asg_arc_n(g, v);
+    asg_arc_t *av = asg_arc_a(g, v);
+    int i;
+    uint32_t buf[2];
+    int idx=0;
+    for (i=0; i<(int)nv; i++){
+        if (!include_del_arc && av[i].del) {continue;}
+        if (!include_del_seq && g->seq[av[i].v>>1].del) {continue;}
+        if (base_label>=0 && g->seq_vis[av[i].v>>1]!=base_label){continue;}
+        buf[idx] = av[i].v;
+        idx++;
+        if (idx>2){
+            fprintf(stderr, "[E::%s] more than two targets, continue anyway\n", __func__);
+        }
+    }
+    assert(idx=2);  // deadly
+    *w = buf[0];
+    *u = buf[1];
 }
 
 int hamt_asgarc_util_walk_furthest_strict_single_path(asg_t *g, uint32_t v0, uint32_t *vn, int *nb_nodes, int limit, int base_label){
@@ -1261,11 +1308,11 @@ int hamt_asgarc_util_checkSimpleBubble_multiEddge(asg_t *sg, uint32_t v0, uint32
 int hamt_asgarc_util_checkSimpleInvertBubble(asg_t *sg, uint32_t v0, uint32_t *w0, uint32_t *u0, int base_label){
     // FUNC
     /*
-            ----w1--
+            ----w0--
           /         \
     .....v0         |
           \        /
-           -----u1-----...
+           -----u0-----...
           we want to drop v0->w1 and w1->u1^1
     */
    //     only treat the most simple case, any branching and it'll be ignored
@@ -1296,7 +1343,7 @@ int hamt_asgarc_util_checkSimpleInvertBubble(asg_t *sg, uint32_t v0, uint32_t *w
     nuw[1] = hamt_asgarc_util_countSuc(sg, uw[1], 0, 0, base_label);
     nuw[2] = hamt_asgarc_util_countPre(sg, uw[0], 0, 0, base_label);
     nuw[3] = hamt_asgarc_util_countPre(sg, uw[1], 0, 0, base_label);
-    if (verbose){fprintf(stderr, "[debug::%s] at ID %.6d\n", __func__, (int)(v0>>1)+1);}
+    if (verbose){fprintf(stderr, "[debug::%s]     at ID %.6d\n", __func__, (int)(v0>>1)+1);}
     if (nuw[0]==0 || nuw[1]==0){  // no target
         if (verbose){fprintf(stderr, "[debug::%s]    no target\n", __func__);}
         return 0;
@@ -1308,16 +1355,16 @@ int hamt_asgarc_util_checkSimpleInvertBubble(asg_t *sg, uint32_t v0, uint32_t *w
     // one and only one vertex shall have two targets
     int idx_rev;
     if (nuw[0]==1 && nuw[1]==2){
-        idx_rev = 0;  // uw[0] is the w1 in the topo comment
+        idx_rev = 0;  // uw[0] is the w0 in the topo comment
     }else if (nuw[0]==2 && nuw[1]==1){
-        idx_rev = 1;  // uw[1] is the w1
+        idx_rev = 1;  // uw[1] is the w0
     }else{
         if (verbose){fprintf(stderr, "[debug::%s]    failed 1-and-2\n", __func__);}
         return 0;
     }
     // check topo: the inversion
     if (hamt_asgarc_util_get_the_one_target(sg, uw[idx_rev], &x, 0, 0, base_label)<0){
-        fprintf(stderr, "[W::%s] failed to get target when supposed to.\n", __func__);fflush(stderr);
+        fprintf(stderr, "[W::%s]     failed to get target when supposed to.\n", __func__);fflush(stderr);
         exit(1);
     }
     if (x!=(uw[idx_rev^1]^1)){
@@ -1452,6 +1499,191 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
     buffer[2] = v6;
     return 1;
 }
+
+int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0, 
+                                      int *max_length, int *max_coverage,  // side effect
+                                      int base_label,
+                                      int max_visited)  // limit search span size
+{
+    // FUNC
+    //     Given unitig v0 and w0, check if they are a pair of local source/sink.
+    //     Meant for tangle resolving.
+    // NOTE
+    //    Directions are: v0->(stuff in between)<-w0
+    int verbose = 1;
+    if (((v0>>1)+1) == 1374){
+        verbose = 2;
+    }
+    if (verbose){
+        fprintf(stderr, "[debug::%s] utg%.6d vs utg%.6d\n", __func__, (int)(v0>>1)+1, (int)(w0>>1)+1);
+    }
+
+    asg_t *auxsg = ug->g;
+    if (hamt_asgarc_util_countSuc(auxsg, v0, 0, 0, base_label)==0 ||
+        hamt_asgarc_util_countSuc(auxsg, w0, 0, 0, base_label)==0){
+            return 0;
+    }
+
+    uint32_t source=v0, sink=w0;
+    uint32_t source_nodir=(v0>>1), sink_nodir=(w0>>1);
+    uint32_t vu, wu, nv;
+    asg_arc_t *av;
+    int nb_visited=0, ret=0;
+    
+    vecu32_t buf_source, buf_sink;
+    vecu32_init(&buf_source);
+    vecu32_init(&buf_sink);
+    
+    queue32_t q;
+    queue32_init(&q);
+    uint8_t *color;
+    color = (uint8_t*)calloc(auxsg->n_seq*2, 1);
+
+    // arbitrary check: if the handle hints circular walk, check handle length
+    if (source_nodir==sink_nodir){
+        if (ug->u.a[source_nodir].len<500000){
+            if  (verbose){fprintf(stderr, "[debug::%s]     hinted circular, handle too short\n", __func__);}
+            ret = 0;
+            goto finish;
+        }
+    }
+    
+    // note: IDs in queue have the direction bit; IDs in stack don't
+
+    queue32_enqueue(&q, source);
+    color[source] = 1;
+    nb_visited = 0;
+    // collect all vertices reacheable (undirected) by source without passing though sink (either direction)
+    while (queue32_dequeue(&q, &vu)){
+        if  (verbose>1){fprintf(stderr, "[debug::%s]     (source) dequeue utg%.6d\n", __func__, (int)(vu>>1)+1);}
+        if (color[vu]==2) {continue;}
+
+        if ((vu>>1)!=source_nodir && (vu>>1)!=sink_nodir){
+            if (ug->u.a[vu>>1].len > (*max_length)){
+                *max_length = (int)ug->u.a[vu>>1].len;
+            }
+            if (ug->utg_coverage[vu>>1] > (*max_coverage)){
+                *max_coverage = ug->utg_coverage[vu>>1];
+            }
+        }
+        
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (int i=0; i<nv; i++){
+            if (av[i].del){continue;}
+            if (base_label>=0 && auxsg->seq_vis[vu>>1]!=base_label){continue;}
+            wu = av[i].v;
+            // forbid branching to outside of the persumed tangle span
+            if (wu==source || wu==sink){  // note yes check direction
+                if (source_nodir==sink_nodir){
+                    ;
+                }else{  // not hinted circular, thus forbidden
+                    if  (verbose){fprintf(stderr, "[debug::%s]     hit handle (source)\n", __func__);}
+                    ret = 0;
+                    goto finish;
+                }
+            }
+            if ((wu>>1)==sink_nodir || (wu>>1)==source_nodir){continue;}
+            if (color[wu]==0){
+                if  (verbose>1){fprintf(stderr, "[debug::%s]     (source)   push utg%.6d\n", __func__, (int)(wu>>1)+1);}
+                queue32_enqueue(&q, wu);
+                color[wu] = 1;
+                if (color[wu^1]==0){
+                    queue32_enqueue(&q, wu^1);
+                    color[wu^1] = 1;
+                }                
+                nb_visited++;
+            }
+        }
+        vecu32_push(&buf_source, vu>>1);
+        color[vu] = 2;
+
+        if (nb_visited>max_visited){  // search span too big, assume failure
+            if  (verbose){fprintf(stderr, "[debug::%s]     search span too big (source)\n", __func__);}
+            ret = 0;
+            goto finish;
+        }
+    }
+
+    queue32_reset(&q);
+    queue32_enqueue(&q, sink);
+    memset(color, 0, auxsg->n_seq*2);
+    color[sink] = 1;
+    nb_visited = 0;
+    // collect all vertices reacheable by sink without passing though sink (either direction)
+    while (queue32_dequeue(&q, &vu)){
+        if  (verbose>1){fprintf(stderr, "[debug::%s]     (sink) dequeue utg%.6d\n", __func__, (int)(vu>>1)+1);}
+        if (color[vu]==2) {continue;}
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (int i=0; i<nv; i++){
+            if (av[i].del){continue;}
+            if (base_label>=0 && auxsg->seq_vis[vu>>1]!=base_label){continue;}
+            wu = av[i].v;
+            // forbid branching to outside of the persumed tangle span
+            if (wu==source || wu==sink){  // note yes check direction
+                if (source_nodir==sink_nodir){
+                    ;
+                }else{  // not hinted circular, thus forbidden
+                    if  (verbose){fprintf(stderr, "[debug::%s]     hit handle (sink)\n", __func__);}
+                    ret = 0;
+                    goto finish;
+                }
+            }
+            if ((wu>>1)==sink_nodir || (wu>>1)==source_nodir){continue;}
+            if (color[wu]==0){
+                queue32_enqueue(&q, wu);
+                color[wu] = 1;
+                if (color[wu^1]==0){
+                    queue32_enqueue(&q, wu^1);
+                    color[wu^1] = 1;
+                }
+                if  (verbose>1){fprintf(stderr, "[debug::%s]     (sink)   push utg%.6d\n", __func__, (int)(wu>>1)+1);}
+                nb_visited++;
+            }
+        }
+        vecu32_push(&buf_sink, vu>>1);
+        color[vu] = 2;
+
+        if (nb_visited>max_visited){  // search span too big, assume failure
+        if  (verbose){fprintf(stderr, "[debug::%s]     search span too big (sink)\n", __func__);}
+            ret = 0;
+            goto finish;
+        }
+    }
+
+    // check if the two collections are identical /*(in opposite direction)*/
+    if (buf_source.n!=buf_sink.n){
+        if  (verbose){fprintf(stderr, "[debug::%s]     buf unequal size (%d, %d)\n", __func__, buf_source.n, buf_sink.n);}
+        ret = 0;
+        goto finish;
+    }
+    for (int i=0; i<buf_source.n; i++){
+        if ((buf_source.a[i])==source_nodir || (buf_source.a[i])==sink_nodir){continue;}
+        if (!vecu32_is_in_vec(&buf_sink, buf_source.a[i])){
+            if  (verbose){fprintf(stderr, "[debug::%s]     source vertex utg%.6d not in sink search\n", __func__, (int)(buf_source.a[i])+1);}
+            ret = 0;
+            goto finish;
+        }
+    }
+    for (int i=0; i<buf_sink.n; i++){
+        if ((buf_source.a[i])==source_nodir || (buf_source.a[i])==sink_nodir){continue;}
+        if (!vecu32_is_in_vec(&buf_source, buf_sink.a[i])){
+            if  (verbose){fprintf(stderr, "[debug::%s]     sink vertex utg%.6d not in source search\n", __func__, (int)(buf_sink.a[i])+1);}
+            goto finish;
+        }
+    }
+    ret = 1;
+    if (verbose){fprintf(stderr, "[debug::%s]     success\n", __func__);}
+
+finish:
+    vecu32_destroy(&buf_source);
+    vecu32_destroy(&buf_sink);
+    queue32_destroy(&q);
+    free(color);
+    return ret;
+}
+
 
 int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0, 
                                         int base_label){
@@ -1649,6 +1881,84 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
     return nb_cut;
 }
 
+int hamt_ug_popSpecialCase1(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label){
+    /*
+    Treat the following topo:
+              --v2--v3---v4-
+            /        |    \
+     -----v0        |      v6-----
+           \        |     /
+            --v1---v3^1--v5-
+    ... where v1 and v4 connect to v3's one side, and v2 & v5 connect to the other. 
+    This cannot be identified by the implemented complex bubble check. (Dec 11 2020, r9) 
+    */
+    // NOTE
+    //    path is arbitrarily chosen.
+    //    D5196-T2 pctg #141
+    asg_t *auxsg = ug->g;
+    int nb_treated = 0;
+    uint32_t v1, v2, v3, v4, v5, v6;
+    uint32_t v_tmp1, v_tmp2;
+    for (uint32_t v0=0; v0<auxsg->n_seq*2; v0++){
+        if (hamt_asgarc_util_countSuc(auxsg, v0, 0, 0, base_label)!=2){continue;}
+        // get v1 and v2
+        hamt_asgarc_util_get_the_two_targets(auxsg, v0, &v1, &v2, 0, 0, base_label);
+        // v1 and v2 check:
+        if (hamt_asgarc_util_countPre(auxsg, v1, 0, 0, base_label)!=1 || 
+            hamt_asgarc_util_countPre(auxsg, v2, 0, 0, base_label)!=1){continue;}  // backward branching
+        if (hamt_asgarc_util_countSuc(auxsg, v1, 0, 0, base_label)!=1 || 
+            hamt_asgarc_util_countSuc(auxsg, v2, 0, 0, base_label)!=1){continue;}  // forward branching
+        hamt_asgarc_util_get_the_one_target(auxsg, v1, &v_tmp1, 0, 0, base_label);
+        hamt_asgarc_util_get_the_one_target(auxsg, v2, &v_tmp2, 0, 0, base_label);
+        if (v_tmp1 != (v_tmp2^1)){continue;}
+        v3 = v_tmp1;
+        if ((v3>>1)==(v0>>1) || (v3>>1)==(v1>>1) || (v3>>1)==(v2>>1)){continue;}
+        // v3 check
+        if (hamt_asgarc_util_countPre(auxsg, v3, 0, 0, base_label)!=2){continue;}
+        if (hamt_asgarc_util_countSuc(auxsg, v3, 0, 0, base_label)!=2){continue;}
+        // get v4 and v5
+        hamt_asgarc_util_get_the_two_targets(auxsg, v3, &v_tmp1, &v_tmp2, 0, 0, base_label);
+        if ((v_tmp1>>1)==(v1>>1) || (v_tmp1>>1)==(v2>>1)){
+            v4 = v_tmp2;
+        }else{
+            v4 = v_tmp1;
+        }
+        hamt_asgarc_util_get_the_two_targets(auxsg, v3^1, &v_tmp1, &v_tmp2, 0, 0, base_label);
+        if ((v_tmp1>>1)==(v1>>1) || (v_tmp1>>1)==(v2>>1)){
+            v5 = v_tmp2;
+        }else{
+            v5 = v_tmp1;
+        }
+        // v4 and v5 check
+        if ((v4>>1)==(v5>>1)){continue;}
+        if (hamt_asgarc_util_countPre(auxsg, v4, 0, 0, base_label)!=1 || 
+            hamt_asgarc_util_countPre(auxsg, v5, 0, 0, base_label)!=1){continue;}  // backward branching
+        if (hamt_asgarc_util_countSuc(auxsg, v4, 0, 0, base_label)!=1 || 
+            hamt_asgarc_util_countSuc(auxsg, v5, 0, 0, base_label)!=1){continue;}  // forward branching
+        hamt_asgarc_util_get_the_one_target(auxsg, v1, &v_tmp1, 0, 0, base_label);
+        hamt_asgarc_util_get_the_one_target(auxsg, v2, &v_tmp2, 0, 0, base_label);
+        if (v_tmp1 != v_tmp2){continue;}
+        v6 = v_tmp1;
+        if (/*(v6>>1)==(v0>>1) ||*/ (v6>>1)==(v1>>1) || (v6>>1)==(v2>>1) || 
+            (v6>>1)==(v3>>1) || (v6>>1)==(v4>>1) || (v6>>1)==(v5>>1)){continue;}
+        if (hamt_asgarc_util_countPre(auxsg, v6, 0, 0, base_label)){continue;}
+
+        // chose path
+        hamt_ug_arc_del(sg, ug, v0, v1, 1);
+        hamt_ug_arc_del(sg, ug, v1, v3, 1);
+        hamt_ug_utg_softdel(sg, ug, v1, 1);
+
+        hamt_ug_arc_del(sg, ug, v3, v4, 1);
+        hamt_ug_arc_del(sg, ug, v4, v6, 1);
+        hamt_ug_utg_softdel(sg, ug, v4, 1);
+        nb_treated++;
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] popped %d spots\n", __func__, nb_treated);
+    }
+   return nb_treated;
+
+}
 
 int hamt_asgarc_util_countSinglePath_allowSimpleBubble(asg_t *g, uint32_t v0, int max_arcs, int base_label){
     // REQUIRE
@@ -1954,7 +2264,7 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
     return label;
 }
 
-void hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label){
+int hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label){
     asg_t *auxsg = ug->g;
     uint8_t *color_sg = (uint8_t*)calloc(auxsg->n_seq*2, 1);
     int *subg_labels = (int*)calloc(auxsg->n_seq*2, sizeof(int));
@@ -1967,6 +2277,7 @@ void hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label){
     free(color_sg);
     free(subg_labels);
     queue32_destroy(&q);
+    return max_label;
 }
 
 int hamt_asgutil_calc_singlepath_cov(asg_t *g, uint32_t v, int base_label){
@@ -4060,7 +4371,6 @@ int hamt_ug_pop_miscbubble_aggressive(asg_t *sg, ma_ug_t *ug, int base_label){
 
 
 int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
-    // TODO: this function isn't working properly.
     int verbose = 0;
     double startTime = Get_T();
 
@@ -4069,16 +4379,14 @@ int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int a
     int nb_cut = 0;
 
     for (vu=0; vu<auxsg->n_seq*2; vu++){
-        if (ug->u.a[vu>>1].len>50000){
-            continue;
-        }
-        if (hamt_asgarc_util_checkSimpleInvertBubble(sg, vu, &wu, &uu, base_label)){  // note: uu's direction is adjusted for popping; no need to ^1
-            if (ug->u.a[wu>>1].len>50000){
+        if (verbose){fprintf(stderr, "[debug::%s] at utg%.6d\n", __func__, (int)(vu>>1)+1);}
+        if (hamt_asgarc_util_checkSimpleInvertBubble(auxsg, vu, &wu, &uu, base_label)){  // note: uu's direction is adjusted for popping; no need to ^1
+            if (ug->u.a[wu>>1].len>100000){
                 continue;
             }
-            if (ug->u.a[uu>>1].len>50000){
-                continue;
-            }
+            // if (ug->u.a[uu>>1].len>50000){
+            //     continue;
+            // }
             if (is_hard_drop){
                 hamt_ug_arc_del(sg, ug, vu, wu, 1);
                 hamt_ug_arc_del(sg, ug, wu, uu, 1);
@@ -4090,7 +4398,7 @@ int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int a
             nb_cut++;
 
             if (verbose){
-                fprintf(stderr, "[debug::%s] v utg%.6d w utg%.6d u utg%.6d \n", __func__, 
+                fprintf(stderr, "[debug::%s] pop, v utg%.6d w utg%.6d u utg%.6d \n", __func__, 
                                 (int)(vu>>1)+1, (int)(wu>>1)+1, (int)(uu>>1)+1);
             }
         }
@@ -5273,6 +5581,12 @@ int hamt_ug_basic_topoclean_simple(asg_t *sg, ma_ug_t *ug, int base_label, int a
     return nb_cut;
 }
 
+int hamt_ug_special_toploclean(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label){
+    int nb_cut = 0;
+    nb_cut += hamt_ug_popSpecialCase1(sg, ug, base_label, alt_label);
+    return nb_cut;
+}
+
 #if 0
 //
 //  NOTE
@@ -5654,3 +5968,297 @@ void hamt_ughit_rescueLowCovHapGap(asg_t *sg, ma_ug_t *ug,
 }
 #endif
 
+void hamt_debug_dump(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources){
+    asg_t *auxsg = ug->g;
+
+    // a quick check of overlaps between the two ends of a given long linear unitig,
+    //  which only examines the start and the end vertices. (modify hamt_ug_recover_ovlp_if_existed if need to search a span)
+    // (note: any long linear unitig, not neceessarily unconnected)
+    uint32_t start, end;
+    ma_hit_t *ph1, *ph2;  // placeholder
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1){continue;}  // only need to check in one direction
+        if (ug->u.a[vu>>1].len<500000){continue;}
+        if (ug->u.a[vu>>1].circ){continue;}
+        start = ug->u.a[vu>>1].start;
+        end = ug->u.a[vu>>1].end^1;
+        if (does_ovlp_ever_exist(sources, start, end, &ph1, &ph2)){
+            fprintf(stderr, "[dbg-linearSancheck] tg%.6d cis ovlp\n", (int)(vu>>1)+1);
+        }else if  (does_ovlp_ever_exist(reverse_sources, start, end, &ph1, &ph2)){
+            fprintf(stderr, "[dbg-linearSancheck] tg%.6d trans ovlp\n", (int)(vu>>1)+1);
+        }else{
+            fprintf(stderr, "[dbg-linearSancheck] tg%.6d no ovlp\n", (int)(vu>>1)+1);
+        }
+    }
+    fprintf(stderr, "\n\n");
+
+    // haplotig info
+    //    (only check the given tig's 2-level neighbours (undirected))
+    vecu32_t buf;
+    vecu32_init(&buf);
+    uint32_t nv, nw, wu;
+    asg_arc_t *av, *aw;
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1){continue;}  // only need to check in one direction
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, 0)==0 || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)==0){
+            continue;
+        }
+        if (ug->u.a[vu>>1].circ){continue;}
+        vecu32_reset(&buf);
+        vecu32_push(&buf, vu);
+        vecu32_push(&buf, vu^1);
+
+        // 1st direction
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].del) {continue;}
+            if (auxsg->seq_vis[vu>>1]!=0){continue;}
+            wu = av[i].v;
+            if (vecu32_is_in_vec(&buf, wu)){continue;}
+            vecu32_push(&buf, wu);
+            // push wu's children
+            nw = asg_arc_n(auxsg, wu);
+            aw = asg_arc_a(auxsg, wu);
+            for (uint32_t j=0; j<nw; j++){
+                if (aw[j].del) {continue;}
+                if (auxsg->seq_vis[wu>>1]!=0){continue;}
+                wu = aw[j].v;
+                if (vecu32_is_in_vec(&buf, wu)){continue;}
+                vecu32_push(&buf, wu);
+            }
+        }
+        // 2nd direction
+        nv = asg_arc_n(auxsg, vu^1);
+        av = asg_arc_a(auxsg, vu^1);
+        for (uint32_t i=0; i<nv; i++){  // (same as above)
+            if (av[i].del) {continue;}
+            if (auxsg->seq_vis[vu>>1]!=0){continue;}
+            wu = av[i].v;
+            if (vecu32_is_in_vec(&buf, wu)){continue;}
+            vecu32_push(&buf, wu);
+            // push wu's children
+            nw = asg_arc_n(auxsg, wu);
+            aw = asg_arc_a(auxsg, wu);
+            for (uint32_t j=0; j<nw; j++){
+                if (aw[j].del) {continue;}
+                if (auxsg->seq_vis[wu>>1]!=0){continue;}
+                wu = aw[j].v;
+                if (vecu32_is_in_vec(&buf, wu)){continue;}
+                vecu32_push(&buf, wu);
+            }
+        }
+
+        // check haplotig status between vu and these nodes
+        fprintf(stderr, "[dbg-checkDip] base tg%.6d (dir %d)\n", (int)(vu>>1)+1, (int)(vu&1));
+        for (int i=0; i<buf.n; i++){
+            if ((buf.a[i]>>1)==(vu>>1)){continue;}
+            fprintf(stderr, "[dbg-checkDip]   target tg%.6d (dir %d), ", (int)(buf.a[i]>>1)+1, (int)(buf.a[i]&1));
+            if (hamt_check_diploid(ug, vu, buf.a[i], 0.5, reverse_sources)){  // note: ratio applies to the shorter tig
+                fprintf(stderr, "yes\n");
+            }else{
+                fprintf(stderr, "no\n");
+            }
+        }
+
+    }
+    vecu32_destroy(&buf);
+
+}
+
+int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink, 
+                       uint32_t *buf_blacklist,  // note: maybe we don't need this. test more
+                       int base_label, int alt_label){
+    // NOTE
+    //     direction is source->...<-sink
+    int verbose = 1;
+    asg_t *auxsg = ug->g;
+    stacku32_t s, visited;
+    stacku32_init(&s);
+    stacku32_init(&visited);  // directed IDs; linear search
+    uint32_t vu, nv, wu;
+    asg_arc_t *av;
+    int is_exhausted, is_loop, ret=0, san=0;
+    int is_hinted_circular = ((sink>>1) == (source>>1));
+
+    stacku32_push(&s, source);
+    while (stacku32_pop(&s, &vu)){
+        is_loop = 0;
+        if (verbose) {fprintf(stderr, "[debug::%s]  at utg%.6d\n", __func__, (int)(vu>>1)+1);}
+        if (vu==(sink^1)){
+            if (is_hinted_circular && (s.n==0)){  // special case: 1st pop of a hinted-circular subgraph, proceed to check child nodes
+                ;
+            }else{  // regular case: found end, end the walk
+                stacku32_push(&s, vu);  // put back
+                if (verbose) {fprintf(stderr, "[debug::%s]  reached sink\n", __func__);}
+                break;
+            }
+        }
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        is_exhausted = 1;
+        for (int i=0; i<nv; i++){ // TODO: less arbitrary
+            if (av[i].del) {continue;}
+            if (auxsg->seq_vis[av[i].v>>1]!=base_label){continue;}
+            wu = av[i].v;
+            if (stack32_is_in_stack(&visited, wu)) {continue;}
+            if (stack32_is_in_stack(&visited, wu^1)) {
+                is_loop = 1;
+                break;
+            }
+            is_exhausted = 0;
+        }
+        if (is_loop){  // remove current node
+            if (verbose) {fprintf(stderr, "[debug::%s]     found looping at utg%.6d\n", __func__, (int)(wu>>1)+1);}
+                continue;
+        }
+        if (!is_exhausted){  // step
+            if (verbose) {fprintf(stderr, "[debug::%s]      push %.6d\n", __func__, (int)(wu>>1)+1);}
+            stacku32_push(&s, vu);
+            stacku32_push(&s, wu);
+            stacku32_push(&visited, wu);
+        }else{  // remove current node
+            if (verbose) {fprintf(stderr, "[debug::%s]      removed %.6d\n", __func__, (int)(vu>>1)+1);}
+            ;
+        }
+        san++;
+        if (san>1000){
+            fprintf(stderr, "[E::%s] too many steps\n", __func__);
+            ret = 0;
+            goto finish;
+        }
+    }
+    if (s.n==0){
+        fprintf(stderr, "[E::%s] can't find a path\n", __func__);
+        ret = 0;
+        goto finish;
+    }else{
+        if (verbose){
+            if (verbose) {fprintf(stderr, "[debug::%s]  the path (%d nodes):\n", __func__, s.n);}
+            for (int i=0; i<s.n; i++){
+                fprintf(stderr, "        utg%.6d\n", (int)(s.a[i]>>1)+1);
+            }
+        }
+        hamt_ug_arc_flip_between(sg, ug, source, sink^1, 0, 1);  // drop everything
+        stacku32_pop(&s, &vu);
+        // recover the stored path
+        while (stacku32_pop(&s, &wu)){
+            // update black list
+            if (wu!=source && wu!=sink){
+                buf_blacklist[wu>>1] = 1;
+            }
+            if (hamt_ug_arc_del_selfcircle(sg, ug, wu, base_label)){
+                if (verbose) {fprintf(stderr, "[debug::%s]  (dropped self-circle link for utg%.6d\n", __func__, (int)(wu>>1)+1);}
+            }
+            hamt_ug_arc_del(sg, ug, wu, vu, 0);
+            hamt_ug_utg_softdel(sg, ug, wu, 0);
+            hamt_ug_utg_softdel(sg, ug, vu, 0);
+            vu = wu;
+        }
+
+        ret = 1;
+    }
+
+finish:
+    stacku32_destroy(&s);
+    stacku32_destroy(&visited);
+    return ret;
+}
+int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, 
+                           int base_label, int alt_label){
+    // FUNC
+    //    Check and pop tangles. Heuristic.
+
+    int nb_treated = 0, verbose = 1, max_label;
+    int subgraph_size, non_tip_tigs;
+    asg_t *auxsg = ug->g;
+    uint32_t source, sink;  // source->...<-sink
+    int max_length, max_coverage;
+
+    vecu32_t buf;
+    vecu32_init(&buf);
+
+    uint32_t *treated = (uint32_t*)calloc(auxsg->n_seq, sizeof(uint32_t));
+
+    max_label = hamt_ug_util_BFS_markSubgraph(ug, base_label);
+    if (verbose){fprintf(stderr, "[debug::%s] got %d subgraphs\n", __func__, max_label);}
+    
+    for (int idx_subgraph=0; idx_subgraph<max_label; idx_subgraph++){
+        vecu32_reset(&buf);
+
+        // if the subgraph has only a few tigs, skip it
+        subgraph_size = non_tip_tigs = 0;
+        for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+            if (vu&1){continue;}  // only need to check  for one direction
+            if (ug->u.a[vu>>1].subg_label==idx_subgraph){
+                subgraph_size++;
+                vecu32_push(&buf, vu);
+                vecu32_push(&buf, vu^1);
+            }
+            if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 &&
+                hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=0){
+                    non_tip_tigs++;
+            }
+        }
+        if (subgraph_size<2 || non_tip_tigs<2){
+            continue;
+        }
+
+        // check pairwise
+        for (int idx_vu=0; idx_vu<buf.n; idx_vu++){
+            for (int idx_wu=0; idx_wu<buf.n; idx_wu++){
+                max_length = max_coverage = 0;
+                source = buf.a[idx_vu];
+                sink = buf.a[idx_wu]^1;
+                if (treated[source>>1] || treated[sink>>1]){
+                    if (verbose) {fprintf(stderr, "[debug::%s] skip becuase either handle was a part of some tangles treated\n", __func__);}
+                    continue;
+                }
+
+                // // debug
+                // if (((source>>1)+1)!=1374) {continue;}
+                // if (((sink>>1)+1)!=2694) {continue;}
+
+                // (note: must check label, since hamt_ug_arc_flip_between is used and it only flip labels for simplicity)
+                if (base_label>=0 && auxsg->seq_vis[source>>1]!=base_label) {continue;}
+                if (base_label>=0 && auxsg->seq_vis[sink>>1]!=base_label) {continue;}
+
+                if (source==sink) {continue;} // for hinted circular, it's source==(sink^1)
+                if (hamt_ug_check_localSourceSinkPair(ug, source, sink, &max_length, &max_coverage, base_label, 200)){
+                    if ( ((max_length>100000) && (ug->u.a[source>>1].len<300000) && (ug->u.a[sink>>1].len<300000)) ||   // note/TODO/bug: this is an arbitrary waterproof, trying to prevent weird cases (since we searched both directions during traversal to tolerate inversions/loops)
+                         (max_length>500000) ||  // e.g. mock1's large-inversion-risk subgraph
+                         (max_coverage > (ug->utg_coverage[source>>1]*2)) ||   // note/TODO/bug: also arbitrary, better safe than sorry for repeat elements
+                         (max_coverage > (ug->utg_coverage[sink>>1]  *2)) ){
+                        if (verbose){
+                            fprintf(stderr, "[debug::%s] failed length or cov. Max l %d, max cov %d (handles' are %d and %d)\n", 
+                                                __func__, 
+                                                max_length, max_coverage, (int)(ug->utg_coverage[source>>1]), (int)ug->utg_coverage[sink>>1]);
+                        }
+                    }else{
+                        if (hamt_ug_popTangles(sg, ug, source, sink, treated, base_label, alt_label)){
+                            nb_treated++;
+                        }else{
+                            fprintf(stderr, "[E::%s] failed to pop for: utg%.6d - utg%.6d\n", __func__, (int)(source>>1)+1, (int)(sink>>1)+1);
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+
+    if (nb_treated){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+        hamt_ug_cleanup_arc_by_labels(sg, ug);
+    }
+
+    int nb_tips = hamt_ug_cut_shortTips_arbitrary(sg, ug, 50000, base_label);
+
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] treated %d spots; cleaned %d short tips after that\n", __func__, nb_treated, nb_tips);
+    }
+    vecu32_destroy(&buf);
+    free(treated);
+    return nb_treated;
+}

@@ -63,3 +63,119 @@ void hamt_dump_read_selection_mask(hifiasm_opt_t *asm_opt, All_reads *rs){
     destory_All_reads(rs);
 
 }
+
+
+void hamt_dump_ovec_read_error_count_and_kmerinfo(hifiasm_opt_t *asm_opt, All_reads *rs){
+    // (only for bin files since r7-ish)
+    // output the total number of bases corrected for each read
+    char *bin_base_name = (char*)malloc(strlen(asm_opt->bin_base_name)+25);
+    sprintf(bin_base_name, "%s.ec", asm_opt->bin_base_name);
+    
+    char *output_file_name = (char*)malloc(strlen(bin_base_name)+25);
+    
+    if (strcmp(asm_opt->output_file_name, "hifiasm.asm")==0){
+        fprintf(stderr, "[W::%s] -o not given, defaulting to -B's value (%s).\n", __func__, asm_opt->bin_base_name);
+        sprintf(output_file_name, "%s.ovec_count_dump", bin_base_name);
+    }else{
+        sprintf(output_file_name, "%s.ovec_count_dump", asm_opt->output_file_name);
+    }
+
+    fprintf(stderr, "[M::%s] loade from base name %s\n", __func__, bin_base_name);
+    int ret = load_All_reads(rs, bin_base_name);
+    if (!ret){
+        fprintf(stderr, "[E::%s] can't load from bin files.\n", __func__);
+        exit(1);
+    }
+    fprintf(stderr, "[M::%s] loaded all reads, dumping..\n", __func__);
+
+    char *readname_s = (char*)malloc(100);
+    int readname_l;
+    FILE *fp = fopen(output_file_name, "w");
+    for (uint64_t i=0; i<rs->total_reads; i++){
+        readname_l = rs->name_index[i+1]-rs->name_index[i];
+        memcpy(readname_s, &rs->name[rs->name_index[i]], readname_l);
+        readname_s[readname_l] = '\0';
+        fprintf(fp, "%s\t%d\t%f\t%d\n", readname_s, (int)rs->median[i], rs->std[i], (int)rs->nb_error_corrected[i]);
+    }
+
+    fclose(fp);
+    free(output_file_name);
+    free(readname_s);
+    destory_All_reads(rs);
+
+}
+
+void hist_readlength(All_reads *rs){
+    int bins, max_length=50000, min_length = 1000, step=500;
+    bins = max_length/step;
+    int under=0, over=0;
+    int d = 5000, topped;  // discrete bar to ascii
+    
+    int l, x, last_idx=0;
+    uint32_t buf[bins];
+    memset(buf, 0, bins*sizeof(uint32_t));
+
+    for (uint64_t i=0; i<rs->total_reads; i++){
+        l = (int) (Get_READ_LENGTH((*rs), i));
+        if (l<min_length){
+            under++;
+            continue;
+        }else if (l>=max_length){
+            over++;
+            continue;
+        }
+        l = (l-min_length)/step;
+        buf[l]++;
+    }
+    for (int i=bins-1; i>=0; i--){
+        if (buf[i]>0){
+            last_idx = i;
+            break;
+        }
+    }
+
+    // hist
+    if (under==0){
+        fprintf(stderr, "[M::%s] <%.1fk: 0\n", __func__, (float)min_length/step/1000);
+    }else{
+        fprintf(stderr, "[M::%s] <%.1fk: ", __func__, (float)min_length/step/1000);
+        topped = 0;
+        x = under/d;
+        if (x>50) {topped = 1;}
+        else{topped = 0;}
+        for (int j=0; j<x; j++){
+            fputc(']', stderr);
+        }
+        if (!topped){fputc('+', stderr);}
+        fputc('\n', stderr);
+    }
+    for (int i=0; i<last_idx+1; i++){
+        if (buf[i]==0){
+            fprintf(stderr, "[M::%s] %.1fk: 0\n", __func__, (float)(min_length+step*i)/1000);
+        }else{
+            fprintf(stderr, "[M::%s] %.1fk: ", __func__, (float)(min_length+step*i)/1000);
+            x = buf[i]/d;
+            if (x>100) {topped = 1;}
+            else{topped = 0;}
+            for (int j=0; j<x+1; j++){  // +1 to print at least one char (0<buf[i]<d)
+                fputc(']', stderr);
+            }
+            if (topped){fputc('+', stderr);}
+            fputc('\n', stderr);
+        }
+    }
+    if (over==0){
+        fprintf(stderr, "[M::%s] >%.1fk: 0\n", __func__, ((float)max_length)/1000);
+    }else{
+        fprintf(stderr, "[M::%s] >%.1fk: ", __func__, ((float)max_length)/1000);
+        x = over/d;
+        if (x>50) {topped = 1;}
+        else{topped = 0;}
+        for (int j=0; j<x; j++){
+            fputc(']', stderr);
+        }
+        if (topped){fputc('+', stderr);}
+        fputc('\n', stderr);
+    }
+
+}

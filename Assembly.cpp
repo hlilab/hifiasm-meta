@@ -340,6 +340,15 @@ long long push_final_overlaps(ma_hit_t_alloc* paf, ma_hit_t_alloc* reverse_paf_l
     clear_ma_hit_t_alloc(paf); // paf has been preallocated, so we don't need preallocation
     for (i = 0; i < (long long)overlap_list->length; i++)
     {
+        // if ( (overlap_list->list[i].x_id==0 && overlap_list->list[i].y_id==35) || 
+        //      (overlap_list->list[i].x_id==0 && overlap_list->list[i].y_id==35) ){
+        //     fprintf(stderr, "[push overlap] the read pair\n");
+        //     fprintf(stderr, "                alignment length: %d\n", (int)overlap_list->list[i].align_length);
+        //     fprintf(stderr, "                is_match        : %d\n", (int)overlap_list->list[i].is_match);
+        //     fprintf(stderr, "                strong: %d\n", (int)overlap_list->list[i].strong);
+        //     fprintf(stderr, "                large indel: %d\n", (int)overlap_list->list[i].without_large_indel);
+
+        // }
         if (overlap_list->list[i].is_match == flag)
         {
             available_overlaps++;
@@ -1751,6 +1760,8 @@ int ha_assemble(void)
 		ha_triobin(&asm_opt);
 	}
     if(ovlp_loaded == 2) ovlp_loaded = 0;
+
+    hist_readlength(&R_INF);
 
     build_string_graph_without_clean(asm_opt.min_overlap_coverage, R_INF.paf, R_INF.reverse_paf, 
         R_INF.total_reads, R_INF.read_length, asm_opt.min_overlap_Len, asm_opt.max_hang_Len, asm_opt.clean_round, 

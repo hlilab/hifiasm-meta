@@ -95,6 +95,7 @@ typedef struct {
     int preovec_coverage;
     int is_dump_read_selection;
     int is_use_exp_graph_cleaning;
+    int is_dump_ovec_error_count;
 
     int lowq_thre_10;
     int lowq_thre_5;

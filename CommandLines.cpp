@@ -31,9 +31,9 @@ static ko_longopt_t long_options[] = {
     // hamt debug/probing modules
     { "read-kmer-profile", ko_no_argument, 400},  // write per-read kmer frequency profiles
     { "readset-kmer-count", ko_no_argument, 401},  // write ha_count (kmers appear less than 5 times will be omitted)
-    // { "readset-simple-downsample", ko_no_argument, 402},  // remove confidently super prevalent reads to provide a smaller readset to play around
+    { "dump-ovec-cnt", ko_no_argument, 402},  // dump per read number of corrected bases
     // { "readselection-kmer-coverage", ko_no_argument, 403},  // test read selection heuristic
-    { "diginorm-coverage", ko_required_argument, 404},  // expose it
+    { "diginorm-coverage", ko_no_argument, 404},  // expose it
     { "preovec-coverage", ko_required_argument, 405},
     { "dump-read-selection", ko_no_argument, 406},  // dump the read selection mask from bin files; only effetive with -B (hamt)
     { "exp-graph-cleaning", ko_no_argument,  407},
@@ -164,6 +164,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_ignore_ovlp_cnt = 0;
     asm_opt->is_dump_read_selection = 0;
     asm_opt->is_use_exp_graph_cleaning = 0;
+    asm_opt->is_dump_ovec_error_count = 0;
     asm_opt->lowq_thre_10 = 150;
     asm_opt->lowq_thre_5 = -1;  // disable
     asm_opt->lowq_thre_3 = -1;  // disable
@@ -487,6 +488,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");}
         else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for every read.\n");} 
         else if (c == 401) {asm_opt->mode_readset_kmer_count = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for the dataset.\n");}
+        else if (c == 402) {asm_opt->is_dump_ovec_error_count = 1; fprintf(stderr, "DEBUG MODE: get ovec error counts\n");}
         else if (c == 404) {asm_opt->diginorm_coverage = atoi(opt.arg);}
         else if (c == 405) {
             fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");            

@@ -27356,7 +27356,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     ///it's hard to say which function is better       
     ///normalize_ma_hit_t_single_side(sources, n_read);
-    normalize_ma_hit_t_single_side_advance(sources, n_read);  // ?????? this is pretty slow
+    normalize_ma_hit_t_single_side_advance(sources, n_read);  // TODO: faster?
     normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
     
 
@@ -27388,7 +27388,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     ///fix_binned_reads(sources, n_read, coverage_cut);
     ///just need to deal with trio here
     hamt_hit_contained_multi(sources, n_read, readLen, coverage_cut);
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // TODO: faster?
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
 

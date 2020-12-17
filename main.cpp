@@ -24,6 +24,9 @@ int main(int argc, char *argv[])
 	}else if (asm_opt.is_dump_read_selection){
 		hamt_dump_read_selection_mask(&asm_opt, &R_INF);
 		return 0;
+	}else if (asm_opt.is_dump_ovec_error_count){
+		hamt_dump_ovec_read_error_count_and_kmerinfo(&asm_opt, &R_INF);
+		return 0;
 	}
 
 

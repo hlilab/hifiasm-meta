@@ -395,8 +395,11 @@ void chain_DP(k_mer_hit* a, long long a_n, Chain_Data* dp, overlap_region* resul
 	ret = ha_chain_check(a, a_n, dp, min_score, band_width_threshold);
 	if (ret > 0) {
 		a_n = ret;
+        // fprintf(stderr, "    skipped dp\n");
 		goto skip_dp;
 	}
+
+    // fprintf(stderr, "    didn't skip dp\n");
 
     // fill the score and backtrack arrays
 	for (i = 0; i < a_n; ++i) dp->tmp[i] = -1;
@@ -509,6 +512,10 @@ skip_dp:
     result->y_pos_e = a[i].offset;
     result->shared_seed = max_score;
     result->overlapLen = mini_xLen;
+    // fprintf(stderr, "    x_pos_e: %d\n", (int)result->x_pos_e);
+    // fprintf(stderr, "    y_pos_e: %d\n", (int)result->y_pos_e);
+    // fprintf(stderr, "    shared_seed: %d\n", (int)result->shared_seed);
+    // fprintf(stderr, "    overlapLen: %d\n", (int)result->overlapLen);
 
     distance_self_pos = result->x_pos_e - a[i].self_offset;
     distance_pos = result->y_pos_e - a[i].offset;
@@ -587,7 +594,7 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
     init_fake_cigar(&(tmp_region.f_cigar));
 
     i = 0;
-    while (i < candidates->length)
+    while (i < candidates->length)  // iterate over (sorted) minimizers
     {
         current_ID = candidates->list[i].readID;
         current_stand = candidates->list[i].strand;
@@ -604,6 +611,7 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
         sub_region_end = i;
         i++;
 
+        // current the target read
         while (i < candidates->length 
         && 
         current_ID == candidates->list[i].readID
@@ -613,18 +621,22 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
             sub_region_end = i;
             i++;
         }
-
+        // ignore self alignment
         if (tmp_region.x_id == tmp_region.y_id)
         {
             continue;
         }
-
+        // hamt
         if (R_INF->mask_readnorm[current_ID] & 1) {
             hamtsan_nb_skip++;
             continue;
         }
         hamtsan_nb_calc++;
 
+        // // debug Cuti
+        // if ( (current_ID==0 && readID==35) || (current_ID==35 && readID==0) ){
+        //     fprintf(stderr, "[ov] query %.*s (%d), target %.*s (%d)\n", (int)Get_NAME_LENGTH((*R_INF), readID), Get_NAME((*R_INF), readID), (int)readID, 
+        //                                                 (int)Get_NAME_LENGTH((*R_INF), current_ID), Get_NAME((*R_INF), current_ID), (int)current_ID);
 		chain_DP(candidates->list + sub_region_beg,
 				sub_region_end - sub_region_beg + 1, &(candidates->chainDP), &tmp_region, band_width_threshold,
 				25, Get_READ_LENGTH((*R_INF), tmp_region.x_id), Get_READ_LENGTH((*R_INF), tmp_region.y_id));
@@ -634,6 +646,7 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
         {
             append_inexact_overlap_region_alloc(overlap_list, &tmp_region, R_INF, add_beg_end);
         }
+        // }
     }
 
     destory_fake_cigar(&(tmp_region.f_cigar));

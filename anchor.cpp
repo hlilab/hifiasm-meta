@@ -141,7 +141,7 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs, int sor
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain)
 {
 	// work on one read
-	// current read won't be a dropped read, this is enforced in `worker_ovec` and its debug ver `worker_ovec_related_reads`.
+	// hamt note: current read won't be a dropped read, this is enforced in `worker_ovec` and its debug ver `worker_ovec_related_reads`.
 	extern void *ha_flt_tab;
 	extern ha_pt_t *ha_idx;
 	uint32_t i, rlen;
@@ -158,7 +158,7 @@ void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_reg
     clear_overlap_region_alloc(overlap_list);
 	recover_UC_Read(ucr, &R_INF, rid);
 	ab->mz.n = 0, ab->n_a = 0;
-	rlen = Get_READ_LENGTH(R_INF, rid); // read length
+	rlen = Get_READ_LENGTH(R_INF, rid);
 
 	// get the list of anchors
 	ha_sketch(ucr->seq, ucr->length, asm_opt.mz_win, asm_opt.k_mer_length, 0, !(asm_opt.flag & HA_F_NO_HPC), &ab->mz, ha_flt_tab);

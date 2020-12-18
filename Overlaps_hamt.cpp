@@ -847,7 +847,7 @@ int hamt_check_suspicious_diploid(asg_t *sg, ma_ug_t *ug, uint32_t vu1, uint32_t
     }
 
     if (verbose){
-        fprintf(stderr, "[debug::%s] ret %d, rate %.2f", __func__, ret, (float)passed/total);
+        fprintf(stderr, "[debug::%s] ret %d, rate %.2f\n", __func__, ret, (float)passed/total);
         fprintf(stderr, "[debug::%s] trace targeted reads:\n", __func__);
         for (int i=0; i<targets.n; i++){
             fprintf(stderr, "[debug::%s]     %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, targets.a[i]), Get_NAME(R_INF, targets.a[i]));
@@ -6392,8 +6392,8 @@ int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_
         }  // note: it's ok for uu to have backward branching, so not checking that.
 
         // check overlap status
-        if (hamt_check_diploid(ug, wu[0], wu[1], 0.5, reverse_sources)<=0 && 
-            hamt_check_suspicious_diploid(sg, ug, wu[0], wu[1], 0.5)>0){
+        if (hamt_check_diploid(ug, wu[0], wu[1], 0.3, reverse_sources)<=0 && 
+            hamt_check_suspicious_diploid(sg, ug, wu[0], wu[1], 0.3)>0){
             // ^i.e. wu1 and wu2 are not reliable haplotigs, but they also have a decent amount of not-that-good overlaps
             // check: vu vs uu
             if (uu[0]&1){

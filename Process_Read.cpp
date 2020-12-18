@@ -106,8 +106,8 @@ void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
 
     hamt_ovecinfo_init();
     
-    char *outname = (char*)malloc(strlen(opt->output_file_name)+25);
-    sprintf(outname, "%s.ovecinfo.bin", opt->output_file_name);
+    char *outname = (char*)malloc(strlen(opt->bin_base_name)+25);
+    sprintf(outname, "%s.ovecinfo.bin", opt->bin_base_name);
     FILE *fp = fopen(outname, "r");
     flag = fread(&total_reads, sizeof(uint64_t), 1, fp);
     if (total_reads!=R_INF.total_reads){
@@ -274,7 +274,7 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	sprintf(str_cmd+strlen(str_cmd), "\nBin file was created on %s", asctime(timeinfo));  // note: asctime(timeinfo) has a newline. 
 
 	// also include the previous git commit id
-	sprintf(str_cmd+strlen(str_cmd), "Previous git commit hash is: %s .\n", GIT_COMMIT);
+	sprintf(str_cmd+strlen(str_cmd), "Previous git commit hash is not later than: %s .\n", GIT_COMMIT);
 	
 	uint16_t length_of_cmd = (uint16_t)strlen(str_cmd);
 	fprintf(stderr, "wrote cmd of length %d (%s).\n", length_of_cmd, str_cmd);

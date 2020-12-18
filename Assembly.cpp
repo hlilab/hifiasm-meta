@@ -1712,7 +1712,7 @@ int ha_assemble(void)
 		if (asm_opt.flag & HA_F_WRITE_PAF) { Output_PAF(); Output_reversePAF();}
         if (asm_opt.het_cov == -1024) hap_recalculate_peaks(asm_opt.bin_base_name), ovlp_loaded = 2;
 
-        debug_printstat_read_status(&R_INF);
+        // debug_printstat_read_status(&R_INF);  // TODO: preovec doesn't use bit flag right now. (Oct 15)
         hamt_ovecinfo_init();
 
 	}

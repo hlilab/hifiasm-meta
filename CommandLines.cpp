@@ -35,7 +35,6 @@ static ko_longopt_t long_options[] = {
     { "diginorm-coverage", ko_no_argument, 404},  // expose it
     { "preovec-coverage", ko_required_argument, 405},
     { "dump-read-selection", ko_no_argument, 406},  // dump the read selection mask from bin files; only effetive with -B (hamt)
-    { "exp-graph-cleaning", ko_no_argument,  407},
     { "force-preovec", ko_no_argument, 408}, // ignore 1st heuristic (which could've kept all reads), do preovec read selection based on lowq given
 	
     { "lowq-10", ko_required_argument, 409}, // lower 10% quantile threshold
@@ -159,7 +158,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->preovec_coverage = 150;
     asm_opt->is_ignore_ovlp_cnt = 0;
     asm_opt->is_dump_read_selection = 0;
-    asm_opt->is_use_exp_graph_cleaning = 0;
+    asm_opt->is_use_exp_graph_cleaning = 1;
     asm_opt->is_dump_ovec_error_count = 0;
     asm_opt->lowq_thre_10 = 150;
     asm_opt->write_debug_gfa = 0;  // disable
@@ -480,9 +479,8 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->preovec_coverage = atoi(opt.arg);
         }
         else if (c == 406) {asm_opt->is_dump_read_selection = 1; fprintf(stderr, "DEBUG DUMP: will write read selection mask to file.\n");}
-        else if (c == 407) {asm_opt->is_use_exp_graph_cleaning = 1; fprintf(stderr, "NOTICE: enabled experimental graph cleaning steps.\n");}
         else if (c == 408) {
-            fprintf(stderr, "NOTICE: forced pre-ovec read selection. Ignoring count of ovlp. Disabling diginorm (will collect stats w/ sorting).\n");            
+            fprintf(stderr, "NOTICE: forced pre-ovec read selection. Ignoring count of ovlp.\n");            
             asm_opt->is_ignore_ovlp_cnt = 1;
         }
         else if (c == 409) {asm_opt->lowq_thre_10 = atoi(opt.arg);}

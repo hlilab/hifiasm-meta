@@ -1008,17 +1008,14 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 #define HAMT_VIA_MEDIAN 0x2
 #define HAMT_VIA_LONGLOW 0x4
 #define HAMT_VIA_KMER 0x8
-
-// static void worker_process_one_read_HPC(void* data, long idx_for, int tid){
 void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 	int low_threshold = asm_opt.diginorm_coverage/5<30 ? 30 : asm_opt.diginorm_coverage/5;  // pretty arbitrary.
 	uint64_t rid;
 	if (/*s->p->asm_opt->readselection_sort_order==0 || */s->p->round==0)
 		{rid = s->n_seq0+idx_seq;}
-	else  // exp
+	else  // TODO: is legacy
 		{rid = s->RIDs[idx_seq];}
-	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // bufer used in the 0th round
-	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // bufer used in the 1st+ round
+	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // buffer used in the 0th round
 	int k = s->p->opt->k;
 	ha_ct_t *h = s->p->h;
 
@@ -1040,87 +1037,31 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
 				if (++l >= k){
 					uint64_t hash = yak_hash_long(x);
-					if (s->p->round==0){  // collect for all-reads kmer count hashtable
-						yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
-						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
-						if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
-						else buf[idx] = 1;  // because bf
-						idx++;
-					} else{  
-						// inert into diginorm linear buffer for kmer counting
-						b = &s->lnbuf[hash & ((1<<h->pre)-1)];
-						if ((b->n+3)>=b->m){
-							b->m = b->m<16? 16 : b->m+((b->m)>>1);
-							REALLOC(b->a, b->m);
-							assert(b->a);
-						}
-						b->a[b->n] = hash;
-						b->n++;
-						// collect runtime count
-						yak_ct_t *h_ = s->p->hd->h[hash & ((1<<h->pre)-1)].h;  // runtime count hashtable
-						key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
-						if (key!=kh_end(h_)){buf_norm[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
-						else buf_norm[idx] = 1;  // because bf
-						idx++;
-						// check whether it's a relatively low-freq (*overall freq) kmer
-						yak_ct_t *h2 = s->p->h->h[hash & ((1<<h->pre)-1)].h;  // all-reads count hashtable
-						key = yak_ct_get(h2, hash>>h->pre<<YAK_COUNTER_BITS1);
-						if (key!=kh_end(h2)){
-							if (((kh_key(h2, key) & YAK_MAX_COUNT) <= (uint32_t)low_threshold) && ((kh_key(h2, key) & YAK_MAX_COUNT) > 3)) has_wanted_kmers++;
-						}
-					}
+					// collect for all-reads kmer count hashtable
+					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
+					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
+					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+					else buf[idx] = 1;  // because bf
+					idx++;
 				}
 				last = c;
 			}
 		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
 	}
-	if (s->p->round==0){  // the initial marking
-		double mean = meanl(buf, idx);
-		double std = stdl(buf, idx, mean);
-		radix_sort_hamt16(buf, buf+idx);
-		uint16_t median = (uint16_t)buf[idx/2];
-		// uint16_t lowq = (uint16_t)quantile(buf_norm, idx, 0.10);
-		uint16_t lowq = (uint16_t)buf[idx/10];
-		uint8_t code = decide_category(mean, std, buf, idx);
-		s->p->rs_out->mean[rid] = mean;
-		s->p->rs_out->median[rid] = median;
-		s->p->rs_out->lowq[rid] = lowq;
-		s->p->rs_out->std[rid] = std;
-		s->p->rs_out->mask_readtype[rid] = code;
-		// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
-	}else{  // diginorm
-		uint8_t code;
-		uint16_t median = 0;
-		// uint16_t cnt = 0;
-		// uint16_t max_cnt = 0;
-		// int grace_counter = 60; // exp, allow temporary drop; 60 because k=51
-		// for (uint16_t i=0; i<idx; i++){  // examine if runtime buffer looks like long low-coverage. 
-		// 	if (buf_norm[i]<=10){
-		// 		cnt+=1;
-		// 		grace_counter = 60;
-		// 	} else if (buf_norm[i]>30){
-		// 		if (grace_counter==0){
-		// 			if (cnt>max_cnt) max_cnt = cnt;
-		// 			cnt = 0;
-		// 		}else{ grace_counter--; cnt++;}
-		// 	}
-		// }
-		// if (((double)max_cnt/idx)>0.2) {  // If so, or there's relative low (overall) freq kmers, ignore other hints and keep the read.
-		// 	code = HAMT_VIA_LONGLOW;
-		// }
-		if ((double)has_wanted_kmers/idx>=0.2){
-			code = HAMT_VIA_KMER;
-		}
-		else if (1){  // get median and decide
-			radix_sort_hamt16(buf_norm, buf_norm+idx);
-			median = (uint16_t)buf_norm[idx/2];
-			// fprintf(stdout, "r#%" PRIu64 "\t", rid);
-			code = decide_drop(s->p->rs_out->mean[rid], s->p->rs_out->std[rid], median, s->p->round, s->p->rs_out->mask_readtype[rid]);
-		}
-		s->p->rs_out->mask_readnorm[rid] = code;  // todo: bit flag and add debug info?
-	}
+
+	double mean = meanl(buf, idx);
+	double std = stdl(buf, idx, mean);
+	radix_sort_hamt16(buf, buf+idx);
+	uint16_t median = (uint16_t)buf[idx/2];
+	uint16_t lowq = (uint16_t)buf[idx/10];
+	uint8_t code = decide_category(mean, std, buf, idx);
+	s->p->rs_out->mean[rid] = mean;
+	s->p->rs_out->median[rid] = median;
+	s->p->rs_out->lowq[rid] = lowq;
+	s->p->rs_out->std[rid] = std;
+	s->p->rs_out->mask_readtype[rid] = code;
+
 	free(buf);  // sequence will be freed by the caller	
-	free(buf_norm);
 }
 
 
@@ -1333,19 +1274,21 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			s->len = 0;
 			free(s);
 		}else{  // insert the linear buffers
-			assert(s->p->hd);
-			kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->h->pre);
-			// clean up
-			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
-			free(s->len);
-			free(s->seq);
-			s->seq = 0; 
-			s->len = 0;
-			for (int i=0; i<1<<p->h->pre; i++){
-				free(s->lnbuf[i].a);
-				}				
-			free(s->lnbuf);
-			free(s);
+			fprintf(stderr, "diginorm legacy code?\n");
+			exit(1);
+			// assert(s->p->hd);
+			// kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->h->pre);
+			// // clean up
+			// for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
+			// free(s->len);
+			// free(s->seq);
+			// s->seq = 0; 
+			// s->len = 0;
+			// for (int i=0; i<1<<p->h->pre; i++){
+			// 	free(s->lnbuf[i].a);
+			// 	}				
+			// free(s->lnbuf);
+			// free(s);
 		}
 	}
 	return 0;
@@ -1366,7 +1309,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 // 	}
 // }
 
-void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h, int round){
+void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h){
 	reset_All_reads(rs); 
 	// init data structures
 	int i;
@@ -1385,13 +1328,9 @@ void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h, int roun
 		plmt.h = h;
 		plmt.rs_in = rs;
 		plmt.rs_out = rs;
-		plmt.round = round;
+		plmt.round = 0;
 		plmt.hd = 0;
 		plmt.asm_opt = asm_opt;
-		if (plmt.round!=0){
-			plmt.hd = ha_ct_init(plmt.opt->k, plmt.h->pre, plmt.opt->bf_n_hash, plmt.opt->bf_shift);
-			assert(h);
-		}
 		gzFile fp = 0;
 		if ((fp = gzopen(asm_opt->read_file_names[i], "r")) == 0) {
 			printf("[E::%s] can't open file %s. Abort.\n", __func__, asm_opt->read_file_names[i]);
@@ -2044,19 +1983,19 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
 	ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);
 
-	hamt_mark(asm_opt, rs, h, 0);  // collects mean/median/std and mark global category of each read
+	hamt_mark(asm_opt, rs, h);  // collects mean/median/std and mark global category of each read
 	// exp_load_raw_reads(asm_opt, rs, 1);  // already has seq lens, load sequences
 
 	/////// sorting ////////
 	// pack: lowFrequency | median | readID
 	rs->statpack = (uint64_t*)malloc(sizeof(uint64_t) * rs->total_reads);
 	assert(rs->statpack);
-	// for (uint32_t i=0; i<rs->total_reads; i++){
-	// 	// using preovec read selection
-	// 	rs->statpack[i] = ((uint64_t) ((YAK_MAX_COUNT -1 - ((uint64_t)rs->lowq[i]))<<48)) | (((uint64_t) rs->median[i])<<32) | i;
-	// }
-	// radix_sort_hamt64(rs->statpack, rs->statpack+rs->total_reads);
-	// fprintf(stderr, "[M::%s] Reads sorted. \n", __func__);
+	for (uint32_t i=0; i<rs->total_reads; i++){
+		// using preovec read selection
+		rs->statpack[i] = ((uint64_t) ((YAK_MAX_COUNT -1 - ((uint64_t)rs->lowq[i]))<<48)) | (((uint64_t) rs->median[i])<<32) | i;
+	}
+	radix_sort_hamt64(rs->statpack, rs->statpack+rs->total_reads);
+	fprintf(stderr, "[M::%s] Reads sorted. \n", __func__);
 	
 	memset(rs->mask_readnorm, 0, rs->total_reads);
 	ha_ct_destroy(h);

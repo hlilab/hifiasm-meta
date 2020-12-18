@@ -338,7 +338,7 @@ int load_All_reads(All_reads* r, char* read_file_name)
         return 0;
     }
 	FILE* fp_hamt = fopen(index_name_hamt, "r");
-	if (!fp_hamt && (!asm_opt.is_disable_diginorm)){
+	if (!fp_hamt && (!asm_opt.is_disable_read_selection)){
 		free(index_name);
 		free(index_name_hamt);
 		return 0;
@@ -486,7 +486,7 @@ int load_All_reads(All_reads* r, char* read_file_name)
 	else{
 		r->nb_error_corrected = (uint16_t*)calloc(r->total_reads, sizeof(uint16_t));
 	}
-	if (asm_opt.is_disable_diginorm){// no bin file, or ignoring bin file's read mask
+	if (asm_opt.is_disable_read_selection){// no bin file, or ignoring bin file's read mask
 		if (fp_hamt){
 			r->mask_readnorm = (uint8_t*)realloc(r->mask_readnorm, r->total_reads*sizeof(uint8_t));
 			memset(r->mask_readnorm, 0, r->hamt_stat_buf_size * sizeof(uint8_t));

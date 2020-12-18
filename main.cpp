@@ -18,13 +18,12 @@ int main(int argc, char *argv[])
 	if (asm_opt.mode_read_kmer_profile){
 		hamt_read_kmer_profile(&asm_opt, &R_INF);
 		return 0;
-	}else if (asm_opt.mode_readset_kmer_count){
-		hamt_printout_ha_count(&asm_opt, &R_INF);
-		return 0;
-	}else if (asm_opt.is_dump_read_selection){
+	}
+	else if (asm_opt.is_dump_read_selection){
 		hamt_dump_read_selection_mask(&asm_opt, &R_INF);
 		return 0;
-	}else if (asm_opt.is_dump_ovec_error_count){
+	}
+	else if (asm_opt.is_dump_ovec_error_count){
 		hamt_dump_ovec_read_error_count_and_kmerinfo(&asm_opt, &R_INF);
 		return 0;
 	}

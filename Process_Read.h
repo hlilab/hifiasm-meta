@@ -100,6 +100,17 @@ typedef struct
 #define NON_TRIO 4
 #define DROP 5
 
+typedef struct{  // hamt
+    // uint32_t qn;
+    uint32_t *tn;
+    uint8_t *is_match;
+    int n, m;  // for both tn and is_match
+} ovecinfo_t;
+typedef struct { 
+    uint64_t n, m; 
+    ovecinfo_t *a;
+} ovecinfo_v;
+
 typedef struct
 {
 	uint64_t** N_site;
@@ -141,9 +152,11 @@ typedef struct
     uint64_t *nb_target_reads;  // experimental! guessed number of candiates, for triggering read selection
     int is_has_nothing, is_has_lengths, is_all_in_mem;
     uint16_t *nb_error_corrected;  // collect number of error corrected during ovec
+    ovecinfo_v OVEC_INF;
 } All_reads;
 
 extern All_reads R_INF;
+// extern ovecinfo_v OVEC_INF;
 
 typedef struct
 {
@@ -168,5 +181,11 @@ void write_All_reads(All_reads* r, char* read_file_name);
 int load_All_reads(All_reads* r, char* read_file_name);
 void destory_All_reads(All_reads* r);
 int destory_read_bin(All_reads* r);
+
+void hamt_ovecinfo_init();
+void hamt_ovecinfo_destroy(ovecinfo_v *v);
+void hamt_ovecinfo_debugdump(hifiasm_opt_t *opt);
+void hamt_ovecinfo_write_to_disk(hifiasm_opt_t *opt);
+void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt);
 
 #endif

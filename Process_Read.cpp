@@ -35,6 +35,103 @@ char rc_Table[5] = {'T', 'G', 'C', 'A', 'N'};
 
 extern hifiasm_argcv_t asm_argcv;
 
+
+
+void hamt_ovecinfo_init(){
+    ovecinfo_v *v = &R_INF.OVEC_INF;
+    v->n = v->m = R_INF.total_reads;
+    v->a = (ovecinfo_t*)calloc(R_INF.total_reads, sizeof(ovecinfo_t));   
+}
+void hamt_ovecinfo_destroy(ovecinfo_v *v){
+    for (int i=0; i<v->n; i++){
+        if (v->a[i].n>0){
+            free(v->a[i].tn);
+            free(v->a[i].is_match);
+        }
+    }
+    free(v->a);
+}
+
+void hamt_ovecinfo_debugdump(hifiasm_opt_t *opt){
+    char *outname = (char*)malloc(strlen(opt->output_file_name)+25);
+    sprintf(outname, "%s.ovecinfo", opt->output_file_name);
+    FILE *fp = fopen(outname, "w");
+    uint32_t qn, tn;
+    uint8_t is_match;
+    for (int i=0; i<R_INF.total_reads; i++){
+        qn = (uint32_t) i;
+        if (R_INF.OVEC_INF.a[i].n==0){continue;}
+        for (int j=0; j<R_INF.OVEC_INF.a[i].n; j++){
+            tn = R_INF.OVEC_INF.a[i].tn[j];
+            is_match = R_INF.OVEC_INF.a[i].is_match[j];
+            fprintf(fp, "[%s] qn %.*s, tn %.*s, tag %d\n", __func__, (int)Get_NAME_LENGTH(R_INF, qn), Get_NAME(R_INF, qn),
+                                                                         (int)Get_NAME_LENGTH(R_INF, tn), Get_NAME(R_INF, tn),
+                                                                         (int)is_match);
+        }
+    }
+    fclose(fp);
+}
+
+void hamt_ovecinfo_write_to_disk(hifiasm_opt_t *opt){
+    char *outname = (char*)malloc(strlen(opt->output_file_name)+25);
+    sprintf(outname, "%s.ovecinfo.bin", opt->output_file_name);
+    FILE *fp = fopen(outname, "w");
+    uint32_t qn, tn;
+    uint8_t is_match;
+    fwrite(&R_INF.total_reads, sizeof(R_INF.total_reads), 1, fp);
+    for (int i=0; i<R_INF.total_reads; i++){  // length of each block
+        fwrite(&R_INF.OVEC_INF.a[i].n, sizeof(R_INF.OVEC_INF.a[i].n), 1, fp);
+    }
+    for (int i=0; i<R_INF.total_reads; i++){  // the blocks
+        qn = (uint32_t) i;
+        if (R_INF.OVEC_INF.a[i].n==0){continue;}
+        for (int j=0; j<R_INF.OVEC_INF.a[i].n; j++){
+            tn = R_INF.OVEC_INF.a[i].tn[j];
+            is_match = R_INF.OVEC_INF.a[i].is_match[j];
+            fwrite(&tn, sizeof(tn), 1, fp);
+            fwrite(&is_match, sizeof(is_match), 1, fp);
+        }
+    }
+    fclose(fp);
+}
+void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
+    // NOTE
+    //     all reads in mem and R_INF.OVEC_INF hasn't been initialized
+    fprintf(stderr, "[M::%s] loading ovecinfo bin file\n", __func__);
+    double time = Get_T();
+
+    int flag;
+    uint64_t total_reads;
+    int *b = (int*)malloc(sizeof(int)*R_INF.total_reads);
+
+    hamt_ovecinfo_init();
+    
+    char *outname = (char*)malloc(strlen(opt->output_file_name)+25);
+    sprintf(outname, "%s.ovecinfo.bin", opt->output_file_name);
+    FILE *fp = fopen(outname, "r");
+    flag = fread(&total_reads, sizeof(uint64_t), 1, fp);
+    if (total_reads!=R_INF.total_reads){
+        fprintf(stderr, "ovecinfo read count != R_INF read count (%d vs %d), aborting\n",(int)total_reads, (int)R_INF.total_reads);
+        exit(1);
+    }
+    R_INF.OVEC_INF.n = R_INF.OVEC_INF.m = total_reads;
+    flag = fread(b, sizeof(int), total_reads, fp);
+    for (int i=0; i<total_reads; i++){
+        R_INF.OVEC_INF.a[i].n = R_INF.OVEC_INF.a[i].m = b[i];
+        R_INF.OVEC_INF.a[i].tn = (uint32_t*)malloc(sizeof(uint32_t)*b[i]);
+        R_INF.OVEC_INF.a[i].is_match = (uint8_t*)malloc(sizeof(uint8_t)*b[i]);
+    }
+    for (int i=0; i<total_reads; i++){
+        for (int j=0; j<b[i]; j++){
+            flag = fread(&R_INF.OVEC_INF.a[i].tn[j], sizeof(uint32_t), 1, fp);
+            flag = fread(&R_INF.OVEC_INF.a[i].is_match[j], sizeof(uint8_t), 1, fp);
+        }
+    }
+    fclose(fp);
+    fprintf(stderr, "[M::%s] loaded; used %.1f s\n\n", __func__, Get_T()-time);
+}
+
+
 void init_All_reads(All_reads* r)
 {
 	memset(r, 0, sizeof(All_reads));
@@ -414,6 +511,9 @@ int load_All_reads(All_reads* r, char* read_file_name)
 		}
 	}
 	//////////////////////////////////////////////
+
+	// hamt, ovec info
+	hamt_ovecinfo_load_from_disk(&asm_opt);
 
 	return 1;
 }

@@ -112,7 +112,7 @@ typedef struct {
 	uint32_t len:31, circ:1; // len: length of the unitig; circ: circular if non-zero
 	uint32_t start, end; // start: starting vertex in the string graph; end: ending vertex
 	uint32_t m, n; // number of reads
-	uint64_t *a; // list of reads
+	uint64_t *a; // list of reads; upper 32 bits represent readID (with direction); lower 32 is arc length not overlap length
 	char *s; // unitig sequence is not null
 	uint8_t c;  // hamt: like seq's .c
 	int subg_label;  // hamt: subgraph ID

@@ -136,9 +136,9 @@ void hist_readlength(All_reads *rs){
 
     // hist
     if (under==0){
-        fprintf(stderr, "[M::%s] <%.1fk: 0\n", __func__, (float)min_length/step/1000);
+        fprintf(stderr, "[M::%s] <%.1fk: 0\n", __func__, (float)min_length/1000);
     }else{
-        fprintf(stderr, "[M::%s] <%.1fk: ", __func__, (float)min_length/step/1000);
+        fprintf(stderr, "[M::%s] <%.1fk: ", __func__, (float)min_length/1000);
         topped = 0;
         x = under/d;
         if (x>50) {topped = 1;}

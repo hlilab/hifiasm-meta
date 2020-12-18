@@ -81,5 +81,8 @@ int hamt_ug_treatBifurcation_hapCovCut(asg_t *sg, ma_ug_t *ug, float covdiff_rat
 void hamt_ughit_rescueLowCovHapGap(asg_t *sg, ma_ug_t *ug, 
                                          ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, const ma_sub_t* coverage_cut,
                                          long long n_read, uint64_t *readLen, int read_cov_threshold);
+int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_label,
+                                               ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources);
+
 
 #endif // __OVERLAPS_HAMT__

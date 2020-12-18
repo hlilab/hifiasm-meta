@@ -23,6 +23,7 @@ void ha_sort_list_by_anchor(overlap_region_alloc *overlap_list);
 KRADIX_SORT_INIT(radix64, uint64_t, uint64_t, sizeof(uint64_t))
 
 All_reads R_INF;
+// ovecinfo_v OVEC_INF;  // hamt
 
 void get_corrected_read_from_cigar(Cigar_record* cigar, char* pre_read, int pre_length, char* new_read, int* new_length)
 {
@@ -568,6 +569,37 @@ static void worker_read_selection_by_est_ov_v2(void *data, long i, int tid){
     recover_UC_Read(&ucr, &R_INF, i);
     hamt_count_new_candidates(i, &ucr, &R_INF, 0);  // stored in rs->nb_target_reads[rid], packed as: upper 32 is nb_candidates, lower 32 is rid
     destory_UC_Read(&ucr);
+}
+
+// tap unideal overlap info from ovec; other routines in Process_Read.cpp
+void hamt_ovecinfo_workerpush(ovecinfo_v *v, long readID, overlap_region_alloc* olist){
+    ovecinfo_t *h;
+    uint32_t y_id;
+    uint8_t is_match;
+    for (long long i=0; i<(long long)olist->length; i++){
+        if (olist->list[i].is_match!=1 && olist->list[i].is_match!=2){
+            h = &v->a[olist->list[i].x_id];
+            if ((h->n+1)>=h->m){
+                if (h->m==0){
+                    h->m = 8;
+                    h->tn = (uint32_t*)malloc(h->m*sizeof(uint32_t));
+                    h->is_match = (uint8_t*)malloc(h->m*sizeof(uint8_t));
+                }else{
+                    h->m = h->m + (h->m>>1);
+                    h->tn = (uint32_t*)realloc(h->tn, h->m*sizeof(uint32_t));
+                    h->is_match = (uint8_t*)realloc(h->is_match, h->m*sizeof(uint8_t));
+                }
+                assert(h->tn);
+                assert(h->is_match);
+            }
+            // h->qn = olist->list[i].x_id;ss
+            h->tn[h->n] = olist->list[i].y_id;
+            h->is_match[h->n] = olist->list[i].is_match;
+            h->n++;
+            // fprintf(stderr, "[ovecpush] q %.*s t %.*s\n", (int)Get_NAME_LENGTH(R_INF, readID), Get_NAME(R_INF, readID),
+            //                                               (int)Get_NAME_LENGTH(R_INF, y_id), Get_NAME(R_INF, y_id));
+        }
+    }
 }
 
 static void worker_ovec(void *data, long i, int tid)
@@ -1298,7 +1330,7 @@ static void worker_ov_final(void *data, long i, int tid)
 	 **/
 
 	overlap_region_sort_y_id(b->olist.list, b->olist.length);
-    if (!asm_opt.is_disable_phasing){  // default
+    if (!asm_opt.is_disable_phasing){
         // paf contains overlaps between reads of the same haplotype, 
         // reverse_paf contains overlaps otherwise
         ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
@@ -1312,7 +1344,9 @@ static void worker_ov_final(void *data, long i, int tid)
         ///Final_phasing(&overlap_list, &cigarline, &g_read, &overlap_read, c2n);
         push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
         push_final_overlaps(&(R_INF.reverse_paf[i]), R_INF.reverse_paf, &b->olist, 2);
-    }else{    // experimental hot fix: force overlaps of reverse_paf into paf
+        hamt_ovecinfo_workerpush(&R_INF.OVEC_INF, i, &b->olist);
+
+    }else{    // TODO: cleanup - don't need this hamt experimental block.
         ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
         update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 1, 1);
         update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 2, 1);
@@ -1682,6 +1716,7 @@ int ha_assemble(void)
         if (asm_opt.het_cov == -1024) hap_recalculate_peaks(asm_opt.bin_base_name), ovlp_loaded = 2;
 
         debug_printstat_read_status(&R_INF);
+        hamt_ovecinfo_init();
 
 	}
 	if (!ovlp_loaded) {
@@ -1750,6 +1785,7 @@ int ha_assemble(void)
 
 		// overlap between corrected reads
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
+        hamt_ovecinfo_init();
 		ha_overlap_final();
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());
@@ -1762,10 +1798,13 @@ int ha_assemble(void)
     if(ovlp_loaded == 2) ovlp_loaded = 0;
 
     hist_readlength(&R_INF);
+    // hamt_ovecinfo_debugdump(&asm_opt);
+    hamt_ovecinfo_write_to_disk(&asm_opt);
 
     build_string_graph_without_clean(asm_opt.min_overlap_coverage, R_INF.paf, R_INF.reverse_paf, 
         R_INF.total_reads, R_INF.read_length, asm_opt.min_overlap_Len, asm_opt.max_hang_Len, asm_opt.clean_round, 
         asm_opt.gap_fuzz, asm_opt.min_drop_rate, asm_opt.max_drop_rate, asm_opt.output_file_name, asm_opt.large_pop_bubble_size, 0, !ovlp_loaded);
 	destory_All_reads(&R_INF);
+    hamt_ovecinfo_destroy(&R_INF.OVEC_INF);
 	return 0;
 }

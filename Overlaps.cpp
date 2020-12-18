@@ -27741,6 +27741,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
+            hamt_ug_resolve_fake_haplotype_bifurcation(sg, hamt_ug, 0, sources, reverse_sources);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
             hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
             hamt_ug_destroy(hamt_ug);
         }  

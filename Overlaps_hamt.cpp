@@ -741,6 +741,8 @@ int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
     //     -1 if no hit at all
     //     1 if yes
     //     0 if no
+    int verbose = 2;
+
     asg_t *auxsg = ug->g;
     uint32_t vu_short, vu_long;
     uint32_t qn, qn2, tn;
@@ -755,6 +757,9 @@ int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
         vu_short = vu2;
         vu_long = vu1;
     }
+    if (verbose>1){
+        fprintf(stderr, "[debug::%s] check utg%.6d (shorter) - utg%.6d\n", __func__, (int)(vu_short>>1)+1, (int)(vu_long>>1)+1);
+    }
 
     for (int i=0; i<ug->u.a[vu_short>>1].n; i++){  // iterate over reads in the shorter unitig
         qn = ug->u.a[vu_short>>1].a[i]>>33;
@@ -767,6 +772,11 @@ int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
             for (int i_target=0; i_target<nb_targets; i_target++) {  // check all existed inter-haplotype targets of this read
                 if (reverse_sources[qn2].buffer[i_target].tn == qn){
                     found = 1;
+                    if (verbose>1){
+                        fprintf(stderr, "[debug::%s]     read pair: %.*s - %.*s\n", __func__, 
+                                        (int)Get_NAME_LENGTH(R_INF, qn), Get_NAME(R_INF, qn),
+                                        (int)Get_NAME_LENGTH(R_INF, qn2), Get_NAME(R_INF, qn2));
+                    }
                     break;
                 }
             }
@@ -779,9 +789,75 @@ int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
             cnt_hit++;
         }
     }
-    if (cnt_hit==0){return -1;}
-    if ((float)cnt_hit/cnt_total > ratio ){return 1;}
-    return 0;
+    int ret = 0;
+    if (cnt_hit==0){ret = -1;}
+    if ((float)cnt_hit/cnt_total > ratio ){ret = 1;}
+
+    if (verbose){fprintf(stderr, "[debug::%s] ret is %d\n", __func__, ret);}
+    return ret;
+}
+int hamt_check_suspicious_diploid(asg_t *sg, ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio){
+    // FUNC
+    //     (use case: vu1 and vu2 aren't normal haplotigs - determined by the caller, not checked here.) 
+    //     Check OVEC_INFO to see if vu1 and vu2 had some not-that-good overlaps.
+    // RETURN
+    //     1 if yes
+    //     0 if no
+    //     (TODO)-1 if overlap state is very asymmetric or other unideal situation
+    // TODO
+    //     check read direction
+    int verbose = 1;
+
+    vecu32_t tig1_reads, tig2_reads, targets;  // note: has direction
+    vecu32_init(&tig1_reads);
+    vecu32_init(&tig2_reads);
+    vecu32_init(&targets);
+    uint32_t qn, tn;
+    int hits = 0, total;
+    ovecinfo_t *h;
+    // collected reads (bc need linear search)
+    for (int i=0; i<ug->u.a[vu1>>1].n; i++){
+        vecu32_push(&tig1_reads, (uint32_t)(ug->u.a[vu1>>1].a[i]>>33));
+    }
+    for (int i=0; i<ug->u.a[vu2>>1].n; i++){
+        vecu32_push(&tig2_reads, (uint32_t)(ug->u.a[vu2>>1].a[i]>>33));
+    }
+    total = tig1_reads.n<tig2_reads.n? tig1_reads.n : tig2_reads.n;
+
+    int passed=0;
+    for (int i=0; i<tig1_reads.n; i++){
+        passed = 0;
+        qn = tig1_reads.a[i];
+        for (int j=0; j<R_INF.OVEC_INF.a[qn].n; j++){
+            tn = R_INF.OVEC_INF.a[qn].tn[j];
+            if (vecu32_is_in_vec(&tig2_reads, tn)){
+                passed = 1;
+                if (!vecu32_is_in_vec(&targets, tn)){
+                    vecu32_push(&targets, tn);
+                }
+            }
+        }
+        if (passed){hits++;}
+    }
+    int ret;
+    if ((float)passed/total>ratio && (float)targets.n/tig2_reads.n>ratio){
+        ret = 1;
+    }else{
+        ret = 0;
+    }
+
+    if (verbose){
+        fprintf(stderr, "[debug::%s] ret %d, rate %.2f", __func__, ret, (float)passed/total);
+        fprintf(stderr, "[debug::%s] trace targeted reads:\n", __func__);
+        for (int i=0; i<targets.n; i++){
+            fprintf(stderr, "[debug::%s]     %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, targets.a[i]), Get_NAME(R_INF, targets.a[i]));
+        }
+    }
+
+    vecu32_destroy(&tig1_reads);
+    vecu32_destroy(&tig2_reads);
+    vecu32_destroy(&targets);
+    return ret;
 }
 
 /////////////////////////
@@ -1510,7 +1586,7 @@ int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0,
     //     Meant for tangle resolving.
     // NOTE
     //    Directions are: v0->(stuff in between)<-w0
-    int verbose = 1;
+    int verbose = 0;
     if (((v0>>1)+1) == 1374){
         verbose = 2;
     }
@@ -6260,5 +6336,110 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
     }
     vecu32_destroy(&buf);
     free(treated);
+    return nb_treated;
+}
+
+int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_label,
+                                               ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources){
+    // NOTE
+    //    Naming isn't informative; a real case is the mock dataset, cutibacterium_acnes subgraph (tested in r10 and before),
+    //      where the short unitigs in the center aren't haplotips to each other. The reads aligned, however, persumably due to
+    //      large overhang, they were ignored and not logged in R_INF.paf and R_INF.reverse_paf (good haplotigs
+    //      should have some overlaps logged in reverse_paf). Not entirely sure why this ends up with the asg&ug topo,
+    //      but by examining paf, reverse_paf and OVEC_INF (which logs bad but calculated overlaps during the final ovec),
+    //      at least for this particular case, the correct walk can be recovered 
+    //    (heuristic: "correct" pathway has better connection before trans reduct). 
+    //    (A self note for the above case: walk is readname 909159->1028753->5483449->2242924)
+    // FUNC
+    //    see code & comments, lump of experimental heuristics.
+    // TODO
+    //    currently only solving the seen case described above. relax the topo check? (e.g. instead of two ends of uu, let it be two contigs) 
+    /* 
+              wu1---uu_end1
+             /            | \...
+    -------vu             |
+            \             |
+             wu2----uu_end2-...
+        wu1 and wu2 are short and doesn't appear to be haplotigs; vu and uu have direct overlap; uu may have other connections.
+    */
+    int verbose = 1;
+    int nb_treated = 0;
+
+    asg_t *auxsg = ug->g;
+    uint32_t wu[2], uu[2], nv, u[2], v;
+    asg_arc_t *av;
+    ma_hit_t *h, *h_rev;
+    int stat[2];
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=2){
+            continue;
+        }
+        hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+        if (ug->u.a[wu[0]>>1].len>30000){continue;}
+        if (ug->u.a[wu[1]>>1].len>30000){continue;}
+        if (hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, base_label)!=1 ||
+            hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, base_label)!=1){
+                continue;
+            }
+
+        if (verbose) {fprintf(stderr, "[debug::%s] at utg%.6d, targets utg%.6d utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(wu[0]>>1)+1, (int)(wu[1]>>1)+1);}
+        // check and get uu
+        hamt_asgarc_util_get_the_one_target(auxsg, wu[0], &uu[0], 0, 0, base_label);
+        hamt_asgarc_util_get_the_one_target(auxsg, wu[1], &uu[1], 0, 0, base_label);
+        if (uu[0]!=(uu[1]^1)){
+            if (verbose) {fprintf(stderr, "[debug::%s]     uu didn't pass\n", __func__);}
+            continue;
+        }  // note: it's ok for uu to have backward branching, so not checking that.
+
+        // check overlap status
+        if (hamt_check_diploid(ug, wu[0], wu[1], 0.5, reverse_sources)<=0 && 
+            hamt_check_suspicious_diploid(sg, ug, wu[0], wu[1], 0.5)>0){
+            // ^i.e. wu1 and wu2 are not reliable haplotigs, but they also have a decent amount of not-that-good overlaps
+            // check: vu vs uu
+            if (uu[0]&1){
+                u[0] = ug->u.a[uu[0]>>1].end;
+                u[1] = ug->u.a[uu[0]>>1].start;
+            }else{
+                u[0] = ug->u.a[uu[0]>>1].start;
+                u[1] = ug->u.a[uu[0]>>1].end;
+            }
+            if (vu&1){
+                v = ug->u.a[vu>>1].start^1;
+            }else{
+                v = ug->u.a[vu>>1].end^1;
+            }
+            stat[0] = does_ovlp_ever_exist(sources, v, u[0], &h, &h_rev);
+            stat[1] = does_ovlp_ever_exist(sources, v, u[1], &h, &h_rev);
+            if (stat[0] && stat[1]){  // if two looked both good, do nothing
+                if (verbose) {fprintf(stderr, "[debug::%s]     vu overlaps with both ends of uu\n", __func__);}
+                continue;
+            } 
+            if (stat[0]){
+                hamt_ug_arc_del(sg, ug, vu, wu[1], 1);
+                hamt_ug_arc_del(sg, ug, wu[1], uu[1],1);
+                hamt_ug_utg_softdel(sg, ug, wu[1], 1);
+                if (verbose) {fprintf(stderr, "[debug::%s]     dropped utg%.6d\n", __func__, (int)(wu[1]>>1)+1);}
+                nb_treated++;
+            }else if (stat[1]){
+                hamt_ug_arc_del(sg, ug, vu, wu[0], 1);
+                hamt_ug_arc_del(sg, ug, wu[0], uu[0],1);
+                hamt_ug_utg_softdel(sg, ug, wu[0], 1);
+                nb_treated++;
+                if (verbose) {fprintf(stderr, "[debug::%s]     dropped utg%.6d\n", __func__, (int)(wu[0]>>1)+1);}
+            }else{
+                if (verbose) {fprintf(stderr, "[debug::%s]     vu vs uu failed\n", __func__);}
+            }
+        }else{
+            if (verbose) {fprintf(stderr, "[debug::%s]     dip check didn't pass\n", __func__);}
+        }
+    }
+
+    if (nb_treated){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] treated %d spots\n\n", __func__, nb_treated);
+    }
     return nb_treated;
 }

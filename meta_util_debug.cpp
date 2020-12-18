@@ -141,12 +141,12 @@ void hist_readlength(All_reads *rs){
         fprintf(stderr, "[M::%s] <%.1fk: ", __func__, (float)min_length/1000);
         topped = 0;
         x = under/d;
-        if (x>50) {topped = 1;}
+        if (x>100) {topped = 1;}
         else{topped = 0;}
         for (int j=0; j<x; j++){
             fputc(']', stderr);
         }
-        if (!topped){fputc('+', stderr);}
+        if (topped){fputc('+', stderr);}
         fputc('\n', stderr);
     }
     for (int i=0; i<last_idx+1; i++){
@@ -169,7 +169,7 @@ void hist_readlength(All_reads *rs){
     }else{
         fprintf(stderr, "[M::%s] >%.1fk: ", __func__, ((float)max_length)/1000);
         x = over/d;
-        if (x>50) {topped = 1;}
+        if (x>100) {topped = 1;}
         else{topped = 0;}
         for (int j=0; j<x; j++){
             fputc(']', stderr);

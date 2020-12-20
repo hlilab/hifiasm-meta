@@ -31,9 +31,6 @@ static ko_longopt_t long_options[] = {
     // hamt debug/probing modules
     { "read-kmer-profile", ko_no_argument, 400},  // write per-read kmer frequency profiles
     { "dump-ovec-cnt", ko_no_argument, 402},  // dump per read number of corrected bases
-    // { "readselection-kmer-coverage", ko_no_argument, 403},  // test read selection heuristic
-    { "diginorm-coverage", ko_no_argument, 404},  // expose it
-    { "preovec-coverage", ko_required_argument, 405},
     { "dump-read-selection", ko_no_argument, 406},  // dump the read selection mask from bin files; only effetive with -B (hamt)
     { "force-preovec", ko_no_argument, 408}, // ignore 1st heuristic (which could've kept all reads), do preovec read selection based on lowq given
 	
@@ -154,7 +151,6 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->mode_read_kmer_profile = 0;
     asm_opt->readselection_sort_order = 1;  // smallest first
     asm_opt->bin_base_name = 0;
-    asm_opt->diginorm_coverage = 100;
     asm_opt->preovec_coverage = 150;
     asm_opt->is_ignore_ovlp_cnt = 0;
     asm_opt->is_dump_read_selection = 0;
@@ -468,16 +464,11 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             // disable read selection completely
             // overrides preovec or forced preovec (force meant force to ignore ovlp counts). 
             asm_opt->is_disable_read_selection = 1; 
-            fprintf(stderr, "NOTICE: read selection DISABLED (still use the arbitrary low_occ.)\n");
+            fprintf(stderr, "Read selection disabled.\n");
         }
-        else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "NOTICE: using bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name
-        else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG MODE: get kmer frequency profile for every read.\n");} 
-        else if (c == 402) {asm_opt->is_dump_ovec_error_count = 1; fprintf(stderr, "DEBUG MODE: get ovec error counts\n");}
-        else if (c == 404) {asm_opt->diginorm_coverage = atoi(opt.arg);}
-        else if (c == 405) {
-            fprintf(stderr, "NOTICE: pre-ovec read selection. Disabling diginorm (will collect stats w/ sorting).\n");
-            asm_opt->preovec_coverage = atoi(opt.arg);
-        }
+        else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "Use bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name
+        else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG DUMP: get kmer frequency profile for every read.\n");} 
+        else if (c == 402) {asm_opt->is_dump_ovec_error_count = 1; fprintf(stderr, "DEBUG DUMP: get ovec error counts\n");}
         else if (c == 406) {asm_opt->is_dump_read_selection = 1; fprintf(stderr, "DEBUG DUMP: will write read selection mask to file.\n");}
         else if (c == 408) {
             fprintf(stderr, "NOTICE: forced pre-ovec read selection. Ignoring count of ovlp.\n");            

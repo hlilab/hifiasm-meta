@@ -2069,6 +2069,12 @@ typedef struct {
 }hitcontain_aux_t;
 
 static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callback for kt_for()
+    // NOTE
+    //    Prevent cases from being identified as containment too aggressively will result
+    //     in a falsely complex read graph. This, however, may or may not affect the final 
+    //     contig graph. Evidently, r10+ mostly improved over previous iterations, only worse 
+    //     in terms of having introduced two or three contaminated contigs (checkM in fecal/sheep).
+    //    
     hitcontain_aux_t *d = (hitcontain_aux_t*)data;
     ma_hit_t_alloc *sources = d->sources;
     long long n_read = d->n_read;
@@ -27741,10 +27747,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF", 0);
             hamt_ug_resolve_fake_haplotype_bifurcation(sg, hamt_ug, 0, sources, reverse_sources);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
+            // hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
+            hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);
             hamt_ug_destroy(hamt_ug);
         }  
 

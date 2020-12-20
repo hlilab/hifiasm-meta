@@ -83,6 +83,7 @@ void hamt_ughit_rescueLowCovHapGap(asg_t *sg, ma_ug_t *ug,
                                          long long n_read, uint64_t *readLen, int read_cov_threshold);
 int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_label,
                                                ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources);
+void hamt_debug_get_diploid_info_about_all_branchings(ma_ug_t *ug, ma_hit_t_alloc *reverse_sources);
 
 
 #endif // __OVERLAPS_HAMT__

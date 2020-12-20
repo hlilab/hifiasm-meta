@@ -741,7 +741,7 @@ int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
     //     -1 if no hit at all
     //     1 if yes
     //     0 if no
-    int verbose = 2;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     uint32_t vu_short, vu_long;
@@ -796,6 +796,64 @@ int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
     if (verbose){fprintf(stderr, "[debug::%s] ret is %d\n", __func__, ret);}
     return ret;
 }
+
+void hamt_check_diploid_report(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, ma_hit_t_alloc *reverse_sources,
+                              float *ratio1, float *ratio2)
+{
+    // FUNC
+    //      debug version of hamt_check_diploid, report stuff instead of return 0 or 1
+    // RETURN
+    //     -1 if no hit at all
+    //     1 if yes
+    //     0 if no
+    int verbose = 0;
+
+    asg_t *auxsg = ug->g;
+    uint32_t vu_short, vu_long;
+    uint32_t qn, qn2, tn;
+    int nb_targets;
+    int found, cnt_hit=0;
+    vecu32_t v;
+    vecu32_init(&v);
+    
+    if (ug->u.a[vu1>>1].len < ug->u.a[vu2>>1].len){
+        vu_short = vu1;
+        vu_long = vu2;
+    }else{
+        vu_short = vu2;
+        vu_long = vu1;
+    }
+
+    for (int i=0; i<ug->u.a[vu_short>>1].n; i++){  // iterate over reads in the shorter unitig
+        qn = ug->u.a[vu_short>>1].a[i]>>33;
+
+        // check if there's any read in the other unitig that targets the read 
+        found = 0;
+        for (int j=0; j<ug->u.a[vu_long>>1].n; j++){  // iterate over reads in the other unitig
+            qn2 = ug->u.a[vu_long>>1].a[j]>>33;
+            nb_targets = reverse_sources[qn2].length;
+            for (int i_target=0; i_target<nb_targets; i_target++) {  // check all existed inter-haplotype targets of this read
+                if (reverse_sources[qn2].buffer[i_target].tn == qn){
+                    found = 1;
+                    if (!vecu32_is_in_vec(&v, qn2)){
+                        vecu32_push(&v, qn2);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // update stats
+        if (found){
+            cnt_hit++;
+        }
+    }
+    
+    *ratio1 = (float)cnt_hit / ug->u.a[vu_short>>1].n;
+    *ratio2 = (float)v.n / ug->u.a[vu_long>>1].n;
+    vecu32_destroy(&v);
+}
+
 int hamt_check_suspicious_diploid(asg_t *sg, ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio){
     // FUNC
     //     (use case: vu1 and vu2 aren't normal haplotigs - determined by the caller, not checked here.) 
@@ -806,7 +864,7 @@ int hamt_check_suspicious_diploid(asg_t *sg, ma_ug_t *ug, uint32_t vu1, uint32_t
     //     (TODO)-1 if overlap state is very asymmetric or other unideal situation
     // TODO
     //     check read direction
-    int verbose = 1;
+    int verbose = 0;
 
     vecu32_t tig1_reads, tig2_reads, targets;  // note: has direction
     vecu32_init(&tig1_reads);
@@ -840,7 +898,7 @@ int hamt_check_suspicious_diploid(asg_t *sg, ma_ug_t *ug, uint32_t vu1, uint32_t
         if (passed){hits++;}
     }
     int ret;
-    if ((float)passed/total>ratio && (float)targets.n/tig2_reads.n>ratio){
+    if ((float)passed/total>ratio || (float)targets.n/tig2_reads.n>ratio){
         ret = 1;
     }else{
         ret = 0;
@@ -858,6 +916,51 @@ int hamt_check_suspicious_diploid(asg_t *sg, ma_ug_t *ug, uint32_t vu1, uint32_t
     vecu32_destroy(&tig2_reads);
     vecu32_destroy(&targets);
     return ret;
+}
+void hamt_check_suspicious_diploid_report(asg_t *sg, ma_ug_t *ug, uint32_t vu1, uint32_t vu2, 
+                                          float *ratio1, float *ratio2){
+    // FUNC
+    //     debug version, report the ratios
+    int verbose = 0;
+
+    vecu32_t tig1_reads, tig2_reads, targets;  // note: has direction
+    vecu32_init(&tig1_reads);
+    vecu32_init(&tig2_reads);
+    vecu32_init(&targets);
+    uint32_t qn, tn;
+    int hits = 0, total;
+    ovecinfo_t *h;
+    // collected reads (bc need linear search)
+    for (int i=0; i<ug->u.a[vu1>>1].n; i++){
+        vecu32_push(&tig1_reads, (uint32_t)(ug->u.a[vu1>>1].a[i]>>33));
+    }
+    for (int i=0; i<ug->u.a[vu2>>1].n; i++){
+        vecu32_push(&tig2_reads, (uint32_t)(ug->u.a[vu2>>1].a[i]>>33));
+    }
+    total = tig1_reads.n<tig2_reads.n? tig1_reads.n : tig2_reads.n;
+
+    int passed=0;
+    for (int i=0; i<tig1_reads.n; i++){
+        passed = 0;
+        qn = tig1_reads.a[i];
+        for (int j=0; j<R_INF.OVEC_INF.a[qn].n; j++){
+            tn = R_INF.OVEC_INF.a[qn].tn[j];
+            if (vecu32_is_in_vec(&tig2_reads, tn)){
+                passed = 1;
+                if (!vecu32_is_in_vec(&targets, tn)){
+                    vecu32_push(&targets, tn);
+                }
+            }
+        }
+        if (passed){hits++;}
+    }
+
+    *ratio1 = (float)hits / tig1_reads.n;
+    *ratio2 = (float)targets.n / tig2_reads.n;
+
+    vecu32_destroy(&tig1_reads);
+    vecu32_destroy(&tig2_reads);
+    vecu32_destroy(&targets);
 }
 
 /////////////////////////
@@ -901,6 +1004,30 @@ static inline int hamt_asgarc_util_countSuc(asg_t *g, uint32_t v, int include_de
         nv++;
     }
     return nv;
+}
+
+int hamt_check_if_share_target(asg_t *g, uint32_t v, uint32_t u, int ignore_direction, int base_label){
+    uint32_t nv, nu;
+    asg_arc_t *av, *au;
+    nv = asg_arc_n(g, v);
+    av = asg_arc_a(g, v);
+    nu = asg_arc_n(g, u);
+    au = asg_arc_a(g, u);
+    for (int i=0; i<nv; i++){
+        if (av[i].del) {continue;}
+        if (base_label>=0 && g->seq_vis[av[i].v>>1]!=base_label) {continue;}
+        for (int j=0; j<nu; j++){
+            if (au[j].del) {continue;}
+            if (base_label>=0 && g->seq_vis[au[j].v>>1]!=base_label) {continue;}
+            if (av[i].v==au[j].v){
+                return 1;
+            }
+            if (ignore_direction && ( (av[i].v>>1) == (au[j].v>>1) )){
+                return 1;
+            }
+        }
+    }   
+    return 0;
 }
 
 int hamt_ug_arc_del_selfcircle(asg_t *sg, ma_ug_t *ug, uint32_t vu, int base_label){
@@ -1464,6 +1591,9 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
            \     \ /
             v3---v6
         (or the mid link be v3->v4->v5 instead of v2->v4->v6. it's the same.)
+        note that:
+          v2 and v3 can NOT have other connections
+          v5 and v6 CAN have other connections (either direction) 
     */
    //     by removing the 2 links (4 arcs) in path v2-v4-v6 
    // NOTE
@@ -1484,7 +1614,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
         if (verbose){fprintf(stderr, "    v0 failed\n");}
         return 0;
     }
-    // step 1st vertex
+    // try to get v2 and v3
     nv = asg_arc_n(g, v0);
     av = asg_arc_a(g, v0);
     idx = 0;
@@ -1499,11 +1629,10 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
         idx++;
     }
     if (idx!=2){
-        fprintf(stderr, "[W::%s] abnormal idx (is %d), continue anyway\n", __func__, idx);
+        fprintf(stderr, "[W::%s] abnormal idx (is %d), check soft failed\n", __func__, idx);
         return 0;
     }
-    // check step 1
-
+    // assign v2 and v3
     if (hamt_asgarc_util_countSuc(g, w1[0], 0, 0, base_label)==1 && hamt_asgarc_util_countSuc(g, w1[1], 0, 0, base_label)==2){
         v2 = w1[1];
         v3 = w1[0];
@@ -1520,55 +1649,45 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
         fprintf(stderr, "[W::%s] failed at v3->v6, continue anyway\n", __func__);
         return 0;
     }
-    if (hamt_asgarc_util_countPre(g, v6, 0, 0, base_label)!=2 || hamt_asgarc_util_countSuc(g, v6, 0, 0, base_label)!=1){
-        if (verbose){fprintf(stderr, "    v6 topo failed\n");}
-        return 0;
-    }
+    // if (hamt_asgarc_util_countPre(g, v6, 0, 0, base_label)!=2 || hamt_asgarc_util_countSuc(g, v6, 0, 0, base_label)!=1){
+    //     if (verbose){fprintf(stderr, "    v6 topo failed\n");}
+    //     return 0;
+    // }
 
-    // check v2->v4->v6
-    nv = asg_arc_n(g, v2);
-    av = asg_arc_a(g, v2);
-    idx = 0;
-    for (uint32_t i=0; i<nv; i++){
-        if (av[i].del){continue;}
-        if (base_label>=0 && g->seq_vis[av[i].v>>1]!=base_label) {continue;}
-        if (hamt_asgarc_util_countSuc(g, av[i].v, 0, 0, base_label)!=1 || hamt_asgarc_util_countPre(g, av[i].v, 0, 0, base_label)!=1){
-            if (verbose){fprintf(stderr, "    w2 failed\n");}
-            return 0;
-        } 
-        w2[idx] = av[i].v;
-        if (hamt_asgarc_util_get_the_one_target(g, av[i].v, &w3[idx], 0, 0, base_label)<0){
-            fprintf(stderr, "[W::%s] error at getting w2's target, continue anyway\n", __func__);
-            return 0;
+    // check v4
+    int passed = 0;
+    hamt_asgarc_util_get_the_two_targets(g, v2, &w2[0], &w2[1], 0, 0, base_label);
+    // is w2[0] v4?
+    if (hamt_asgarc_util_countSuc(g, w2[0], 0, 0, base_label)==1 && hamt_asgarc_util_countPre(g, w2[0], 0, 0, base_label)==1){
+        hamt_asgarc_util_get_the_one_target(g, w2[0], &w_tmp, 0, 0, base_label);
+        if (w_tmp==v6){
+            passed = 1;
+            v4 = w_tmp;
+            v5 = w2[1];
         }
-        idx++;
     }
-    if (idx!=2){
-        fprintf(stderr, "[W::%s] 2nd abnormal idx (is %d), continue anyway\n", __func__, idx);
-        return 0;
+    // is w2[1] v4?
+    if (hamt_asgarc_util_countSuc(g, w2[1], 0, 0, base_label)==1 && hamt_asgarc_util_countPre(g, w2[1], 0, 0, base_label)==1){
+        hamt_asgarc_util_get_the_one_target(g, w2[1], &w_tmp, 0, 0, base_label);
+        if (w_tmp==v6){
+            if (passed){  // they can't be both v4, abort
+                fprintf(stderr, "[W::%s] topo is weird, abort\n", __func__);
+                return 0;
+            }
+            passed = 1;
+            v4 = w_tmp;
+            v5 = w2[0];
+        }
     }
-    if (w3[0]==v6){
-        v4 = w2[0];
-        v5 = w2[1];
-        v7 = w3[1];
-    }else if (w3[1]==v6){
-        v4 = w2[1];
-        v5 = w2[0];
-        v7 = w3[0];
-    }else{
-        if (verbose){fprintf(stderr, "    w3 failed\n");}
+    if (!passed){return 0;}
+
+    // check if v5 and v6 shares any target (v7)
+    if (!hamt_check_if_share_target(g, v5, v6, 0, base_label)){
+        if (verbose){fprintf(stderr, "    sink failed\n");}
         return 0;
     }
 
-    // check sink vertex (v5 and v6's shared target)
-    if (hamt_asgarc_util_get_the_one_target(g, v6, &v7_, 0, 0, base_label)<0){
-        fprintf(stderr, "[W::%s] failed to get v6's target, continue anyway\n", __func__);
-        return 0;
-    }
-    if (v7!=v7_){
-        if (verbose){fprintf(stderr, "    sink failed\n");}
-        return 0 ; 
-    }
+    // dont need to check v5 and v6's topo
     
     buffer[0] = v2;
     buffer[1] = v4;
@@ -1587,9 +1706,9 @@ int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0,
     // NOTE
     //    Directions are: v0->(stuff in between)<-w0
     int verbose = 0;
-    if (((v0>>1)+1) == 1374){
-        verbose = 2;
-    }
+    // if (((v0>>1)+1) == 1374){
+    //     verbose = 2;
+    // }
     if (verbose){
         fprintf(stderr, "[debug::%s] utg%.6d vs utg%.6d\n", __func__, (int)(v0>>1)+1, (int)(w0>>1)+1);
     }
@@ -3635,7 +3754,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     //     1 upon recovereing an arc (+cleanup)
     //     0 if no termination criteria met, but ran out of search_span
     //     -1 if we shouldn't recover stuff
-    int verbose = 1;
+    int verbose = 0;
 
     uint32_t v, w, v_start, v_end;
     asg_t *auxsg = ug->g;
@@ -6147,7 +6266,7 @@ int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink,
                        int base_label, int alt_label){
     // NOTE
     //     direction is source->...<-sink
-    int verbose = 1;
+    int verbose = 0;
     asg_t *auxsg = ug->g;
     stacku32_t s, visited;
     stacku32_init(&s);
@@ -6245,7 +6364,7 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
     // FUNC
     //    Check and pop tangles. Heuristic.
 
-    int nb_treated = 0, verbose = 1, max_label;
+    int nb_treated = 0, verbose = 0, max_label;
     int subgraph_size, non_tip_tigs;
     asg_t *auxsg = ug->g;
     uint32_t source, sink;  // source->...<-sink
@@ -6442,4 +6561,163 @@ int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_
         fprintf(stderr, "[M::%s] treated %d spots\n\n", __func__, nb_treated);
     }
     return nb_treated;
+}
+
+int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug, int base_label,
+                                               ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources){
+    // NOTE
+    //     hamt_ug_resolve_fake_haplotype_bifurcation but doesn't require the uu (i.e. wu1 and wu2 can target different unitigs)
+    //     Will check vu vs wu1's target and wu2's target more rigorously than the original function,
+    //       since the very start/last reads might not form a good overlap (e.g. "containment" with long overhang)
+    /* 
+          ...
+             \
+              wu1---uu1...
+             /   \---...
+    -------vu
+            \   /---...
+             wu2----uu2...
+            /
+         ...
+        wu1 and wu2 are short and doesn't appear to be haplotigs; 
+        vu and [uu1 or uu2] to have direct overlap; 
+        uu1 and uu2 may have other connections.
+        wu1 and wu2 may have other backward connections, 
+        vu does NOT have other backward connections, just to be safe.
+    // FUNC / NOTE
+        Essentially, this fucntion means that since we expect wu to be very short,
+          if a walk is a "good" or "normal" one, vu is very likely to have some acceptable overlap(s)
+          directly with uu. If wu1 and wu2 doesn't appear to be a pair of haplotig, then we want to check
+          this. And then if one of them fulfills this expectation but not the other, we want to ditch the later.
+        Generalization from hamt_ug_resolve_fake_haplotype_bifurcation,
+    */
+    int verbose = 1;
+    int nb_treated = 0;
+
+    asg_t *auxsg = ug->g;
+    uint32_t wu[2], uu[2], nv, u[2], v;
+    asg_arc_t *av;
+    ma_hit_t *h, *h_rev;
+    int stat[2];
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=2){
+            continue;
+        }
+        hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+        if (ug->u.a[wu[0]>>1].len>30000){continue;}
+        if (ug->u.a[wu[1]>>1].len>30000){continue;}
+        if (hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, base_label)!=1 ||
+            hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, base_label)!=1){
+                continue;
+            }
+
+        if (verbose) {fprintf(stderr, "[debug::%s] at utg%.6d, targets utg%.6d utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(wu[0]>>1)+1, (int)(wu[1]>>1)+1);}
+        // check and get uu
+        hamt_asgarc_util_get_the_one_target(auxsg, wu[0], &uu[0], 0, 0, base_label);
+        hamt_asgarc_util_get_the_one_target(auxsg, wu[1], &uu[1], 0, 0, base_label);
+        if (uu[0]!=(uu[1]^1)){
+            if (verbose) {fprintf(stderr, "[debug::%s]     uu didn't pass\n", __func__);}
+            continue;
+        }  // note: it's ok for uu to have backward branching, so not checking that.
+
+        // check overlap status
+        if (hamt_check_diploid(ug, wu[0], wu[1], 0.3, reverse_sources)<=0 && 
+            hamt_check_suspicious_diploid(sg, ug, wu[0], wu[1], 0.3)>0){
+            // ^i.e. wu1 and wu2 are not reliable haplotigs, but they also have a decent amount of not-that-good overlaps
+            // check: vu vs uu
+            if (uu[0]&1){
+                u[0] = ug->u.a[uu[0]>>1].end;
+                u[1] = ug->u.a[uu[0]>>1].start;
+            }else{
+                u[0] = ug->u.a[uu[0]>>1].start;
+                u[1] = ug->u.a[uu[0]>>1].end;
+            }
+            if (vu&1){
+                v = ug->u.a[vu>>1].start^1;
+            }else{
+                v = ug->u.a[vu>>1].end^1;
+            }
+            stat[0] = does_ovlp_ever_exist(sources, v, u[0], &h, &h_rev);
+            stat[1] = does_ovlp_ever_exist(sources, v, u[1], &h, &h_rev);
+            if (stat[0] && stat[1]){  // if two looked both good, do nothing
+                if (verbose) {fprintf(stderr, "[debug::%s]     vu overlaps with both ends of uu\n", __func__);}
+                continue;
+            } 
+            if (stat[0]){
+                hamt_ug_arc_del(sg, ug, vu, wu[1], 1);
+                hamt_ug_arc_del(sg, ug, wu[1], uu[1],1);
+                hamt_ug_utg_softdel(sg, ug, wu[1], 1);
+                if (verbose) {fprintf(stderr, "[debug::%s]     dropped utg%.6d\n", __func__, (int)(wu[1]>>1)+1);}
+                nb_treated++;
+            }else if (stat[1]){
+                hamt_ug_arc_del(sg, ug, vu, wu[0], 1);
+                hamt_ug_arc_del(sg, ug, wu[0], uu[0],1);
+                hamt_ug_utg_softdel(sg, ug, wu[0], 1);
+                nb_treated++;
+                if (verbose) {fprintf(stderr, "[debug::%s]     dropped utg%.6d\n", __func__, (int)(wu[0]>>1)+1);}
+            }else{
+                if (verbose) {fprintf(stderr, "[debug::%s]     vu vs uu failed\n", __func__);}
+            }
+        }else{
+            if (verbose) {fprintf(stderr, "[debug::%s]     dip check didn't pass\n", __func__);}
+        }
+    }
+
+    if (nb_treated){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] treated %d spots\n\n", __func__, nb_treated);
+    }
+    return nb_treated;
+}
+
+void hamt_debug_get_diploid_info_about_all_branchings(ma_ug_t *ug, ma_hit_t_alloc *reverse_sources){
+    float ratio1, ratio2;
+    asg_t *auxsg = ug->g;
+    vecu32_t v;
+    vecu32_init(&v);
+    uint32_t nv;
+    asg_arc_t *av;
+    int alarm;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        vecu32_reset(&v);
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)<2){continue;}
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);    
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].del){continue;}
+            if (hamt_asgarc_util_countSuc(auxsg, av[i].v, 0, 0, 0)>0){
+                vecu32_push(&v, av[i].v);
+            }
+        }
+        if (v.n<=1){continue;}
+        // check diploid, pairwise
+        fprintf(stderr, "[debug::%s] at utg%.6d\n",__func__, (int)(vu>>1)+1);
+        alarm = 1;
+        for (int i=0; i<v.n-1; i++){
+            for (int j=i+1; j<v.n; j++){
+                // het overlap
+                hamt_check_diploid_report(ug, v.a[i], v.a[j], reverse_sources, &ratio1, &ratio2);
+                fprintf(stderr, "[debug::%s]    utg%.6d vs utg%.6d, ratios: %.2f and %.2f\n", 
+                                            __func__,
+                                            (int)(v.a[i]>>1)+1, (v.a[j]>>1)+1,
+                                            ratio1, ratio2);
+                if (ratio1>0 || ratio2>0) {alarm = 0;}
+                
+                // suspicious overlap
+                hamt_check_suspicious_diploid_report(NULL, ug, v.a[i], v.a[j], &ratio1, &ratio2);
+                fprintf(stderr, "[debug::%s]    utg%.6d vs utg%.6d, sus ratios: %.2f and %.2f\n", 
+                                            __func__,
+                                            (int)(v.a[i]>>1)+1, (v.a[j]>>1)+1,
+                                            ratio1, ratio2);
+            }
+        }
+        if (alarm){
+            fprintf(stderr, "[debug::%s] !!! none of the pairs check check out !!!\n",__func__);
+        }
+    }
+    vecu32_destroy(&v);
 }

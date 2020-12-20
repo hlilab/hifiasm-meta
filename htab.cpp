@@ -928,7 +928,6 @@ typedef struct {  // global data structure for pipeline (pl_data_t)
 	uint8_t flag;
 	const hifiasm_opt_t *asm_opt;  // hamt experimental, used to toggle things like read selection order. TODO: clean up when ready.
 
-	// experimental for preovec-diginorm
 	int nb_reads_kept;  
 	int nb_reads_limit;
 	int runtime_median_threshold;
@@ -1009,7 +1008,6 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 #define HAMT_VIA_LONGLOW 0x4
 #define HAMT_VIA_KMER 0x8
 void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
-	int low_threshold = asm_opt.diginorm_coverage/5<30 ? 30 : asm_opt.diginorm_coverage/5;  // pretty arbitrary.
 	uint64_t rid;
 	if (/*s->p->asm_opt->readselection_sort_order==0 || */s->p->round==0)
 		{rid = s->n_seq0+idx_seq;}
@@ -1054,12 +1052,12 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 	radix_sort_hamt16(buf, buf+idx);
 	uint16_t median = (uint16_t)buf[idx/2];
 	uint16_t lowq = (uint16_t)buf[idx/10];
-	uint8_t code = decide_category(mean, std, buf, idx);
+	// uint8_t code = decide_category(mean, std, buf, idx);
 	s->p->rs_out->mean[rid] = mean;
 	s->p->rs_out->median[rid] = median;
 	s->p->rs_out->lowq[rid] = lowq;
 	s->p->rs_out->std[rid] = std;
-	s->p->rs_out->mask_readtype[rid] = code;
+	s->p->rs_out->mask_readtype[rid] = /*code*/ 0;
 
 	free(buf);  // sequence will be freed by the caller	
 }
@@ -1158,7 +1156,7 @@ void worker_process_one_read_HPC_inclusive(pltmt_step_t *s, int idx_seq, int rou
 		s->p->rs_out->mask_readnorm[rid] = 0;
 		s->p->nb_reads_kept++;
 		for (i=0; i<idx_buf; i++){
-			b = &s->lnbuf[buf[i] & ((1<<hd->pre)-1)];// inert into diginorm linear buffer for kmer counting
+			b = &s->lnbuf[buf[i] & ((1<<hd->pre)-1)];// inert into linear buffer for kmer counting
 			if ((b->n+3)>=b->m){
 				b->m = b->m<16? 16 : b->m+((b->m)>>1);
 				REALLOC(b->a, b->m);
@@ -1207,7 +1205,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 				*p->n_seq+=1;
 				s->sum_len += l;
 				s->nk += l >= p->opt->k? l - p->opt->k + 1 : 0;
-				if (s->n_seq>=2000 || s->sum_len >= p->opt->chunk_size){  // 2000 is because of the linear buffers for diginorm steps
+				if (s->n_seq>=2000 || s->sum_len >= p->opt->chunk_size){  // 2000 becuase linear buffer length
 					break;
 				}
 			}
@@ -1244,7 +1242,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 				*p->n_seq+=1;
 				s->sum_len += l;
 				s->nk += l >= p->opt->k? l - p->opt->k + 1 : 0;
-				if (s->n_seq>=2000 || s->sum_len >= p->opt->chunk_size){  // 2000 is because of the linear buffers for diginorm steps
+				if (s->n_seq>=2000 || s->sum_len >= p->opt->chunk_size){  // 2000 because linear buffer length
 					break;
 				}
 			}
@@ -1258,7 +1256,6 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 	}else if (step==1){  // step2: (round 0:)get kmer profile of each read && mark their status (mask_readtype and mask_readnorm) || (round 1:) count kmers into linear buffers, then insert into hashtables
 
 		pltmt_step_t *s = (pltmt_step_t*)in;
-		// note: do not use kt_for here, or it's race (that *doesn't always* but occassionally fail)! 
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
 				worker_process_one_read_HPC(s, idx_seq);
@@ -1274,7 +1271,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			s->len = 0;
 			free(s);
 		}else{  // insert the linear buffers
-			fprintf(stderr, "diginorm legacy code?\n");
+			fprintf(stderr, "warn: shouldnt hit here; legacy read selection code??\n");
 			exit(1);
 			// assert(s->p->hd);
 			// kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->h->pre);
@@ -1370,10 +1367,10 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 		rs->is_has_nothing = 0;
 		rs->is_has_lengths = 1;
 	}else if (rs->is_has_lengths && (!rs->is_all_in_mem)){
-		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_SEQ|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS since we've done diginorm / the array is initialized
+		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_SEQ|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS bc read global kmer status have been collected / the array is initialized
 		rs->is_all_in_mem = 1;
 	}else if (rs->is_all_in_mem){
-		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_READ|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS since we've done diginorm / the array is initialized
+		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_READ|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS bc read global kmer status have been collected / the array is initialized
 	}else{
 		fprintf(stderr, "[E::%s] unexpected, rs status markers are wrong? Traceback:\n", __func__);
 		fprintf(stderr, "[E::%s] is_has_nothing:%d, is_has_lengths:%d, is_all_in_mem:%d\n", 
@@ -1699,9 +1696,9 @@ int hamt_printout_ha_count(hifiasm_opt_t *asm_opt, All_reads *rs){  // debug
 }
 
 
-///////////////////////////////////////////////////////////////////////
-//    experimental: diginorm+, but with sorting and less heuristics  //
-///////////////////////////////////////////////////////////////////////
+///////////////////////////////
+//       pre read selection  //
+///////////////////////////////
 
 void exp_load_raw_reads(const hifiasm_opt_t *asm_opt, All_reads *rs, int has_len){
 	// load all reads into mem (effectively the method used by worker_count with HAF_RS_WRITE_SEQ)

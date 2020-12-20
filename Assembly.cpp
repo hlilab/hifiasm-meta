@@ -1713,7 +1713,6 @@ int ha_assemble(void)
         if (asm_opt.het_cov == -1024) hap_recalculate_peaks(asm_opt.bin_base_name), ovlp_loaded = 2;
 
         // debug_printstat_read_status(&R_INF);  // TODO: preovec doesn't use bit flag right now. (Oct 15)
-        hamt_ovecinfo_init();
 
 	}
 	if (!ovlp_loaded) {
@@ -1782,6 +1781,8 @@ int ha_assemble(void)
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
         hamt_ovecinfo_init();
 		ha_overlap_final();
+        // hamt_ovecinfo_debugdump(&asm_opt);
+        hamt_ovecinfo_write_to_disk(&asm_opt);
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());
 		ha_print_ovlp_stat(R_INF.paf, R_INF.reverse_paf, R_INF.total_reads);
@@ -1793,8 +1794,6 @@ int ha_assemble(void)
     if(ovlp_loaded == 2) ovlp_loaded = 0;
 
     hist_readlength(&R_INF);
-    // hamt_ovecinfo_debugdump(&asm_opt);
-    hamt_ovecinfo_write_to_disk(&asm_opt);
 
     build_string_graph_without_clean(asm_opt.min_overlap_coverage, R_INF.paf, R_INF.reverse_paf, 
         R_INF.total_reads, R_INF.read_length, asm_opt.min_overlap_Len, asm_opt.max_hang_Len, asm_opt.clean_round, 

@@ -85,12 +85,9 @@ typedef struct {
     int is_disable_read_selection;
     int is_disable_phasing;  // experimental, disable reverse_paf (aka reverse_sources) by pushing everything into paf (aka sources).
     int mode_read_kmer_profile;
-    int mode_diginorm_kmer_cov;
     int readselection_sort_order;  // experimental, 1 for smallestFirst, 2 for largestFirst, 0 to force disable it (note that we still go through loading all reads + sorting, just don't use the info when annotation mask_readnorm)
     char *bin_base_name;
-    // int is_preovec_readselection;  // experimental, disable diginorm (but still collects everything) and do minimum read selection before ovec
     int is_ignore_ovlp_cnt;  // experimental, do preovec read selection even if the whole read set looks practical
-    int diginorm_coverage;
     int preovec_coverage;
     int is_dump_read_selection;
     int is_use_exp_graph_cleaning;

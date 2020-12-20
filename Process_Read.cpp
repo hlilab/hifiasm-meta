@@ -117,7 +117,8 @@ void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
     R_INF.OVEC_INF.n = R_INF.OVEC_INF.m = total_reads;
     flag = fread(b, sizeof(int), total_reads, fp);
     for (int i=0; i<total_reads; i++){
-        R_INF.OVEC_INF.a[i].n = R_INF.OVEC_INF.a[i].m = b[i];
+        R_INF.OVEC_INF.a[i].n = b[i];
+		R_INF.OVEC_INF.a[i].m = b[i];
         R_INF.OVEC_INF.a[i].tn = (uint32_t*)malloc(sizeof(uint32_t)*b[i]);
         R_INF.OVEC_INF.a[i].is_match = (uint8_t*)malloc(sizeof(uint8_t)*b[i]);
     }
@@ -322,9 +323,9 @@ void write_All_reads(All_reads* r, char* read_file_name)
 
 int load_All_reads(All_reads* r, char* read_file_name)
 {
-	// hamt note: Let missing hamt bin trigger re-indexing (if is_disable_diginorm not set), 
-	//              since graph cleaning *might* need kmer-freq-based read coverages.
-	//            Tolerate the lack of hamt bin if is_disable_diginorm is set. 
+	// hamt note: Let missing hamt bin trigger re-indexing , 
+	//              since graph cleaning *might* need kmer-freq-based read coverages. (actually maybe not. - Dec 19)
+	//            Tolerate the lack of hamt bin if is_disable_read_selection is set. 
 	//              Set mask to 0 length and let htab.cpp and Assembly.cpp handle the allocation & annotation.
 	// TODO: clean up
     char* index_name = (char*)malloc(strlen(read_file_name)+15);
@@ -514,6 +515,7 @@ int load_All_reads(All_reads* r, char* read_file_name)
 
 	// hamt, ovec info
 	hamt_ovecinfo_load_from_disk(&asm_opt);
+	// hamt_ovecinfo_debugdump(&asm_opt);
 
 	return 1;
 }

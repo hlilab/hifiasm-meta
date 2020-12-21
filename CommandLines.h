@@ -3,8 +3,9 @@
 
 #include <pthread.h>
 
-#define HA_VERSION "0.11-r302"
+#define HA_VERSION "0.12-r304"
 #define HAMT_VERSION "0.0-r018"
+
 
 // #define VERBOSE 1
 extern int VERBOSE;  // expose to cli

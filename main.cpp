@@ -34,10 +34,16 @@ int main(int argc, char *argv[])
 
 
 	// main
-	ret = ha_assemble();
+	if (asm_opt.is_use_exp_graph_cleaning){
+		ret = hamt_assemble();
+		fprintf(stderr, "[M::%s] Hifiasm code base version: %s\n", __func__, HA_VERSION);
+		fprintf(stderr, "[M::%s] Hifiasm_meta version: %s\n", __func__, HAMT_VERSION);
+	}else{
+		ret = ha_assemble();
+		fprintf(stderr, "[M::%s] Hifiasm %s\n", __func__, HA_VERSION);
+	}
     destory_opt(&asm_opt);
-	fprintf(stderr, "[M::%s] Hifiasm code base version: %s\n", __func__, HA_VERSION);
-	fprintf(stderr, "[M::%s] Hifiasm_meta version: %s\n", __func__, HAMT_VERSION);
+	
 	fprintf(stderr, "[M::%s] CMD:", __func__);
 	for (i = 0; i < argc; ++i)
 		fprintf(stderr, " %s", argv[i]);

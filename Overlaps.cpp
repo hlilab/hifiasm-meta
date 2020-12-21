@@ -2652,6 +2652,37 @@ static inline int asg_is_single_edge(const asg_t *g, uint32_t v, uint32_t start_
     return nv;
 }
 
+void debug_info_of_specfic_node(const char* name, asg_t *g, char* command)
+{
+    fprintf(stderr, "\n\n\n");
+    uint32_t v, n_vtx = g->n_seq * 2, queryLen = strlen(name), flag = 0;
+    for (v = 0; v < n_vtx; ++v) 
+    {
+        if(queryLen == Get_NAME_LENGTH(R_INF, (v>>1)) && memcmp(name, Get_NAME(R_INF, (v>>1)), Get_NAME_LENGTH(R_INF, (v>>1))) == 0)
+        {
+            if(flag == 0) fprintf(stderr, "\nafter %s\n", command);
+            fprintf(stderr, "****************graph ref_read: %.*s, dir: %u****************\n", 
+            (int)Get_NAME_LENGTH(R_INF, (v>>1)), Get_NAME(R_INF, (v>>1)), v&1);
+            if(g->seq[v>>1].del)
+            {
+                fprintf(stderr, "read has already been deleted.\n");
+                return;
+            }
+
+            asg_arc_t *av = asg_arc_a(g, v);
+            uint32_t i, nv = asg_arc_n(g, v);
+            for (i = 0; i < nv; ++i)
+            {
+                fprintf(stderr, "target: %.*s, el: %u, strong: %u, ol: %u, del: %u\n", 
+                (int)Get_NAME_LENGTH(R_INF, (av[i].v>>1)), 
+                Get_NAME(R_INF, (av[i].v>>1)),
+                av[i].el, av[i].strong, av[i].ol, av[i].del);
+            }
+            flag = 1;
+        }
+    }
+}
+
 
 asg_t *ma_sg_gen(const ma_hit_t_alloc* sources, long long n_read, const ma_sub_t *coverage_cut, 
 int max_hang, int min_ovlp)
@@ -8710,14 +8741,96 @@ int asg_arc_del_short_diploi_by_suspect_edge(asg_t *g, int max_ext)
 	return n_cut;
 }
 
+int if_potential_false_node(ma_hit_t_alloc* paf, uint64_t rLen, ma_sub_t* max_left, ma_sub_t* max_right, int if_set)
+{
+    max_left->s = max_right->s = rLen;
+    max_left->e = max_right->e = 0;
+
+    long long j;
+    uint32_t qs, qe;
+    for (j = 0; j < paf->length; j++)
+    {
+        if(paf->buffer[j].del) continue;
+        if(paf->buffer[j].el != 1) continue;
+
+        qs = Get_qs(paf->buffer[j]);
+        qe = Get_qe(paf->buffer[j]);
+
+        ///overlaps from left side
+        if(qs == 0)
+        {
+            if(qs < max_left->s) max_left->s = qs;
+            if(qe > max_left->e) max_left->e = qe;
+        }
+
+        ///overlaps from right side
+        if(qe == rLen)
+        {
+            if(qs < max_right->s) max_right->s = qs;
+            if(qe > max_right->e) max_right->e = qe;
+        }
+
+        ///note: if (qs == 0 && qe == rLen)
+        ///this overlap would be added to both b_left and b_right
+        ///that is what we want
+    }
+
+    if (max_left->e > max_right->s) return 0;
+
+    long long new_left_e, new_right_s;
+    new_left_e = max_left->e;
+    new_right_s = max_right->s;
+
+    for (j = 0; j < paf->length; j++)
+    {
+        if(paf->buffer[j].del) continue;
+        if(paf->buffer[j].el != 1) continue;
+
+        qs = Get_qs(paf->buffer[j]);
+        qe = Get_qe(paf->buffer[j]);
+        ///check contained overlaps
+        if(qs != 0 && qe != rLen)
+        {
+            ///[qs, qe), [max_left.s, max_left.e)
+            if(qs < max_left->e && qe > max_left->e)
+            {
+                ///if(qe > max_left->e) max_left->e = qe;
+                if(qe > max_left->e && qe > new_left_e) new_left_e = qe;
+            }
+
+            ///[qs, qe), [max_right.s, max_right.e)
+            if(qs < max_right->s && qe > max_right->s)
+            {
+                ///if(qs < max_right->s) max_right->s = qs;
+                if(qs < max_right->s && qs < new_right_s) new_right_s = qs;
+            }
+
+
+
+            if(if_set)
+            {
+                max_left->e = new_left_e;
+                max_right->s = new_right_s;
+            }
+        }
+    }
+
+    max_left->e = new_left_e;
+    max_right->s = new_right_s;
+
+    if (max_left->e > max_right->s) return 0;
+
+    return 1;
+}
+
 //reomve edge between two chromesomes
 //this node must be a single read
-int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_tip, defaulted to 3
-{  // will delete seqs and all their associated arcs
-   // ?????? is this cleaning self-alignment???
+int asg_arc_del_false_node(asg_t *g, ma_hit_t_alloc* sources, int max_ext)
+{
     double startTime = Get_T();
     kvec_t(uint64_t) b;
     memset(&b, 0, sizeof(b));
+    ma_sub_t max_left, max_right;
 
 	uint32_t v, n_vtx = g->n_seq * 2;
     long long n_cut = 0;
@@ -8742,6 +8855,11 @@ int asg_arc_del_false_node(asg_t *g, int max_ext)  // max_ext is opt.max_short_t
             }
 
             if(asg_arc_a(g, v)[0].el == 1)
+            {
+                continue;
+            }
+
+            if(if_potential_false_node(&(sources[v>>1]), g->seq[v>>1].len, &max_left, &max_right, 1)==0)
             {
                 continue;
             }
@@ -10163,35 +10281,6 @@ void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_source
 
 
 
-void debug_info_of_specfic_node(const char* name, asg_t *g, char* command)
-{
-    fprintf(stderr, "\n\n\n");
-    uint32_t v, n_vtx = g->n_seq * 2, queryLen = strlen(name);
-    for (v = 0; v < n_vtx; ++v) 
-    {
-        if(queryLen == Get_NAME_LENGTH(R_INF, (v>>1)) && memcmp(name, Get_NAME(R_INF, (v>>1)), Get_NAME_LENGTH(R_INF, (v>>1))) == 0)
-        {
-            fprintf(stderr, "\nafter %s\n****************graph ref_read: %.*s, dir: %u****************\n", 
-            command, (int)Get_NAME_LENGTH(R_INF, (v>>1)), Get_NAME(R_INF, (v>>1)), v&1);
-            if(g->seq[v>>1].del)
-            {
-                fprintf(stderr, "read has already been deleted.\n");
-                return;
-            }
-
-            asg_arc_t *av = asg_arc_a(g, v);
-            uint32_t i, nv = asg_arc_n(g, v);
-            for (i = 0; i < nv; ++i)
-            {
-                fprintf(stderr, "target: %.*s, el: %u, strong: %u, ol: %u, del: %u\n", 
-                (int)Get_NAME_LENGTH(R_INF, (av[i].v>>1)), 
-                Get_NAME(R_INF, (av[i].v>>1)),
-                av[i].el, av[i].strong, av[i].ol, av[i].del);
-            }
-            return;
-        }
-    }
-}
 
 void debug_info_of_specfic_read(const char* name, ma_hit_t_alloc* sources, 
 ma_hit_t_alloc* reverse_sources, int id, const char* command)
@@ -10217,8 +10306,8 @@ ma_hit_t_alloc* reverse_sources, int id, const char* command)
         {
             fprintf(stderr, "\n\n\nafter %s\n", command);
 
-            fprintf(stderr, "****************ma_hit_t (%lld)ref_read: %.*s****************\n", 
-            i, (int)Get_NAME_LENGTH(R_INF, i), Get_NAME(R_INF, i));
+            fprintf(stderr, "****************ma_hit_t (%lld)ref_read: %.*s, len: %lu****************\n", 
+            i, (int)Get_NAME_LENGTH(R_INF, i), Get_NAME(R_INF, i), Get_READ_LENGTH(R_INF, i));
 
 
             fprintf(stderr, "sources Len: %d, is_fully_corrected: %d\n", 
@@ -13599,12 +13688,12 @@ float drop_ratio)
     #define T_ROUND 2
     asg_t *g = ug->g;
     int round = T_ROUND;
-
     
+
     redo:
     asg_pop_bubble_primary_trio(ug, bubble_dist, (uint32_t)-1, DROP);
     untig_asg_arc_simple_large_bubbles_trio(ug, read_g, reverse_sources, 2, ruIndex, (uint32_t)-1, DROP); 
-        
+
     if(just_bubble_pop == 0)
     {
         cut_trio_tip_primary(g, ug, tipsLen, (uint32_t)-1, 0, read_g, reverse_sources, ruIndex, 
@@ -13660,7 +13749,7 @@ float drop_ratio)
     {
         if(round != T_ROUND)
         {
-            unitig_arc_del_short_diploid_by_length(ug->g, drop_ratio);
+            unitig_arc_del_short_diploid_by_length(ug->g, drop_ratio);        
         }
         round--;
         goto redo;
@@ -23377,7 +23466,7 @@ kvec_asg_arc_t_warp* new_rtg_edges)
         delete_useless_nodes(ug);
         renew_utg(ug, read_g, new_rtg_edges);
     }
-    
+
     if (!(asm_opt.flag & HA_F_BAN_POST_JOIN))
     {
         rescue_missing_overlaps_aggressive(*ug, read_g, sources, coverage_cut, ruIndex, max_hang,
@@ -27407,8 +27496,243 @@ int max_hang, int min_ovlp)
     }
 }
 
-
 void clean_graph(
+int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
+long long n_read, uint64_t* readLen, long long mini_overlap_length, 
+long long max_hang_length, long long clean_round, long long gap_fuzz,
+float min_ovlp_drop_ratio, float max_ovlp_drop_ratio, char* output_file_name, 
+long long bubble_dist, int read_graph, R_to_U* ruIndex, asg_t **sg_ptr,   // the **sg_ptr is a NULL pointer
+ma_sub_t **coverage_cut_ptr, int debug_g)
+{
+		ma_sub_t *coverage_cut = *coverage_cut_ptr;
+	asg_t *sg = *sg_ptr;
+
+    if(debug_g) goto debug_gfa;
+
+    ///just for debug
+    renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
+
+    ///it's hard to say which function is better       
+    ///normalize_ma_hit_t_single_side(sources, n_read);
+    normalize_ma_hit_t_single_side_advance(sources, n_read);
+    normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
+
+    if (ha_opt_triobin(&asm_opt))
+    {
+        drop_edges_by_trio(sources, n_read);
+    }
+    else
+    {
+        memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
+    }
+    
+    ///print_binned_reads(sources, n_read, coverage_cut);
+
+    clean_weak_ma_hit_t(sources, reverse_sources, n_read);
+    ///ma_hit_sub is just use to init coverage_cut,
+    ///it seems we do not need ma_hit_cut & ma_hit_flt
+    ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
+    detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
+    ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
+    ///print_binned_reads(sources, n_read, coverage_cut);
+    ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
+
+    ///fix_binned_reads(sources, n_read, coverage_cut);
+    ///just need to deal with trio here
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
+    
+    sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
+    asg_arc_del_trans(sg, gap_fuzz);
+
+    asm_opt.coverage = get_coverage(sources, coverage_cut, n_read);
+
+    if(VERBOSE >= 1)
+    {
+        char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
+        sprintf(unlean_name, "%s.unclean", output_file_name);
+        output_read_graph(sg, coverage_cut, unlean_name, n_read);
+        free(unlean_name);
+    }
+
+    asg_cut_tip(sg, asm_opt.max_short_tip);
+    ///debug_info_of_specfic_node("m64062_190803_042216/15205346/ccs", sg, "inner_1");
+    ///drop_inexact_edegs_at_bubbles(sg, bubble_dist);
+    
+    if(clean_round > 0)
+    {
+        double cut_step;
+        if(clean_round == 1)
+        {
+            cut_step = max_ovlp_drop_ratio;
+        }
+        else
+        {
+            cut_step = (max_ovlp_drop_ratio - min_ovlp_drop_ratio) / (clean_round - 1);
+        }
+        double drop_ratio = min_ovlp_drop_ratio;
+        int i = 0;
+        for (i = 0; i < clean_round; i++, drop_ratio += cut_step)
+        {
+            if(drop_ratio > max_ovlp_drop_ratio)
+            {
+                drop_ratio = max_ovlp_drop_ratio;
+            }
+
+            if(VERBOSE >= 1)
+            {
+                fprintf(stderr, "\n\n**********%d-th round drop: drop_ratio = %f**********\n", 
+                i, drop_ratio);
+            }
+
+            ///just topological clean
+            pre_clean(sources, coverage_cut, sg, bubble_dist);
+            ///asg_arc_del_orthology(sg, reverse_sources, drop_ratio, asm_opt.max_short_tip);
+            // asg_arc_del_orthology_multiple_way(sg, reverse_sources, drop_ratio, asm_opt.max_short_tip);
+            // asg_cut_tip(sg, asm_opt.max_short_tip);
+            /****************************may have bugs********************************/
+
+            asg_arc_identify_simple_bubbles_multi(sg, 1);
+            //reomve edge between two chromesomes
+            //this node must be a single read
+            asg_arc_del_false_node(sg, sources, asm_opt.max_short_tip);
+            asg_cut_tip(sg, asm_opt.max_short_tip);
+            /****************************may have bugs********************************/
+            /****************************may have bugs********************************/
+
+            ///asg_arc_identify_simple_bubbles_multi(sg, 1);
+            asg_arc_identify_simple_bubbles_multi(sg, 0);
+            ///asg_arc_del_short_diploid_unclean_exact(sg, drop_ratio, sources);
+            if (ha_opt_triobin(&asm_opt))
+            {
+                asg_arc_del_short_diploid_by_exact_trio(sg, asm_opt.max_short_tip, sources);
+            }
+            else
+            {
+                asg_arc_del_short_diploid_by_exact(sg, asm_opt.max_short_tip, sources);
+            }
+            asg_cut_tip(sg, asm_opt.max_short_tip);
+            /****************************may have bugs********************************/
+
+            asg_arc_identify_simple_bubbles_multi(sg, 1);
+            if (ha_opt_triobin(&asm_opt))
+            {
+                asg_arc_del_short_diploid_by_length_trio(sg, drop_ratio, asm_opt.max_short_tip, reverse_sources, 
+                asm_opt.max_short_tip, 1, 1, 0, 0, ruIndex);
+            }
+            else
+            {
+                asg_arc_del_short_diploid_by_length(sg, drop_ratio, asm_opt.max_short_tip, reverse_sources, 
+                asm_opt.max_short_tip, 1, 1, 0, 0, ruIndex);
+            }
+            asg_cut_tip(sg, asm_opt.max_short_tip);
+
+            asg_arc_identify_simple_bubbles_multi(sg, 1);
+            asg_arc_del_short_false_link(sg, 0.6, 0.85, bubble_dist, reverse_sources, 
+            asm_opt.max_short_tip, ruIndex);     
+
+            asg_arc_identify_simple_bubbles_multi(sg, 1);
+            asg_arc_del_complex_false_link(sg, 0.6, 0.85, bubble_dist, reverse_sources, asm_opt.max_short_tip);
+
+            asg_cut_tip(sg, asm_opt.max_short_tip);
+        }
+    }
+
+    if(VERBOSE >= 1)
+    {
+        fprintf(stderr, "\n\n**********final clean**********\n");
+    }
+
+
+    pre_clean(sources, coverage_cut, sg, bubble_dist);
+
+
+    asg_arc_del_short_diploi_by_suspect_edge(sg, asm_opt.max_short_tip);
+    asg_cut_tip(sg, asm_opt.max_short_tip);
+    asg_arc_del_triangular_directly(sg, asm_opt.max_short_tip, reverse_sources, ruIndex);
+
+
+    asg_arc_identify_simple_bubbles_multi(sg, 0);
+    asg_arc_del_orthology_multiple_way(sg, reverse_sources, 0.4, asm_opt.max_short_tip, ruIndex);
+    asg_cut_tip(sg, asm_opt.max_short_tip);
+
+    
+
+
+
+    asg_arc_identify_simple_bubbles_multi(sg, 0);
+    asg_arc_del_too_short_overlaps(sg, 2000, min_ovlp_drop_ratio, reverse_sources, 
+    asm_opt.max_short_tip, ruIndex);
+    asg_cut_tip(sg, asm_opt.max_short_tip);
+
+    asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
+
+    if (asm_opt.flag & HA_F_VERBOSE_GFA)
+    {
+        /*******************************for debug***************************************/
+        write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
+        debug_gfa:;
+        /*******************************for debug***************************************/
+    }
+    
+    /**
+    debug_ma_hit_t(sources, coverage_cut, n_read, max_hang_length, 
+    mini_overlap_length);
+    debug_ma_hit_t(reverse_sources, coverage_cut, n_read, max_hang_length, 
+    mini_overlap_length);
+    **/
+ 
+    ///note: don't apply asg_arc_del_too_short_overlaps() after this function!!!!
+    rescue_contained_reads_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
+    mini_overlap_length, bubble_dist, 10, 1, 0, NULL, NULL);
+    rescue_missing_overlaps_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length,
+    mini_overlap_length, bubble_dist, 1, 0, NULL);
+    rescue_missing_overlaps_backward(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
+    mini_overlap_length, bubble_dist, 10, 1, 0);
+    // rescue_wrong_overlaps_to_unitigs(NULL, sg, sources, reverse_sources, coverage_cut, ruIndex, 
+    // max_hang_length, mini_overlap_length, bubble_dist, NULL);
+    // rescue_no_coverage_aggressive(sg, sources, reverse_sources, &coverage_cut, ruIndex, max_hang_length, 
+    // mini_overlap_length, bubble_dist, 10);
+
+    if (ha_opt_triobin(&asm_opt))
+    {
+		char *buf = (char*)calloc(strlen(output_file_name) + 25, 1);
+		sprintf(buf, "%s.dip", output_file_name);
+        output_unitig_graph(sg, coverage_cut, buf, sources, ruIndex, max_hang_length, mini_overlap_length);
+		free(buf);
+        
+        output_trio_unitig_graph(sg, coverage_cut, output_file_name, FATHER, sources, 
+        reverse_sources, bubble_dist, (asm_opt.max_short_tip*2), 0.15, 3, ruIndex, 
+        0.05, 0.9, max_hang_length, mini_overlap_length);
+        output_trio_unitig_graph(sg, coverage_cut, output_file_name, MOTHER, sources,
+        reverse_sources, bubble_dist, (asm_opt.max_short_tip*2), 0.15, 3, ruIndex, 
+        0.05, 0.9, max_hang_length, mini_overlap_length);
+    }
+    else
+    {
+
+        output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+
+        if(VERBOSE >= 1)
+        {
+            output_read_graph(sg, coverage_cut, output_file_name, n_read);
+        }
+
+        output_contig_graph_primary_pre(sg, coverage_cut, output_file_name, sources, reverse_sources, 
+        asm_opt.small_pop_bubble_size, asm_opt.max_short_tip, ruIndex, max_hang_length, mini_overlap_length);
+
+        output_contig_graph_primary(sg, coverage_cut, output_file_name, sources, reverse_sources, 
+        bubble_dist, (asm_opt.max_short_tip*2), 0.15, 3, ruIndex, 0.05, 0.9, max_hang_length,
+        mini_overlap_length);
+
+        output_contig_graph_alternative(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
+    }
+
+	*coverage_cut_ptr = coverage_cut;
+	*sg_ptr = sg;
+}
+
+
+void hamt_clean_graph(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
 long long n_read, uint64_t* readLen, long long mini_overlap_length, 
 long long max_hang_length, long long clean_round, long long gap_fuzz,
@@ -27521,7 +27845,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             asg_arc_identify_simple_bubbles_multi(sg, 1);
             //reomve edge between two chromesomes
             //this node must be a single read
-            asg_arc_del_false_node(sg, asm_opt.max_short_tip);
+            asg_arc_del_false_node(sg, sources, asm_opt.max_short_tip);
             asg_cut_tip(sg, asm_opt.max_short_tip);
             /****************************may have bugs********************************/
             /****************************may have bugs********************************/
@@ -27737,6 +28061,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_after", 0);}
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // resolve complex bubble
             int nb_complex_bubble_cut;
@@ -27796,9 +28121,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_resolve_fake_haplotype_bifurcation(sg, hamt_ug, 0, sources, reverse_sources);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF2", 0);
-            // hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(sg, hamt_ug, 0, sources, reverse_sources);
-            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF2", 0);
+            hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(sg, hamt_ug, 0, sources, reverse_sources);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
             hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);
@@ -27843,6 +28168,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
 
 
+
 void build_string_graph_without_clean(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
 long long n_read, uint64_t* readLen, long long mini_overlap_length, 
@@ -27854,10 +28180,7 @@ long long bubble_dist, int read_graph, int write)
     init_R_to_U(&ruIndex, n_read);
     asg_t *sg = NULL;
     ma_sub_t* coverage_cut = NULL;
-
-    
-    // debug_info_of_specfic_read("m64011_190329_072846/80545633/ccs", sources, reverse_sources, -1, "clean");
-    
+        
     ///actually min_thres = asm_opt.max_short_tip + 1 there are asm_opt.max_short_tip reads
     min_thres = asm_opt.max_short_tip + 1;
 
@@ -27868,9 +28191,15 @@ long long bubble_dist, int read_graph, int write)
         {
             fprintf(stderr, "debug gfa has been loaded\n");
             
-            clean_graph(min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 
-            max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
-            output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 1);
+            if (!asm_opt.is_use_exp_graph_cleaning){
+                clean_graph(min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 
+                max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
+                output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 1);
+            }else{
+                hamt_clean_graph(min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 
+                max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
+                output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 1);
+            }
             asg_destroy(sg);
             free(coverage_cut);
             destory_R_to_U(&ruIndex);
@@ -27885,14 +28214,22 @@ long long bubble_dist, int read_graph, int write)
         &R_INF, output_file_name);
     }
 
+    ///debug_info_of_specfic_read("m64062_190803_042216/15205346/ccs", sources, reverse_sources, -1, "beg");
+
     // generate graph
     if (!(asm_opt.flag & HA_F_BAN_ASSEMBLY))  // HA_F_BAN_ASSEMBLY is set via debug flag "-e"
     {
         try_rescue_overlaps(sources, reverse_sources, n_read, 4); 
 
-        clean_graph(min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 
-        max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
-        output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 0);
+        if (!asm_opt.is_use_exp_graph_cleaning){
+            clean_graph(min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 
+            max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
+            output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 0);
+        }else{
+            hamt_clean_graph(min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 
+            max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
+            output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 0);
+        }
         
         write_debug_assembly_graph(sg, &R_INF, output_file_name);
 

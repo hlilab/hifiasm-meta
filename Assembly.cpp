@@ -1328,30 +1328,22 @@ static void worker_ov_final(void *data, long i, int tid)
 	 **/
 
 	overlap_region_sort_y_id(b->olist.list, b->olist.length);
-    if (!asm_opt.is_disable_phasing){
-        // paf contains overlaps between reads of the same haplotype, 
-        // reverse_paf contains overlaps otherwise
-        ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
-        ma_hit_sort_tn(R_INF.reverse_paf[i].buffer, R_INF.reverse_paf[i].length);
 
-        update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 1, 1);
-        update_overlaps(&b->olist, &(R_INF.reverse_paf[i]), &b->self_read, &b->ovlp_read, 2, 0);
-        ///recover missing exact overlaps
-        update_exact_overlaps(&b->olist, &b->self_read, &b->ovlp_read);
+    // paf contains overlaps between reads of the same haplotype, 
+    // reverse_paf contains overlaps otherwise
+    ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
+    ma_hit_sort_tn(R_INF.reverse_paf[i].buffer, R_INF.reverse_paf[i].length);
 
-        ///Final_phasing(&overlap_list, &cigarline, &g_read, &overlap_read, c2n);
-        push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
-        push_final_overlaps(&(R_INF.reverse_paf[i]), R_INF.reverse_paf, &b->olist, 2);
-        hamt_ovecinfo_workerpush(&R_INF.OVEC_INF, i, &b->olist);
+    update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 1, 1);
+    update_overlaps(&b->olist, &(R_INF.reverse_paf[i]), &b->self_read, &b->ovlp_read, 2, 0);
+    ///recover missing exact overlaps
+    update_exact_overlaps(&b->olist, &b->self_read, &b->ovlp_read);
 
-    }else{    // TODO: cleanup - don't need this hamt experimental block.
-        ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
-        update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 1, 1);
-        update_overlaps(&b->olist, &(R_INF.paf[i]), &b->self_read, &b->ovlp_read, 2, 1);
-        update_exact_overlaps(&b->olist, &b->self_read, &b->ovlp_read);
-        push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
-        push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 2);
-    }
+    ///Final_phasing(&overlap_list, &cigarline, &g_read, &overlap_read, c2n);
+    push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
+    push_final_overlaps(&(R_INF.reverse_paf[i]), R_INF.reverse_paf, &b->olist, 2);
+    hamt_ovecinfo_workerpush(&R_INF.OVEC_INF, i, &b->olist);
+
 }
 
 

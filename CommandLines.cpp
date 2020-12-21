@@ -51,7 +51,7 @@ double Get_T(void)
 
 void Print_H(hifiasm_opt_t* asm_opt)
 {
-    fprintf(stderr, "Usage: hifiasm %s (hamt prv commit: %s) \n", HA_VERSION, GIT_COMMIT);
+    fprintf(stderr, "Usage: hifiasm_meta %s (hifiasm code base %s)\n", HAMT_VERSION, HA_VERSION);
     fprintf(stderr, "Options:\n");
 	fprintf(stderr, "  Input/Output:\n");
     fprintf(stderr, "    -o STR      prefix of output files [%s]\n", asm_opt->output_file_name);
@@ -147,7 +147,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->hom_global_coverage = -1;
 
     // hamt
-    asm_opt->is_disable_read_selection = 0;
+    asm_opt->is_disable_read_selection = 1;
     asm_opt->mode_read_kmer_profile = 0;
     asm_opt->readselection_sort_order = 1;  // smallest first
     asm_opt->bin_base_name = 0;
@@ -414,7 +414,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
     asm_argcv.ha_argc = argc;
     asm_argcv.ha_argv = argv;    
 
-    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:VXB:", long_options)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:VSB:", long_options)) >= 0) {
         if (c == 'h')
         {
             Print_H(asm_opt);
@@ -428,7 +428,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         // vanilla: abcdef hi klmnopqrstuvwxyz
         // vanilla:    D F      MNOP               
         // meta   :
-        // meta   :  B                   V X
+        // meta   :  B                S  V 
 		else if (c == 'f') asm_opt->bf_shift = atoi(opt.arg);
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
         else if (c == 'o') {
@@ -460,11 +460,9 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'u') asm_opt->flag |= HA_F_BAN_POST_JOIN;
         // hamt
         else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
-        else if (c == 'X') {
-            // disable read selection completely
-            // overrides preovec or forced preovec (force meant force to ignore ovlp counts). 
+        else if (c == 'S') {
             asm_opt->is_disable_read_selection = 1; 
-            fprintf(stderr, "Read selection disabled.\n");
+            fprintf(stderr, "Read selection enabled.\n");
         }
         else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "Use bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name
         else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG DUMP: get kmer frequency profile for every read.\n");} 

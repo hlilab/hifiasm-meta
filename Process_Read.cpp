@@ -6,7 +6,7 @@
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
 #include <time.h>  // for writing misc info at the end of the bin file, ref: http://www.cplusplus.com/reference/ctime/localtime/
-#include "gitcommit.h"  // GIT_COMMIT
+// #include "gitcommit.h"  // GIT_COMMIT
 #include <assert.h>
 
 uint8_t seq_nt6_table[256] = {
@@ -275,7 +275,7 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	sprintf(str_cmd+strlen(str_cmd), "\nBin file was created on %s", asctime(timeinfo));  // note: asctime(timeinfo) has a newline. 
 
 	// also include the previous git commit id
-	sprintf(str_cmd+strlen(str_cmd), "Previous git commit hash is not later than: %s .\n", GIT_COMMIT);
+	sprintf(str_cmd+strlen(str_cmd), "Hifiasm_meta %s (hifiasm code base %s).\n", HAMT_VERSION, HA_VERSION);
 	
 	uint16_t length_of_cmd = (uint16_t)strlen(str_cmd);
 	fprintf(stderr, "wrote cmd of length %d (%s).\n", length_of_cmd, str_cmd);

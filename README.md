@@ -7,7 +7,8 @@ git clone https://github.com/xfengnefx/hifiasm-meta.git
 cd hifiasm-meta && make
 
 # Run
-hifiasm_meta -t32 -oasm reads.fq.gz 2>asm.log  // automatically decide if read selection is needed
+hifiasm_meta -t32 -oasm reads.fq.gz 2>asm.log
+hifiasm_meta -t32 -S -o asm reads.fq.gz 2>asm.log // if the dataset has high redundancy, or overlap & error correction takes way too long
 ```
 
 ## Current output files
@@ -34,7 +35,7 @@ Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm c
        		directories.
 
 # Read selection
--X		Disable read selection.
+-S		Enable read selection.
 --force-preovec Force kmer frequency-based read selection. 
                 (otherwise if total number of read overlaps 
                  look realistic, won't do selection.)

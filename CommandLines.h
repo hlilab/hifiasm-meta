@@ -4,6 +4,7 @@
 #include <pthread.h>
 
 #define HA_VERSION "0.11-r302"
+#define HAMT_VERSION "0.0-r017"
 
 // #define VERBOSE 1
 extern int VERBOSE;  // expose to cli
@@ -22,9 +23,6 @@ extern int VERBOSE;  // expose to cli
 
 #define HA_MIN_OV_DIFF       0.02 // min sequence divergence in an overlap
 
-////////////// meta ///////////////
-// #define HAMT_COVERAGE 150
-///////////////////////////////////
 
 typedef struct {
 	int flag;
@@ -83,13 +81,13 @@ typedef struct {
 
     // hamt
     int is_disable_read_selection;
-    int is_disable_phasing;  // experimental, disable reverse_paf (aka reverse_sources) by pushing everything into paf (aka sources).
     int mode_read_kmer_profile;
     int readselection_sort_order;  // experimental, 1 for smallestFirst, 2 for largestFirst, 0 to force disable it (note that we still go through loading all reads + sorting, just don't use the info when annotation mask_readnorm)
     char *bin_base_name;
     int is_ignore_ovlp_cnt;  // experimental, do preovec read selection even if the whole read set looks practical
     int preovec_coverage;
-    int is_dump_read_selection;
+    int is_dump_read_mask;
+    int is_dump_read_names;
     int is_use_exp_graph_cleaning;
     int is_dump_ovec_error_count;
 

@@ -5,6 +5,18 @@
 #include "Overlaps.h"
 #include "Process_Read.h"
 
+typedef struct {
+    char *a;
+    int n, m;
+} dbgmsg_t;
+// for debug fprintf from kthreads
+// (note: printf operates in multithreaded; might crash if race)
+void hamt_dbgmsg_init(dbgmsg_t *h);
+void hamt_dbgmsg_destroy(dbgmsg_t *h);
+void hamt_dbgmsg_reset(dbgmsg_t *h);
+void hamt_dbgmsg_append(dbgmsg_t *h, char *s, int l);
+int hamt_dbgmsg_is_empty(dbgmsg_t *h);
+
 // debug / helper
 void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name);
 void hamt_collect_utg_coverage(asg_t *sg, ma_ug_t *ug, 

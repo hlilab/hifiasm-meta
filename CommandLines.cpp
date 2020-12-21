@@ -31,7 +31,8 @@ static ko_longopt_t long_options[] = {
     // hamt debug/probing modules
     { "read-kmer-profile", ko_no_argument, 400},  // write per-read kmer frequency profiles
     { "dump-ovec-cnt", ko_no_argument, 402},  // dump per read number of corrected bases
-    { "dump-read-selection", ko_no_argument, 406},  // dump the read selection mask from bin files; only effetive with -B (hamt)
+    { "dump-read-mask", ko_no_argument, 406},  // dump the read selection mask from bin files; only effetive with -B (hamt)
+    { "dump-read-names", ko_no_argument, 407},  // dump names of the selected reads
     { "force-preovec", ko_no_argument, 408}, // ignore 1st heuristic (which could've kept all reads), do preovec read selection based on lowq given
 	
     { "lowq-10", ko_required_argument, 409}, // lower 10% quantile threshold
@@ -147,13 +148,13 @@ void init_opt(hifiasm_opt_t* asm_opt)
 
     // hamt
     asm_opt->is_disable_read_selection = 0;
-    asm_opt->is_disable_phasing = 0;
     asm_opt->mode_read_kmer_profile = 0;
     asm_opt->readselection_sort_order = 1;  // smallest first
     asm_opt->bin_base_name = 0;
     asm_opt->preovec_coverage = 150;
     asm_opt->is_ignore_ovlp_cnt = 0;
-    asm_opt->is_dump_read_selection = 0;
+    asm_opt->is_dump_read_mask = 0;
+    asm_opt->is_dump_read_names = 0;
     asm_opt->is_use_exp_graph_cleaning = 1;
     asm_opt->is_dump_ovec_error_count = 0;
     asm_opt->lowq_thre_10 = 150;
@@ -413,7 +414,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
     asm_argcv.ha_argc = argc;
     asm_argcv.ha_argv = argv;    
 
-    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:gVXB:", long_options)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:VXB:", long_options)) >= 0) {
         if (c == 'h')
         {
             Print_H(asm_opt);
@@ -425,9 +426,9 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             return 0;
         }
         // vanilla: abcdef hi klmnopqrstuvwxyz
-        // vanilla:    D F      MNOP
-        // hamt   :       g          
-        // new    :                  RS  V X
+        // vanilla:    D F      MNOP               
+        // meta   :
+        // meta   :  B                   V X
 		else if (c == 'f') asm_opt->bf_shift = atoi(opt.arg);
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
         else if (c == 'o') {
@@ -458,7 +459,6 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'e') asm_opt->flag |= HA_F_BAN_ASSEMBLY;
         else if (c == 'u') asm_opt->flag |= HA_F_BAN_POST_JOIN;
         // hamt
-        else if (c == 'g') asm_opt->is_disable_phasing = 1;
         else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
         else if (c == 'X') {
             // disable read selection completely
@@ -469,7 +469,8 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "Use bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name
         else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG DUMP: get kmer frequency profile for every read.\n");} 
         else if (c == 402) {asm_opt->is_dump_ovec_error_count = 1; fprintf(stderr, "DEBUG DUMP: get ovec error counts\n");}
-        else if (c == 406) {asm_opt->is_dump_read_selection = 1; fprintf(stderr, "DEBUG DUMP: will write read selection mask to file.\n");}
+        else if (c == 406) {asm_opt->is_dump_read_mask = 1; fprintf(stderr, "DEBUG DUMP: will write read selection mask to file.\n");}
+        else if (c == 407) {asm_opt->is_dump_read_names = 1; fprintf(stderr, "DEBUG DUMP: read names\n");}
         else if (c == 408) {
             fprintf(stderr, "NOTICE: forced pre-ovec read selection. Ignoring count of ovlp.\n");            
             asm_opt->is_ignore_ovlp_cnt = 1;

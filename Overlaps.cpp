@@ -1963,6 +1963,8 @@ ma_sub_t* coverage_cut, float shift_rate)
     //     Added conservative heuristic for the simple case, because we observed read chain breaking at
     //       spots that only supported by one read, with or without other complications,
     //       in species/strain with low coverage. 
+    int verbose =0;
+
     double startTime = Get_T();
     init_aux_table();
     long long i, rLen, /**cov,**/ n_simple_remove = 0, n_complex_remove = 0, n_complex_remove_real = 0;
@@ -2009,7 +2011,7 @@ ma_sub_t* coverage_cut, float shift_rate)
             est_cov_left = ((uint32_t)(est_cov>>32)) / (max_left.e-max_left.s);
             est_cov_right = (uint32_t)est_cov / (max_right.e-max_right.s);
             if (est_cov_left<=5 && est_cov_right<=5){
-                fprintf(stderr, "chimera: sparing read %.*s\n", (int)Get_NAME_LENGTH(R_INF, i), Get_NAME(R_INF, i));
+                if (verbose) {fprintf(stderr, "chimera: sparing read %.*s\n", (int)Get_NAME_LENGTH(R_INF, i), Get_NAME(R_INF, i));}
                 continue;
             }
 
@@ -2062,6 +2064,7 @@ ma_sub_t* coverage_cut, float shift_rate)
 
 typedef struct {
     ma_hit_t_alloc *sources;
+    ma_hit_t_alloc *reverse_sources;
     long long n_read;
     uint64_t *readLen;
     ma_sub_t *coverage_cut;
@@ -2069,14 +2072,33 @@ typedef struct {
 }hitcontain_aux_t;
 
 static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callback for kt_for()
-    // NOTE
+    // NOTE / might have bugs
     //    Prevent cases from being identified as containment too aggressively will result
-    //     in a falsely complex read graph. This, however, may or may not affect the final 
-    //     contig graph. Evidently, r10+ mostly improved over previous iterations, only worse 
-    //     in terms of having introduced two or three contaminated contigs (checkM in fecal/sheep).
-    //    
+    //     in unexpected results. However, need more test set to further improve.
+    //    Current solution is to 
+    //      1) restrict treatments to reads seemingly from low coeverge regions, 
+    //         where it's more likely to see "broken haplotypes" - if we phase it truthfully,
+    //         the region ends up fragmented; but if we allow chimera, it can be represented by fewer
+    //         contigs or even a single contig. For meta this is preferred, for others, maybe no so much.
+    //      2) arbitrarily set thresholds on ovec error counts. The impirical error count distributions
+    //         is a light tailed curve, most reads had <50 bases corrected.
+    // NOTE about containment
+    //    The case
+    /*
+      read1  ============================
+      read2      ============--
+    */
+   //      ...isn't considered as containment since the right side of read2 doesn't match read1.
+    int verbose = 0;  // debug
+    dbgmsg_t msg;
+    char tmp_msg[500];
+    if (verbose){
+        hamt_dbgmsg_init(&msg);
+    }
+
     hitcontain_aux_t *d = (hitcontain_aux_t*)data;
     ma_hit_t_alloc *sources = d->sources;
+    ma_hit_t_alloc *reverse_sources = d->reverse_sources;
     long long n_read = d->n_read;
     uint64_t *readLen = d->readLen;
     ma_sub_t *coverage_cut = d->coverage_cut;
@@ -2095,6 +2117,10 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
     uint32_t tn_flank;
     int readtype;
 
+    int tmp_n = 0, bp_uncovered = 0;
+    uint32_t prev_end, prev_start, tmp_start, tmp_end;
+
+
     // for interval merge
     kvec_t(uint64_t) spans;
     kv_init(spans);
@@ -2103,23 +2129,39 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
     buf.n = 0;  // TODO: buffer reset, but this is ugly
     IDs_contained.n = 0;  // TODO: buffer reset, but this is ugly
 
-    if (R_INF.mask_readnorm[i_r] & 1){return;}
+    if (R_INF.mask_readnorm[i_r] & 1){goto finish;}
 
     // topo check
     // readtype = hamt_ovlp_is_end_read(sources, i_r, readLen, 500);  // dont do
     // if (hamt_ovlp_is_contained_read2(sources, i_r, readLen)){continue;}  // dont do
     nb_reads_contained = hamt_ovlp_contains_howmany_reads(sources, i_r, readLen);
-    if (nb_reads_contained==0){return;}
+    if (nb_reads_contained==0){goto finish;}
     // if (verbose){fprintf(stderr, "[debug::%s] at read %.*s \n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));}
     // if (verbose){fprintf(stderr, "[debug::%s]     topo passed\n", __func__);}
+
+    // "coverage" check: do nothing if the region seems well covered (TODO: less arbitrary criteria if more examples found)
+    if ((sources[i_r].length/*+reverse_sources[i_r].length*/)>50){
+        goto finish;
+    }else{
+        // (expecting most overalps to be symmetric, not checking from the other direction here)
+        ;
+    }
 
     // check number of bases corrected for reads contained by the queryread
     // NOTE: using very crude criteria for now (Dec 2 2020)
     flag_passed = flag_total = 0;
     current_error_count = hamt_count_error(i_r);
     current_error_rate = (float)100*current_error_count/readLen[i_r];
-    if (current_error_count<50 || current_error_rate<0.05){return;}
-    // if (verbose) {fprintf(stderr, "[debug::%s]    current error count is %d, percentage rate %f\n", __func__, (int)current_error_count, current_error_rate);}
+    if (current_error_count<50 || current_error_rate<0.05){goto finish;}
+    if (verbose) {
+        sprintf(tmp_msg, "[debug::%s] at read %.*s, homo targets %d\n", 
+                            __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r),
+                            (int)sources[i_r].length);
+        hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+        sprintf(tmp_msg, "[debug::%s]    current error count is %d, percentage rate %.2f\n", 
+                                __func__, (int)current_error_count, current_error_rate);
+        hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+    }
     for (int i=0; i<sources[i_r].length; i++){
         h = &sources[i_r].buffer[i];
         if (h->del) {continue;}
@@ -2130,7 +2172,11 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
             tmp_error_count = hamt_count_error(h->tn);
             tmp_error_rate = (float)100*tmp_error_count/readLen[h->tn];
             if (current_error_rate<tmp_error_rate*2){
-                // if (verbose) {fprintf(stderr, "    failed ec check: target %.*s, cnt %d\n", (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn), tmp_error_count);}
+                if (verbose) {
+                    sprintf(tmp_msg, "[debug::%s]    failed an ec check: target %.*s, cnt %d\n", __func__,
+                                        (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn), tmp_error_count);
+                    hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+                }
                 flag_passed++;  // query read isn't too erroneous
             }
             flag_total++;
@@ -2151,20 +2197,27 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
 
 
     if ((float)flag_passed/flag_total > 0.5){
-        // if (verbose) {fprintf(stderr, "query ok won't cut, passed %d, total %d\n", flag_passed, flag_total);}
-        return;
+        if (verbose) {
+            sprintf(tmp_msg, "[debug::%s] query ok won't cut, passed %d, total %d\n", __func__, flag_passed, flag_total);
+            hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+        }
+        goto finish;
     }
-    // if (verbose) {fprintf(stderr, "[debug::%s]    query read erroneous, consider cutting\n", __func__);}
+    if (verbose) {
+        sprintf(tmp_msg, "[debug::%s] query read erroneous, consider cutting\n", __func__);
+        hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+    }
 
     // check if the current read could be fully covered by its contained reads and outgoing targets
     // TODO: oneshot, but a wrapper would look nicer
     radix_sort_hamtu64(spans.a, spans.a+spans.n);
     if (spans.n==0){
-        fprintf(stderr, "[E::%s] span buffer is empty, this shouldn't happen\n", __func__);
-        return;
+        sprintf(tmp_msg, "[E::%s] span buffer is empty, this shouldn't happen\n", __func__);
+        hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+        goto finish;
     }
-    int tmp_n = 0, bp_uncovered = 0;
-    uint32_t prev_end=(uint32_t)spans.a[0], prev_start=(uint32_t)(spans.a[0]>>32), tmp_start, tmp_end;
+    
+    prev_end=(uint32_t)spans.a[0], prev_start=(uint32_t)(spans.a[0]>>32);
     if (spans.n==1){
         tmp_n = 1;
     }else{
@@ -2187,26 +2240,37 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
         tmp_n++;
     }
     if (bp_uncovered>500 || spans.n>=3){
-        // if (verbose) {fprintf(stderr, "[debug::%s]     query erroneous but itself ill covered,don't cut\n", __func__);}
-        return;
+        if (verbose) {
+            sprintf(tmp_msg, "[debug::%s]     query erroneous but itself ill covered,don't cut\n", __func__);
+            hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+        }
+        goto finish;
     }
     
     // if we reach here, it's safe to favore the contained reads over the current longer read
     delete_all_edges(sources, coverage_cut, (uint32_t)i_r);
-    // if (verbose){
-    //     fprintf(stderr, "[debug::%s] ditched read %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
-    //     fprintf(stderr, "[debug::%s]     (there were %d contained reads)\n", __func__, (int)IDs_contained.n);
-    // }
+    if (verbose){
+        sprintf(tmp_msg, "[debug::%s] ditched read %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
+        hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+        sprintf(tmp_msg, "[debug::%s]     (there were %d contained reads)\n", __func__, (int)IDs_contained.n);
+        hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
+    }
     d->counter++;
 
+finish:
     kv_destroy(buf);
     kv_destroy(IDs_contained);
     kv_destroy(spans);
-
+    if (verbose){
+        if (!hamt_dbgmsg_is_empty(&msg)){
+            fprintf(stderr, "%s", msg.a);
+        }
+        hamt_dbgmsg_destroy(&msg);
+    }
 }
 
 
-void hamt_hit_contained_multi(ma_hit_t_alloc* sources, long long n_read, uint64_t *readLen,
+void hamt_hit_contained_multi(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, long long n_read, uint64_t *readLen,
                         ma_sub_t *coverage_cut)
 {
 // multithread ver of hamt_hit_contained
@@ -2214,6 +2278,7 @@ void hamt_hit_contained_multi(ma_hit_t_alloc* sources, long long n_read, uint64_
 
     hitcontain_aux_t aux;
     aux.sources = sources;
+    aux.sources = reverse_sources;
     aux.n_read = n_read;
     aux.readLen = readLen;
     aux.coverage_cut = coverage_cut;
@@ -10223,7 +10288,7 @@ void ma_sg_print(const asg_t *g, const All_reads *RNF, const ma_sub_t *sub, FILE
 			const ma_sub_t *sq = &sub[p->ul>>33], *st = &sub[p->v>>1];
 
             fprintf(fp, 
-            "L\t%.*s:%d-%d\t%c\t%.*s:%d-%d\t%c\t%d:\tL1:i:%u\n", 
+            "L\t%.*s:%d-%d\t%c\t%.*s:%d-%d\t%c\t%dM\tL1:i:%u\n",   // note: `M` is `:`, changed only for bandage compat
             (int)Get_NAME_LENGTH((*RNF), p->ul>>33), 
             Get_NAME((*RNF), p->ul>>33),
             sq->s + 1, sq->e, "+-"[p->ul>>32&1],
@@ -10235,7 +10300,7 @@ void ma_sg_print(const asg_t *g, const All_reads *RNF, const ma_sub_t *sub, FILE
 		} 
         else 
         {
-           fprintf(fp, "L\t%.*s\t%c\t%.*s\t%c\t%d:\tL1:i:%u\n", 
+           fprintf(fp, "L\t%.*s\t%c\t%.*s\t%c\t%dM\tL1:i:%u\n",    // note: `M` is `:`, changed only for bandage compat
             (int)Get_NAME_LENGTH((*RNF), p->ul>>33), 
             Get_NAME((*RNF), p->ul>>33),
             "+-"[p->ul>>32&1],
@@ -27393,32 +27458,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     ///fix_binned_reads(sources, n_read, coverage_cut);
     ///just need to deal with trio here
-    hamt_hit_contained_multi(sources, n_read, readLen, coverage_cut);
+    hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
     ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // TODO: faster?
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
 
     sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
     asg_arc_del_trans(sg, gap_fuzz);
-
-    ////////// experimental
-    // ma_ug_t *ug_rescue;
-    // ug_rescue = ma_ug_gen(sg);
-    // hamt_ughit_rescueLowCovHapGap(sg, ug_rescue, sources, reverse_sources, coverage_cut, n_read, readLen, 10);
-    // ma_ug_destroy(ug_rescue);
-    // renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
-    // normalize_ma_hit_t_single_side_advance(sources, n_read);  // ?????? this is pretty slow
-    // normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
-    // clean_weak_ma_hit_t(sources, reverse_sources, n_read);
-    // ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-    // detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
-    // ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-    // ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
-    // hamt_hit_contained_multi(sources, n_read, readLen, coverage_cut);
-    // ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // ?????? this is pretty slow
-    // sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
-    // asg_arc_del_trans(sg, gap_fuzz);
-    /////////////////////////////////////////
 
 
     asm_opt.coverage = get_coverage(sources, coverage_cut, n_read);

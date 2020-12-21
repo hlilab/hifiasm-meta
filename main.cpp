@@ -19,8 +19,12 @@ int main(int argc, char *argv[])
 		hamt_read_kmer_profile(&asm_opt, &R_INF);
 		return 0;
 	}
-	else if (asm_opt.is_dump_read_selection){
+	else if (asm_opt.is_dump_read_mask){
 		hamt_dump_read_selection_mask(&asm_opt, &R_INF);
+		return 0;
+	}
+	else if (asm_opt.is_dump_read_names){
+		hamt_dump_selected_read_names(&asm_opt, &R_INF);
 		return 0;
 	}
 	else if (asm_opt.is_dump_ovec_error_count){
@@ -32,7 +36,8 @@ int main(int argc, char *argv[])
 	// main
 	ret = ha_assemble();
     destory_opt(&asm_opt);
-	fprintf(stderr, "[M::%s] Version: %s\n", __func__, HA_VERSION);
+	fprintf(stderr, "[M::%s] Hifiasm code base version: %s\n", __func__, HA_VERSION);
+	fprintf(stderr, "[M::%s] Hifiasm_meta version: %s\n", __func__, HAMT_VERSION);
 	fprintf(stderr, "[M::%s] CMD:", __func__);
 	for (i = 0; i < argc; ++i)
 		fprintf(stderr, " %s", argv[i]);

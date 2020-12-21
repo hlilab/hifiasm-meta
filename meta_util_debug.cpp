@@ -63,6 +63,21 @@ void hamt_dump_read_selection_mask(hifiasm_opt_t *asm_opt, All_reads *rs){
     destory_All_reads(rs);
 
 }
+void hamt_dump_selected_read_names(hifiasm_opt_t *asm_opt, All_reads *rs){
+    char *base_name = (char*)malloc(strlen(asm_opt->bin_base_name)+25);
+    sprintf(base_name, "%s.readlist", asm_opt->bin_base_name);
+    FILE *fp = fopen(base_name, "w");
+    int tot = 0;
+    for (uint64_t i=0; i<rs->total_reads; i++){
+        if (rs->mask_readnorm[i]&1){continue;}
+        fprintf(fp, "%.*s\n", (int)Get_NAME_LENGTH((*rs), i), Get_NAME((*rs), i));
+        tot++;
+    }
+    fprintf(stderr, "[M::%s] wrote %d / %d read names\n", __func__, tot, (int)rs->total_reads);
+    fclose(fp);
+    free(base_name);
+
+}
 
 
 void hamt_dump_ovec_read_error_count_and_kmerinfo(hifiasm_opt_t *asm_opt, All_reads *rs){

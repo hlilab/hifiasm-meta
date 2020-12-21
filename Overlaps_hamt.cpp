@@ -20,6 +20,34 @@ KRADIX_SORT_INIT(ovhamt32, uint32_t, uint32_t, 4)
 //////////////////////////////////////////////////////////////////////
 //                        debug functions                           //
 //////////////////////////////////////////////////////////////////////
+// for debug fprintf from kthreads
+// (note: printf operates in multithreaded; might crash if race)
+void hamt_dbgmsg_init(dbgmsg_t *h){
+    h->n = 0;
+    h->m = 128;
+    h->a = (char*)malloc(h->m * 1);
+    assert(h->a);
+}
+void hamt_dbgmsg_destroy(dbgmsg_t *h){
+    free(h->a);
+}
+void hamt_dbgmsg_reset(dbgmsg_t *h){
+    h->n = 0;
+}
+void hamt_dbgmsg_append(dbgmsg_t *h, char *s, int l){
+    while (h->n+l>=h->m){
+        h->m = h->m + (h->m>>1);
+        h->a = (char*)realloc(h->a, h->m);
+        assert(h->a);
+    }
+    sprintf(h->a+h->n, "%s", s);
+    h->n += l;
+}
+int hamt_dbgmsg_is_empty(dbgmsg_t *h){
+    if (h->n==0){return 1;}
+    return 0;
+}
+
 void write_debug_auxsg(asg_t *sg, char *file_base_name){
     char* index_name = (char*)malloc(strlen(file_base_name)+15);
     sprintf(index_name, "%s.auxsg.gfa", file_base_name);

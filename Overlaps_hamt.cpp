@@ -6616,14 +6616,15 @@ int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug
         Essentially, this fucntion means that since we expect wu to be very short,
           if a walk is a "good" or "normal" one, vu is very likely to have some acceptable overlap(s)
           directly with uu. If wu1 and wu2 doesn't appear to be a pair of haplotig, then we want to check
-          this. And then if one of them fulfills this expectation but not the other, we want to ditch the later.
-        Generalization from hamt_ug_resolve_fake_haplotype_bifurcation,
+          this. And then if one of them fulfills this expectation but not the other, we may want to ditch the later.
+        Generalized from hamt_ug_resolve_fake_haplotype_bifurcation, this is a more dangerous version.
+          If more data suggests against it, this should be taken off. (potential bug / TODO)
     */
     int verbose = 1;
     int nb_treated = 0;
 
     asg_t *auxsg = ug->g;
-    uint32_t wu[2], uu[2], nv, u[2], v;
+    uint32_t wu[2], uu[2], nv, u1, u2, v;
     asg_arc_t *av;
     ma_hit_t *h, *h_rev;
     int stat[2];
@@ -6643,10 +6644,7 @@ int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug
         // check and get uu
         hamt_asgarc_util_get_the_one_target(auxsg, wu[0], &uu[0], 0, 0, base_label);
         hamt_asgarc_util_get_the_one_target(auxsg, wu[1], &uu[1], 0, 0, base_label);
-        if (uu[0]!=(uu[1]^1)){
-            if (verbose) {fprintf(stderr, "[debug::%s]     uu didn't pass\n", __func__);}
-            continue;
-        }  // note: it's ok for uu to have backward branching, so not checking that.
+        if ((uu[0]>>1)==(uu[1]>>1)){continue;}  // handle these with other routines
 
         // check overlap status
         if (hamt_check_diploid(ug, wu[0], wu[1], 0.3, reverse_sources)<=0 && 
@@ -6654,19 +6652,22 @@ int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug
             // ^i.e. wu1 and wu2 are not reliable haplotigs, but they also have a decent amount of not-that-good overlaps
             // check: vu vs uu
             if (uu[0]&1){
-                u[0] = ug->u.a[uu[0]>>1].end;
-                u[1] = ug->u.a[uu[0]>>1].start;
+                u1 = ug->u.a[uu[0]>>1].end;
             }else{
-                u[0] = ug->u.a[uu[0]>>1].start;
-                u[1] = ug->u.a[uu[0]>>1].end;
+                u1 = ug->u.a[uu[0]>>1].start;
+            }
+            if (uu[1]&1){
+                u2 = ug->u.a[uu[1]>>1].end;
+            }else{
+                u2 = ug->u.a[uu[1]>>1].start;
             }
             if (vu&1){
                 v = ug->u.a[vu>>1].start^1;
             }else{
                 v = ug->u.a[vu>>1].end^1;
             }
-            stat[0] = does_ovlp_ever_exist(sources, v, u[0], &h, &h_rev);
-            stat[1] = does_ovlp_ever_exist(sources, v, u[1], &h, &h_rev);
+            stat[0] = does_ovlp_ever_exist(sources, v, u1, &h, &h_rev);
+            stat[1] = does_ovlp_ever_exist(sources, v, u2, &h, &h_rev);
             if (stat[0] && stat[1]){  // if two looked both good, do nothing
                 if (verbose) {fprintf(stderr, "[debug::%s]     vu overlaps with both ends of uu\n", __func__);}
                 continue;

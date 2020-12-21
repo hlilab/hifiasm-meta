@@ -27797,6 +27797,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_resolve_fake_haplotype_bifurcation(sg, hamt_ug, 0, sources, reverse_sources);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF2", 0);
+            hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(sg, hamt_ug, 0, sources, reverse_sources);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
             // hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
             hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);
             hamt_ug_destroy(hamt_ug);

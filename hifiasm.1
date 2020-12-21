@@ -111,6 +111,11 @@ assembly.
 .BI -r \ INT
 Rounds of haplotype-aware error corrections [3]. This option affects all outputs of hifiasm.
 
+.TP
+.BI --min-hist-cnt \ INT
+When analyzing the k-mer spectrum, ignore counts below
+.IR INT .
+
 .SS Assembly options
 
 .TP
@@ -198,7 +203,14 @@ Min and max coverage cutoff of primary contigs.
 Keep contigs with coverage in this range at p_ctg.gfa. 
 Inferred automatically in default.
 If INT2 is not specified, it is set to infinity. 
-Set -1 to disable 
+Set -1 to disable.
+
+.TP
+.BI --lowQ \ INT
+Output contig regions with >=INT% inconsistency to the bed file 
+with suffix
+.B lowQ.bed
+[70]. Set 0 to disable. 
 
 .SS Trio-partition options
 

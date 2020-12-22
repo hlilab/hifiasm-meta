@@ -262,7 +262,6 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	fwrite(&(asm_opt.het_cov), sizeof(asm_opt.het_cov), 1, fp);
 
 	//  hamt modification - include misc info at the end of bin files
-	//  TODO: paranoia checksums
 	char* str_cmd = (char*)malloc(1000*sizeof(char));
 	sprintf(str_cmd, "version=%s, ", HA_VERSION);
 	sprintf(str_cmd+strlen(str_cmd), "CMD=");

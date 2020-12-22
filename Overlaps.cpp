@@ -1233,7 +1233,7 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
             there are two cases: 
                 1. old_dp = dp + 1 (b.a[j] is qe); 2. old_dp = dp - 1 (b.a[j] is qs);
             if one read has multiple separate sub-regions with coverage >= min_dp, 
-            does miniasm only select the longest one?  // i think yes??????
+            does miniasm only select the longest one?  // yes
             **/
             if (old_dp < min_dp && dp >= min_dp) ///old_dp < dp, b.a[j] is qs
             { 
@@ -1697,7 +1697,7 @@ void print_overlaps(ma_hit_t_alloc* paf, long long rLen, long long interval_s, l
     {
         if(Get_qs(paf->buffer[j]) == 0)
         {
-            fprintf(stderr, "?????? interval_s: %lld, interval_e: %lld, qn: %u, tn: %u, j: %lld, qs: %u, qe: %u, ts: %u, te: %u, dir: %u\n",
+            fprintf(stderr, "shouldn't happen; interval_s: %lld, interval_e: %lld, qn: %u, tn: %u, j: %lld, qs: %u, qe: %u, ts: %u, te: %u, dir: %u\n",
             interval_s, interval_e,
             Get_qn(paf->buffer[j]), Get_tn(paf->buffer[j]),
             j, Get_qs(paf->buffer[j]), Get_qe(paf->buffer[j]),
@@ -1714,7 +1714,7 @@ void print_overlaps(ma_hit_t_alloc* paf, long long rLen, long long interval_s, l
     {
         if(Get_qe(paf->buffer[j]) == rLen)
         {
-            fprintf(stderr, "?????? interval_s: %lld, interval_e: %lld, qn: %u, tn: %u, j: %lld, qs: %u, qe: %u, ts: %u, te: %u, dir: %u\n",
+            fprintf(stderr, "shouldn't happen interval_s: %lld, interval_e: %lld, qn: %u, tn: %u, j: %lld, qs: %u, qe: %u, ts: %u, te: %u, dir: %u\n",
             interval_s, interval_e,
             Get_qn(paf->buffer[j]), Get_tn(paf->buffer[j]),
             j, Get_qs(paf->buffer[j]), Get_qe(paf->buffer[j]),
@@ -1732,7 +1732,7 @@ void print_overlaps(ma_hit_t_alloc* paf, long long rLen, long long interval_s, l
     {
         if(Get_qs(paf->buffer[j]) != 0 && Get_qe(paf->buffer[j]) != rLen)
         {
-            fprintf(stderr, "?????? interval_s: %lld, interval_e: %lld, qn: %u, tn: %u, j: %lld, qs: %u, qe: %u, ts: %u, te: %u, dir: %u\n",
+            fprintf(stderr, "shouldn't happen interval_s: %lld, interval_e: %lld, qn: %u, tn: %u, j: %lld, qs: %u, qe: %u, ts: %u, te: %u, dir: %u\n",
             interval_s, interval_e,
             Get_qn(paf->buffer[j]), Get_tn(paf->buffer[j]),
             j, Get_qs(paf->buffer[j]), Get_qe(paf->buffer[j]),
@@ -2622,7 +2622,7 @@ int asg_extend(const asg_t *g, uint32_t v, int max_ext, asg64_v *a)
 
 
 static inline int asg_is_single_edge(const asg_t *g, uint32_t v, uint32_t start_node)
-{// ?????? function name does not describe what it'd do?
+{// hamt note: function name does not describe what it'd do?
  //        (count parent nodes (regardless of deletion state))
  //        (then why not use asg_arc_n(g, v^1) directly???)
 
@@ -2637,7 +2637,7 @@ static inline int asg_is_single_edge(const asg_t *g, uint32_t v, uint32_t start_
         ///if (!av[i].del)
         {
             ++nv;
-            if(av[i].v>>1 == start_node)  // i think this is always true unless graph is broken??????
+            if(av[i].v>>1 == start_node)  // (hamt note)i think this is always true unless graph is broken?
             {
                 flag = 1;
             }
@@ -2817,7 +2817,7 @@ static uint64_t asg_bub_finder_with_del_advance(asg_t *g, uint32_t v0, int max_d
 				t->r = count_out_with_del(g, w^1);
 				++n_pending;
 			} else { // visited before
-				///c seems the max weight of node // seems??????
+				///c seems the max weight of node
                 // my note: swap parent node & update numbers if the current path is longer than the record
 				if (c + 1 > t->c || (c + 1 == t->c && d + l > t->d)) t->p = v;
 				if (c + 1 > t->c) t->c = c + 1;
@@ -3469,7 +3469,7 @@ uint32_t startNode, uint32_t endNode, int max_dist, buf_t* bub)
         {
             continue;
         }
-        if(av[0].v == av[1].v)  // double-edge??????
+        if(av[0].v == av[1].v)
         {
             continue;
         }
@@ -3502,7 +3502,7 @@ uint32_t startNode, uint32_t endNode, int max_dist, buf_t* bub)
             NodeLen_second[asg_is_single_edge(g, aw[0].v, w>>1)] = 0;
             NodeLen_second[asg_is_single_edge(g, aw[1].v, w>>1)] = 1;
         }
-        // require that one node has one out-edge, another node has two out-edges  // my note: it's in-edge??????
+        // require that one node has one out-edge, another node has two out-edges
         if(NodeLen_second[1] == -1 || NodeLen_second[2] == -1)
         {
             continue;
@@ -4346,8 +4346,7 @@ int asg_arc_identify_simple_bubbles_multi(asg_t *g, int check_cross)
 int check_small_bubble(asg_t *g, uint32_t begNode, uint32_t v, uint32_t w, 
 long long* vLen, long long* wLen, uint32_t* endNode)
 {
-    // my note: having small tips will cause the bubble to be not recognized??????
-    //          since we're requiring strict edge counts for v/w and their child node (in both directions)
+    // my note: does not tolerate tips
     uint32_t nv = asg_arc_n(g, v);
     uint32_t nw = asg_arc_n(g, w);
 
@@ -8901,10 +8900,10 @@ int asg_arc_del_false_node(asg_t *g, ma_hit_t_alloc* sources, int max_ext)
 
         ///to see which one is the current edge (from v and w)
 		for (iv = 0; iv < nv; ++iv)
-			if (av[iv].v == (w^1)) break;  // loop??????
+			if (av[iv].v == (w^1)) break;
 		for (iw = 0; iw < nw; ++iw)
 			if (aw[iw].v == (v^1)) break;
-        ///if one edge has been deleted, it should be deleted in both direction  // ?????? the following line doesn't enforce this though...
+        ///if one edge has been deleted, it should be deleted in both direction
         if (av[iv].del && aw[iw].del) continue;
 
         
@@ -8942,7 +8941,123 @@ int asg_arc_del_false_node(asg_t *g, ma_hit_t_alloc* sources, int max_ext)
     }
 	return n_cut;
 }
+int asg_arc_del_false_node_meta(asg_t *g, int max_ext)
+{
+    double startTime = Get_T();
+    kvec_t(uint64_t) b;
+    memset(&b, 0, sizeof(b));
+    ma_sub_t max_left, max_right;
 
+	uint32_t v, n_vtx = g->n_seq * 2;
+    long long n_cut = 0;
+    
+    for (v = 0; v < n_vtx; ++v) 
+    {
+        if(g->seq_vis[v] == 0)
+        {
+            if(asg_arc_n(g, v)!=1 || asg_arc_n(g, v^1)!=1)  // require node to be in a single path
+            {
+                continue;
+            }
+
+            if(asg_is_single_edge(g, asg_arc_a(g, v)[0].v, v>>1) < 2)
+            {
+                continue;
+            }
+
+            if(asg_is_single_edge(g, asg_arc_a(g, v^1)[0].v, (v^1)>>1) < 2)
+            {
+                continue;
+            }
+
+            if(asg_arc_a(g, v)[0].el == 1)
+            {
+                continue;
+            }
+
+            // if(if_potential_false_node(&(sources[v>>1]), g->seq[v>>1].len, &max_left, &max_right, 1)==0)
+            // {
+            //     continue;
+            // }
+
+            asg_arc_t *av = asg_arc_a(g, v);
+            kv_push(uint64_t, b, (uint64_t)((uint64_t)av[0].ol << 32 | (av - g->arc)));
+        }
+	}
+
+    // each entry is: upper 32 bits overlap length, lower 32 bits which "group" does the target belong to
+    radix_sort_arch64(b.a, b.a + b.n);
+
+    uint64_t k;
+    ///here all edges are inexact matches 
+    for (k = 0; k < b.n; k++)
+    {
+        
+        asg_arc_t *a = &g->arc[(uint32_t)b.a[k]];
+		///v is self id, w is the id of another end
+		uint32_t i, iv, iw, v = (a->ul)>>32, w = a->v^1;
+		uint32_t nv = asg_arc_n(g, v), nw = asg_arc_n(g, w), kv, kw;
+		asg_arc_t *av, *aw;
+        av = asg_arc_a(g, v);
+		aw = asg_arc_a(g, w);
+
+
+        ///calculate the longest edge for v and w  // ? this block is effectively calling get_real_length...
+		for (i = 0, kv = 0; i < nv; ++i) {
+			if (av[i].del) continue;
+			++kv;
+		}
+
+		for (i = 0, kw = 0; i < nw; ++i) {
+			if (aw[i].del) continue;
+			++kw;
+		}
+
+		if (kv < 1 || kw < 2) continue;
+
+        ///to see which one is the current edge (from v and w)
+		for (iv = 0; iv < nv; ++iv)
+			if (av[iv].v == (w^1)) break;
+		for (iw = 0; iw < nw; ++iw)
+			if (aw[iw].v == (v^1)) break;
+        ///if one edge has been deleted, it should be deleted in both direction
+        if (av[iv].del && aw[iw].del) continue;
+
+        
+
+        uint32_t el_edges = 0;
+        ///there should be at least two available edges in aw
+        for (i = 0; i < nw; i++)
+        {
+            if (aw[i].del) continue;
+
+            if(i != iw && aw[i].el == 1)
+            {
+                el_edges++;
+            }
+        }
+
+        if(el_edges > 0 && av[iv].el == 0)
+        {
+            asg_seq_del(g, v>>1);
+            ++n_cut;
+        }
+    }
+    
+    free(b.a);
+	if (n_cut) 
+    {
+		asg_cleanup(g);
+		asg_symm(g);
+	}
+
+    if(VERBOSE >= 1)
+    {
+        fprintf(stderr, "[M::%s] removed %lld single nodes\n", __func__, n_cut);
+        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+    }
+	return n_cut;
+}
 
 // #define arc_cnt(g, v) ((uint32_t)(g)->idx[(v)])
 // #define arc_first(g, v) ((g)->arc[(g)->idx[(v)]>>32])
@@ -23441,7 +23556,7 @@ kvec_asg_arc_t_warp* new_rtg_edges)
     {
         if(nsg->seq[v].del) continue;
         nsg->seq[v].c = PRIMARY_LABLE;
-        EvaluateLen((*ug)->u, v) = (*ug)->u.a[v].n; // ??????
+        EvaluateLen((*ug)->u, v) = (*ug)->u.a[v].n;
     }
 
     // bubble, tip and triangle treatments
@@ -27845,7 +27960,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             asg_arc_identify_simple_bubbles_multi(sg, 1);
             //reomve edge between two chromesomes
             //this node must be a single read
-            asg_arc_del_false_node(sg, sources, asm_opt.max_short_tip);
+            asg_arc_del_false_node_meta(sg, asm_opt.max_short_tip);
             asg_cut_tip(sg, asm_opt.max_short_tip);
             /****************************may have bugs********************************/
             /****************************may have bugs********************************/
@@ -28070,6 +28185,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 
                 nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug, 0, 1, 0);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips(sg, hamt_ug, 5, 0);
+                nb_complex_bubble_cut += hamt_ug_drop_midsizeTips_aggressive(sg, hamt_ug, 0.7, 0);
                 nb_complex_bubble_cut += hamt_ug_resolve_oneMultiLeafSoapBubble(sg, hamt_ug, 0, 1, 0);
                 nb_complex_bubble_cut += hamt_ug_resolve_small_multileaf_with_covcut(sg, hamt_ug, 75000, 2, 0);
                 nb_complex_bubble_cut += hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
@@ -28121,9 +28237,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_resolve_fake_haplotype_bifurcation(sg, hamt_ug, 0, sources, reverse_sources);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF2", 0);
-            hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(sg, hamt_ug, 0, sources, reverse_sources);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF2", 0);
+            // hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(sg, hamt_ug, 0, sources, reverse_sources);
+            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
             hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);

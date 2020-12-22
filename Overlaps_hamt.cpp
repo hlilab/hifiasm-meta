@@ -1405,8 +1405,8 @@ int hamt_asgarc_util_checkSimpleBubble(asg_t *g, uint32_t v0, uint32_t *dest, in
         if (verbose){fprintf(stderr, "[checkBubble] w-suc\n");}
         return 0;
     }
-    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[0], &u1, 0, 0, base_label)==-1){fprintf(stderr, "[%s] ??????", __func__);return 0;}
-    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[1], &u2, 0, 0, base_label)==-1){fprintf(stderr, "[%s] ??????", __func__);return 0;}
+    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[0], &u1, 0, 0, base_label)==-1){fprintf(stderr, "[%s] shouldn't happen\n" __func__);return 0;}
+    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[1], &u2, 0, 0, base_label)==-1){fprintf(stderr, "[%s] shouldn't happen\n" __func__);return 0;}
     if (u1!=u2){  // and it's the same vertex
         if (verbose){fprintf(stderr, "[checkBubble] u\n");}
         return 0;
@@ -1910,6 +1910,11 @@ finish:
 
 int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0, 
                                         int base_label){
+    // TODO
+    //     This was written before implementing complex bubble popping.
+    //     If we don't care about recovering the bubble edge (doing this; 
+    //       if recovered it's still chimeric haplotype anyway),
+    //       this function can be safely removed. 
     // FUNC
     //    pops the following structure 
     //    (this can be chained indefinitely long, as long as it fall into a v6-like sink eventually, or ends up in tips):
@@ -1953,7 +1958,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
         n_suc = hamt_asgarc_util_countSuc(auxsg, av[i].v, 0, 0, base_label);
         if (n_suc>2 || n_suc==0){return 0;}
         // the vertex has either 1 or 2 targets
-        if (av[i].v==v0){return 0;}  // paranoia
+        if (av[i].v==v0){return 0;}  // prevent circling back to the handle
         w1[n_suc-1] = av[i].v;
         color[n_suc-1] = 1;
         idx++;
@@ -2001,7 +2006,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
             fprintf(stderr, "error1 %s\n", __func__);
             exit(1);
         }
-        if (w_tmp==v0){return nb_cut;}  // paranoia
+        if (w_tmp==v0){return nb_cut;}  // prevent circling back to handle
         if (hamt_asgarc_util_countPre(auxsg, w_tmp, 0, 0, base_label)!=2){
             return nb_cut;
         }
@@ -2021,7 +2026,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
             n_suc = hamt_asgarc_util_countSuc(auxsg, av[i].v, 0, 0, base_label);
             n_pre = hamt_asgarc_util_countPre(auxsg, av[i].v, 0, 0, base_label);
             if (n_suc>2){return nb_cut;}
-            if (w_tmp==v0){return nb_cut;}  // paranoia
+            if (w_tmp==v0){return nb_cut;}  // prevent circling back to handle
 
             w2[n_pre-1] = av[i].v;
             color[n_pre-1] = 1;
@@ -5139,7 +5144,7 @@ int hamt_ug_drop_midsizeTips(asg_t *sg, ma_ug_t *ug, int fold, int base_label){
               /
     --------wu----uu--------
         where either wu or uu is significantly longer than vu.
-        Will cut the vu->wu arc. Won't send vu to the alternative collection.
+        Will cut the vu->wu arc. Will send vu to the alternative collection.
     */
     asg_t *auxsg = ug->g;
     uint32_t wu, uu, nv;
@@ -5179,7 +5184,73 @@ int hamt_ug_drop_midsizeTips(asg_t *sg, ma_ug_t *ug, int fold, int base_label){
         if (ug->u.a[wu>>1].len>(ug->u.a[vu>>1].len*r) || ug->u.a[uu>>1].len>(ug->u.a[vu>>1].len*r)){
             // cut
             hamt_ug_arc_del(sg, ug, vu, wu, 1);
-            hamt_ug_arc_del(sg, ug, wu^1, uu, 1);
+            hamt_ug_utg_softdel(sg, ug, vu, base_label^1);
+            nb_cut++;
+        }
+    }
+    if (nb_cut){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] dropped %d mid length tips.\n", __func__, nb_cut);
+    }
+    return nb_cut;
+}
+int hamt_ug_drop_midsizeTips_aggressive(asg_t *sg, ma_ug_t *ug, float fold, int base_label){
+    // FUNC
+    //     treat the follow tip
+    /*
+               vu
+              /
+    --------wu----uu--------
+        difference: 
+            - vu is strictly a simple tig; wu and uu can have other connections
+            - drop vu if vu is shorter than wu and uu
+    */
+    asg_t *auxsg = ug->g;
+    uint32_t wu, uu, nv;
+    asg_arc_t *av;
+    int nb_cut = 0;
+    float r = fold<0? 0.5 : fold;
+    int length_check_passed = 0;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        length_check_passed = 0;
+        // tip topo
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=1){continue;}
+
+        // wu
+        if (hamt_asgarc_util_get_the_one_target(auxsg, vu, &wu, 0, 0, base_label)<0){
+            fprintf(stderr, "[E::%s] can't get target\n", __func__);
+            continue;
+        }
+        if (hamt_asgarc_util_countPre(auxsg, wu, 0, 0, base_label)<2){continue;}
+
+
+        if ( !(ug->u.a[wu>>1].len>(ug->u.a[vu>>1].len*r)) ){
+            continue;
+        }
+
+        // uu
+        nv = asg_arc_n(auxsg, wu^1);
+        av = asg_arc_a(auxsg, wu^1);
+        uint32_t i;
+        for (i=0; i<nv; i++){
+            if (av[i].del){continue;}
+            if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label) {continue;}
+            if ((av[i].v>>1)==(vu>>1)){continue;}
+            uu = av[i].v;
+            if (ug->u.a[uu>>1].len>(ug->u.a[vu>>1].len*r)){
+                length_check_passed = 1;
+                break;
+            }
+        }
+
+        if (length_check_passed){
+            // cut
+            hamt_ug_arc_del(sg, ug, vu, wu, 1);
+            hamt_ug_utg_softdel(sg, ug, vu, base_label^1);
             nb_cut++;
         }
     }
@@ -5500,7 +5571,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
     //    if a long unitig is not connected and non-circular,
     //    try the ends and add a link if there was an overlap in the paf
     //    Obviously more aggressive than hamt_ug_prectg_rescueShortCircuit, which required more topo checks. 
-    int verbose = 1;
+    int verbose = 0;
 
     ma_ug_t *ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
     asg_t *auxsg = ug->g;
@@ -6509,7 +6580,7 @@ int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_
              wu2----uu_end2-...
         wu1 and wu2 are short and doesn't appear to be haplotigs; vu and uu have direct overlap; uu may have other connections.
     */
-    int verbose = 1;
+    int verbose = 0;
     int nb_treated = 0;
 
     asg_t *auxsg = ug->g;
@@ -6620,7 +6691,7 @@ int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug
         Generalized from hamt_ug_resolve_fake_haplotype_bifurcation, this is a more dangerous version.
           If more data suggests against it, this should be taken off. (potential bug / TODO)
     */
-    int verbose = 1;
+    int verbose = 0;
     int nb_treated = 0;
 
     asg_t *auxsg = ug->g;

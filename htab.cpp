@@ -1140,9 +1140,64 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 
 	free(buf);  // sequence will be freed by the caller	
 }
+void worker_process_one_read_noHPC(pltmt_step_t *s, int idx_seq){
+	// mirrored from the HPC version above (Dec 22 2020, ~r20)
+	uint64_t rid;
+	if (/*s->p->asm_opt->readselection_sort_order==0 || */s->p->round==0)
+		{rid = s->n_seq0+idx_seq;}
+	else  // TODO: is legacy
+		{rid = s->RIDs[idx_seq];}
+	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // buffer used in the 0th round
+	int k = s->p->opt->k;
+	ha_ct_t *h = s->p->h;
+
+	uint32_t idx = 0;  // index of kmer count in the buffer
+	khint_t key;
+	int i, l/*, last = -1*/;
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	hamt_ch_buf_t *b = 0;// uint64_t *b = 0;
+
+	int has_wanted_kmers = 0;  // flag of rescue
+
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_seq]; ++i) {
+		int c = seq_nt4_table[(uint8_t)s->seq[idx_seq][i]];
+		if (c < 4) { // not an "N" base
+			// if (c != last) {
+				x[0] = (x[0] << 1 | (c&1))  & mask;
+				x[1] = (x[1] << 1 | (c>>1)) & mask;
+				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+				if (++l >= k){
+					uint64_t hash = yak_hash_long(x);
+					// collect for all-reads kmer count hashtable
+					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
+					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
+					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+					else buf[idx] = 1;  // because bf
+					idx++;
+				}
+				// last = c;
+			// }
+		} else l = 0, /*last = -1,*/ x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+
+	double mean = meanl(buf, idx);
+	double std = stdl(buf, idx, mean);
+	radix_sort_hamt16(buf, buf+idx);
+	uint16_t median = (uint16_t)buf[idx/2];
+	uint16_t lowq = (uint16_t)buf[idx/10];
+	// uint8_t code = decide_category(mean, std, buf, idx);
+	s->p->rs_out->mean[rid] = mean;
+	s->p->rs_out->median[rid] = median;
+	s->p->rs_out->lowq[rid] = lowq;
+	s->p->rs_out->std[rid] = std;
+	s->p->rs_out->mask_readtype[rid] = /*code*/ 0;
+
+	free(buf);  // sequence will be freed by the caller	
+}
 
 
-void worker_process_one_read_HPC_inclusive(pltmt_step_t *s, int idx_seq, int round){
+void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, int use_HPC){
 	// note: this function is not called by kt_for, it's linear
 	uint64_t rid = s->RIDs[idx_seq];
 	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
@@ -1185,7 +1240,7 @@ void worker_process_one_read_HPC_inclusive(pltmt_step_t *s, int idx_seq, int rou
 	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
 	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // runtime kmer frequency container
 	int idx_buf = 0;
-	int k = s->p->opt->k;  // NOTE?????? (Oct 6 2020) ASan thought there's a heap-use-after-free error right here (or a few lines below at the yak_ct_get part), but I don't see why, and it won't segfault without ASan, not sure if it's ASan false positive or an obscure bug. It happens during the 2nd run of this step in kt_pipeline, but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	int k = s->p->opt->k;  // NOTE / might have bugs (Oct 6 2020) ASan thought there's a heap-use-after-free error right here (or a few lines below at the yak_ct_get part), but I don't see why, and it won't segfault without ASan, not sure if it's ASan false positive or an obscure bug. It happens during the 2nd run of this step in kt_pipeline, but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
 	ha_ct_t *hd = s->p->hd;
 
 	uint32_t idx = 0;  // index of kmer count in the buffer
@@ -1197,7 +1252,8 @@ void worker_process_one_read_HPC_inclusive(pltmt_step_t *s, int idx_seq, int rou
 	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_seq]; ++i) {
 		int c = seq_nt4_table[(uint8_t)s->seq[idx_seq][i]];
 		if (c < 4) { // not an "N" base
-			if (c != last) {
+			// if (c != last) {
+			if (c!=last || (!use_HPC)){
 				x[0] = (x[0] << 1 | (c&1))  & mask;
 				x[1] = (x[1] << 1 | (c>>1)) & mask;
 				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
@@ -1339,8 +1395,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			if (p->opt->is_HPC)
 				worker_process_one_read_HPC(s, idx_seq);
 			else
-				{fprintf(stderr, "NON-HPC IS NOT IMPLEMENTED IN THE TEST PHASE (because stuffs are changing)! \n"); exit(1);}
-				// worker_process_one_read(s, s->n_seq);
+				worker_process_one_read_noHPC(s, idx_seq);
 		}
 		if (s->p->round==0){
 			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
@@ -1927,8 +1982,7 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
 			if (p->opt->is_HPC)
 				worker_process_one_read_HPC(s, idx_seq);
 			else
-				{fprintf(stderr, "NON-HPC IS NOT IMPLEMENTED IN THE TEST PHASE (because stuffs are changing)! \n"); exit(1);}
-				// worker_process_one_read(s, s->n_seq);
+				worker_process_one_read_noHPC(s, idx_seq);
 		}
 		int san = 0;
 		for (int i=0; i<1<<p->h->pre; i++){
@@ -2005,16 +2059,14 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		else {return s;}
 	} else if (step==1){  // process reads
 		pltmt_step_t *s = (pltmt_step_t*)in;
-		// fprintf(stderr, "DEBUG: entering a block of worker_process_one_read_HPC_inclusive\n"); fflush(stderr);
-		// note: do not use kt_for here, or it's race (that *doesn't always* but occassionally fail)! 
+		// note: do not use kt_for here, or it's race
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
-				worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round);
+				// worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round);
+				worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round, 1);
 			else
-				{fprintf(stderr, "NON-HPC IS NOT IMPLEMENTED IN THE TEST PHASE (because stuffs are changing)! \n"); exit(1);}
-				// worker_process_one_read(s, s->n_seq);
+				worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round, 0);
 		}
-		// fprintf(stderr, "DEBUG: finished a block of worker_process_one_read_HPC_inclusive\n"); fflush(stderr);
 		int san = 0;
 		for (int i=0; i<1<<p->hd->pre; i++){
 			san+=s->lnbuf[i].n;

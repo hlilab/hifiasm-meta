@@ -61,6 +61,7 @@ int hamt_ug_pop_simpleShortCut(asg_t *sg, ma_ug_t *ug, int base_label, int alt_l
 int hamt_ug_oneutgCircleCut(asg_t *sg, ma_ug_t *ug, int base_label);
 int hamt_ug_oneutgCircleCut2(asg_t *sg, ma_ug_t *ug, int base_label);
 int hamt_ug_drop_midsizeTips(asg_t *sg, ma_ug_t *ug, int fold, int base_label);
+int hamt_ug_drop_midsizeTips_aggressive(asg_t *sg, ma_ug_t *ug, float fold, int base_label);
 int hamt_ug_resolve_small_multileaf_with_covcut(asg_t *sg, ma_ug_t *ug, int max_length, int fold, int base_label);
 
 // interface: pre-contig-gen cleaning

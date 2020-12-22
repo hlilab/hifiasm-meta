@@ -28200,15 +28200,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	*sg_ptr = sg;
 }
 
-<<<<<<< HEAD
 
 void hamt_clean_graph(
-||||||| merged common ancestors
-void clean_graph(
-=======
-
-void clean_graph(
->>>>>>> master
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
 long long n_read, uint64_t* readLen, long long mini_overlap_length, 
 long long max_hang_length, long long clean_round, long long gap_fuzz,
@@ -28246,37 +28239,23 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     ///ma_hit_sub is just use to init coverage_cut,
     ///it seems we do not need ma_hit_cut & ma_hit_flt
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-<<<<<<< HEAD
     if (asm_opt.is_use_exp_graph_cleaning){
         // hamt: spare some low coverage simple cases
         detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
     }else{
         detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
     }
-||||||| merged common ancestors
-    detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
-=======
-    detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
-    
->>>>>>> master
     ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     ///print_binned_reads(sources, n_read, coverage_cut);
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
     ///fix_binned_reads(sources, n_read, coverage_cut);
     ///just need to deal with trio here
-<<<<<<< HEAD
     hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
     ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // TODO: faster?
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
 
-||||||| merged common ancestors
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
-    
-=======
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
->>>>>>> master
     sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
     ///debug_info_of_specfic_node((char*)"m64062_190804_172951/130483063/ccs", sg, ruIndex, (char*)"sbsbsb");

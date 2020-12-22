@@ -42,4 +42,3 @@ Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm c
 --lowq-10Lower  10% quantile kmer frequency threshold, runtime. Lower value means less reads kept, if read selection is triggered. [150]
 
 ```
-

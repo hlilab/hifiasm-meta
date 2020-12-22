@@ -174,6 +174,7 @@ typedef struct
 {
     char** read_name;
     uint64_t query_num;
+    kvec_t_u64_warp* candidate_count;
     FILE* fp;
     pthread_mutex_t OutputMutex;
 } Debug_reads;
@@ -202,4 +203,5 @@ void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt);
 
 void init_Debug_reads(Debug_reads* x, const char* file);
 void destory_Debug_reads(Debug_reads* x);
+void recover_UC_sub_Read(UC_Read* i_r, long long start_pos, long long length, uint8_t strand, All_reads* R_INF, long long ID);
 #endif

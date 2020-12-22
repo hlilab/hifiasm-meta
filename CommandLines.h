@@ -3,7 +3,7 @@
 
 #include <pthread.h>
 
-#define HA_VERSION "0.12-r304"
+#define HA_VERSION "0.13-r308"
 #define HAMT_VERSION "0.0-r018"
 
 
@@ -45,8 +45,7 @@ typedef struct {
 	int hom_cov;
     int het_cov;
 	int max_n_chain; // fall-back max number of chains to consider
-    int k_mer_min_freq;
-    int k_mer_max_freq;
+	int min_hist_kmer_cnt;
     int load_index_from_disk;
     int write_index_to_disk;
     int number_of_round;
@@ -66,6 +65,7 @@ typedef struct {
     int recover_atg_cov_min;
     int recover_atg_cov_max;
     int hom_global_coverage;
+    int bed_inconsist_rate;
 
     float max_hang_rate;
     float min_drop_rate;

@@ -1,7 +1,10 @@
 tmux*
 hifiasm*
 tmp*
+hifiasm*
+tmp*
 .*.swp
 *.o
 *.json
 .*
+*.json

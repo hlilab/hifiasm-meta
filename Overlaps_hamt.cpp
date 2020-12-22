@@ -1405,8 +1405,8 @@ int hamt_asgarc_util_checkSimpleBubble(asg_t *g, uint32_t v0, uint32_t *dest, in
         if (verbose){fprintf(stderr, "[checkBubble] w-suc\n");}
         return 0;
     }
-    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[0], &u1, 0, 0, base_label)==-1){fprintf(stderr, "[%s] shouldn't happen\n" __func__);return 0;}
-    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[1], &u2, 0, 0, base_label)==-1){fprintf(stderr, "[%s] shouldn't happen\n" __func__);return 0;}
+    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[0], &u1, 0, 0, base_label)==-1){fprintf(stderr, "[%s] shouldn't happen\n", __func__);return 0;}
+    if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, w[1], &u2, 0, 0, base_label)==-1){fprintf(stderr, "[%s] shouldn't happen\n", __func__);return 0;}
     if (u1!=u2){  // and it's the same vertex
         if (verbose){fprintf(stderr, "[checkBubble] u\n");}
         return 0;

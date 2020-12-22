@@ -1076,6 +1076,20 @@ int load_ct_index(void **i_ct_idx, char* file_name)
 	fread(&h->tot, sizeof(h->tot), 1, fp);
 	CALLOC(h->h, 1<<h->pre);
 
+	index_time = yak_realtime();
+	for (i = 0; i < 1<<h->pre; ++i) 
+	{
+		g = &(h->h[i]);
+		yak_ct_load(&(g->h), fp);
+	}
+
+	(*ct_idx) = h;
+	fprintf(stderr, "[M::%s::%.3f] ==> Loaded count table\n", __func__, yak_realtime() - index_time);
+	fprintf(stderr, "[M::%s] Index has been loaded.\n", __func__);
+	free(gfa_name);
+	return 1;
+}
+
 //////////////////////////////////////////////////////////////////////
 //                      meta
 //////////////////////////////////////////////////////////////////////
@@ -1610,7 +1624,7 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 
 	// histogram
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
-	peak_hom = ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);
+	peak_hom = ha_analyze_count(YAK_N_COUNTS, asm_opt->min_hist_kmer_cnt, cnt, &peak_het);
 	if (peak_hom > 0) fprintf(stderr, "[M::%s] peak_hom: %d; peak_het: %d\n", __func__, peak_hom, peak_het);
 	
 	if (!asm_opt->is_disable_read_selection){
@@ -2159,9 +2173,9 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
 				// worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round);
-				worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round, 1);
+				worker_process_one_read_inclusive(s, idx_seq, s->p->round, 1);
 			else
-				worker_process_one_read_HPC_inclusive(s, idx_seq, s->p->round, 0);
+				worker_process_one_read_inclusive(s, idx_seq, s->p->round, 0);
 		}
 		int san = 0;
 		for (int i=0; i<1<<p->hd->pre; i++){
@@ -2205,7 +2219,7 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	int peak_het;  // placeholder
 	h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN, NULL, NULL, rs); 
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
-	ha_analyze_count(YAK_N_COUNTS, cnt, &peak_het);
+	ha_analyze_count(YAK_N_COUNTS, asm_opt->min_hist_kmer_cnt, cnt, &peak_het);
 
 	hamt_mark(asm_opt, rs, h);  // collects mean/median/std and mark global category of each read
 	// exp_load_raw_reads(asm_opt, rs, 1);  // already has seq lens, load sequences
@@ -2326,22 +2340,6 @@ void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_r
 			exit(1);
 		}
 	}
-}
-
-
-
-	index_time = yak_realtime();
-	for (i = 0; i < 1<<h->pre; ++i) 
-	{
-		g = &(h->h[i]);
-		yak_ct_load(&(g->h), fp);
-	}
-
-	(*ct_idx) = h;
-	fprintf(stderr, "[M::%s::%.3f] ==> Loaded count table\n", __func__, yak_realtime() - index_time);
-	fprintf(stderr, "[M::%s] Index has been loaded.\n", __func__);
-	free(gfa_name);
-	return 1;
 }
 
 int write_pt_index(void *flt_tab, ha_pt_t *ha_idx, All_reads* r, hifiasm_opt_t* opt, char* file_name)

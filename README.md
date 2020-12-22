@@ -11,13 +11,15 @@ hifiasm_meta -t32 -oasm reads.fq.gz 2>asm.log
 hifiasm_meta -t32 -S -o asm reads.fq.gz 2>asm.log // if the dataset has high redundancy, or overlap & error correction takes way too long
 ```
 
-## Current output files
+## Output files
 
 Raw unitig graph: asm.r\_utg\*.gfa
 
 Cleaned unitig graph: asm.p\_utg\*.gfa 
 
 Contig graph: asm.p\_ctg\*.gfa and asm.a\_ctg\*.gfa
+
+Unitig/Contig naming: `^s[0-9]+\.[uc]tg[0-9]{6}[lc]` where the `s[0-9]+` is a subgraph label.
 
 ## Special Notes
 
@@ -27,7 +29,9 @@ Non-release commits may write excessive info to STDERR (and gfa files) for dev/d
 
 Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm can use hifiasm\_meta's bin file, but not vice versa. Meta needs to store extra info from overlap & error correction step.
 
-## Switches (see also README\_ha.md)
+## Switches
+
+See also README\_ha.md, the stable hifiasm doc.
 
 ```
 #Interface

@@ -2308,7 +2308,7 @@ void hamt_hit_contained(ma_hit_t_alloc* sources, long long n_read, uint64_t *rea
     //     Then, perform the regualr contained reads removal.
     
     double startTime = Get_T();
-    int verbose = 1;
+    int verbose = 0;
 
     ////////// hamt special /////////////////
     int nb_reads_contained;
@@ -28547,7 +28547,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 nb_complex_bubble_cut += hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 if (nb_complex_bubble_cut==0){
-                    fprintf(stderr, "debug, early termination of complex bubble pop (round %d)\n", round_resolve);
+                    // fprintf(stderr, "debug, early termination of complex bubble pop (round %d)\n", round_resolve);
                     break;
                 }
             }
@@ -28589,16 +28589,16 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF", 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF", 0);}
             hamt_ug_resolve_fake_haplotype_bifurcation(sg, hamt_ug, 0, sources, reverse_sources);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF2", 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIFagg", 0);}
             // hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(sg, hamt_ug, 0, sources, reverse_sources);
             // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
-            hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);
+            if (asm_opt.write_debug_gfa) {hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);}
             hamt_ug_destroy(hamt_ug);
         }  
 

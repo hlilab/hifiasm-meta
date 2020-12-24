@@ -1015,15 +1015,15 @@ void ha_overlap_and_correct(int round)
 	for (i = 0; i < asm_opt.thread_num; ++i)
 		b[i] = ha_ovec_init(0, (round == asm_opt.number_of_round - 1));
 
-    int has_read;
-    if (round!=0 || R_INF.is_all_in_mem)  // TODO: --meta?
-        has_read = 1;
-    else
-        has_read = 0;
+	int has_read;
+	if (round!=0 || R_INF.is_all_in_mem)  // TODO: --meta?
+		has_read = 1;
+	else
+		has_read = 0;
 
 	if ((!asm_opt.is_use_exp_graph_cleaning) && round == 0 && ha_flt_tab == 0) // then asm_opt.hom_cov hasn't been updated
 		ha_opt_update_cov(&asm_opt, hom_cov);
-    if(ha_idx) hom_cov = asm_opt.hom_cov;
+	if(ha_idx) hom_cov = asm_opt.hom_cov;
 	if(ha_idx == NULL) ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, has_read, 0, &R_INF, &hom_cov, &het_cov);
 
 	if (round == 0 && ha_flt_tab == 0) // then asm_opt.hom_cov hasn't been updated

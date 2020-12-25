@@ -11,6 +11,12 @@ hifiasm_meta -t32 -oasm reads.fq.gz 2>asm.log
 hifiasm_meta -t32 -S -o asm reads.fq.gz 2>asm.log // if the dataset has high redundancy, or overlap & error correction takes way too long
 ```
 
+## About this fork
+
+Hifiasm_meta comes with a read selection module, which enables the assembly of dataset of high redundancy without compromising overall assembly quality, and meta-centric graph cleaning modules. It also handles chimeric read detection and contained reads etc more carefully in the metagenome assembly context, which, in some cases, could benefit the less represented species in the sample. We need more test samples to improve the heuristics.
+
+Currently hifiasm_meta does not take bining info.
+
 ## Output files
 
 Raw unitig graph: asm.r\_utg\*.gfa

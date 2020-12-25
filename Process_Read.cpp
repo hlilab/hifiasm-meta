@@ -279,7 +279,7 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	sprintf(str_cmd+strlen(str_cmd), "Hifiasm_meta %s (hifiasm code base %s).\n", HAMT_VERSION, HA_VERSION);
 	
 	uint16_t length_of_cmd = (uint16_t)strlen(str_cmd);
-	fprintf(stderr, "wrote cmd of length %d (%s).\n", length_of_cmd, str_cmd);
+	fprintf(stderr, "wrote cmd of length %d: %s", length_of_cmd, str_cmd);
 	fwrite(&length_of_cmd, sizeof(uint16_t), 1, fp);
 	fwrite(str_cmd, sizeof(char), length_of_cmd, fp);
 	free(str_cmd);

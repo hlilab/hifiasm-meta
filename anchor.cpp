@@ -143,12 +143,15 @@ kvec_t_u64_warp* chain_idx, void *ha_flt_tab, ha_pt_t *ha_idx, overlap_region* f
 {
 	uint32_t i, rlen;
 	uint64_t k, l;
-	// double low_occ = asm_opt.hom_cov * HA_KMER_GOOD_RATIO;
-	// double high_occ = asm_opt.hom_cov * (2.0 - HA_KMER_GOOD_RATIO);
-	double low_occ = 5;  // hamt arbitrary!
-	// double high_occ = HAMT_COVERAGE * (2.0 - HA_KMER_GOOD_RATIO);  // hamt arbitrary!
-	double high_occ = 100;
-	// double low_occ = 0;  double high_occ = 1<<12-1; // debug
+	double low_occ, high_occ;
+	if (asm_opt.is_use_exp_graph_cleaning){
+		// might have bugs / TODO
+		low_occ = 5;  // hamt, this is and have been arbitrary from the beginning (Dec 25,2020). What's the better way or value?
+		high_occ = 100;
+	}else{
+		low_occ = asm_opt.hom_cov * HA_KMER_GOOD_RATIO;
+		high_occ = asm_opt.hom_cov * (2.0 - HA_KMER_GOOD_RATIO);
+	}	
 
 	// prepare
     clear_Candidates_list(cl);

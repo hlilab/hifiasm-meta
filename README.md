@@ -1,4 +1,4 @@
-(WIP) A hifiasm fork (https://github.com/chhylp123/hifiasm) for metagenome assembly.
+A hifiasm fork for metagenome assembly. WIP.
 
 ## Getting Started
 ```sh
@@ -25,7 +25,7 @@ Unitig/Contig naming: `^s[0-9]+\.[uc]tg[0-9]{6}[lc]` where the `s[0-9]+` is a su
 
 Based on the limited available test data, real datasets are unlikely to require read selection; mock datasets, however, might need it.
 
-Non-release commits may have extra debug outputs for dev/debug purposes, even without -V.
+Non-release commits, especially before r22, may produce extra debug outputs for dev purposes.
 
 Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm can use hifiasm\_meta's bin file, but not vice versa. Meta needs to store extra info from overlap & error correction step.
 
@@ -43,7 +43,7 @@ See also README\_ha.md, the stable hifiasm doc.
 --force-preovec Force kmer frequency-based read selection. 
                 (otherwise if total number of read overlaps 
                  look realistic, won't do selection.)
---lowq-10Lower  10% quantile kmer frequency threshold, runtime. Lower value means less reads kept, if read selection is triggered. [150]
+--lowq-10       Lower 10% quantile kmer frequency threshold, runtime. Lower value means less reads kept, if read selection is triggered. [150]
 
 ```
 
@@ -58,45 +58,52 @@ Read selection needs to speed up. Currently there's a blocking sequential step.
 A [Bandage](https://github.com/rrwick/Bandage) plot of primary contig graph:
 
 <p align="center">
-  <img src="https://user-images.githubusercontent.com/61363437/102846924-4f2c3f80-43df-11eb-8c00-e84b439a9398.png"/>
+  <img src="https://user-images.githubusercontent.com/61363437/103034523-1309f380-4533-11eb-9a4e-79ec0e1b32fd.png"/>
 </p>
 
 **<sub>Evaluation tool</sub>**|**<sub>Criteria</sub>**|**<sub>Count</sub>**|**<sub>Bases or relative ratio</sub>**
 -----|-----|-----|-----
-<sub>custom</sub>|<sub>contig >1Mb</sub>|<sub>320</sub>|<sub>638Mb</sub>
+<sub>-</sub>|<sub>contig >1Mb</sub>|<sub>320</sub>|<sub>638Mb</sub>
 <sub></sub>|<sub>contig >100kb</sub>|<sub>3307</sub>|<sub>1.30Gb</sub>
 <sub></sub>|<sub>circular contig >1Mb</sub>|<sub>147</sub>|<sub>340Mb</sub>
 <sub>[Barrnap][ubarrnap]</sub>|<sub>contig with all three types of rRNA</sub>|<sub>1012</sub>|<sub>643Mb</sub>
 <sub>[CheckM][ucheckm]</sub>|<sub>genome completeness >90%</sub>|<sub>177</sub>|<sub>423Mb</sub>
-<sub></sub>|<sub>^~ contamintation  >5%</sub>|<sub>2</sub>|<sub>1.10%</sub>
+<sub></sub>|<sub>^~ contamination  >5%</sub>|<sub>2</sub>|<sub>1.10%</sub>
 <sub></sub>|<sub>genome completeness >25%</sub>|<sub>444</sub>|<sub>706MB</sub>
-<sub></sub>|<sub>^~ contamintation  >5%</sub>|<sub>5</sub>|<sub>1.10%</sub>
+<sub></sub>|<sub>^~ contamination  >5%</sub>|<sub>5</sub>|<sub>1.10%</sub>
+<sub>[ViralVerify][uviralverify]</sub>|<sub>plasmid</sub>|<sub>1509</sub>|<sub>60Mb</sub>
+<sub></sub>|<sub>virus</sub>|<sub>1894</sub>|<sub>70Mb</sub>
 <sub>[CheckV][ucheckv]</sub>|<sub>high quality virus genome\*</sub>|<sub>186</sub>|<sub>10Mb</sub>
 <sub>[prodigal][uprodigal]</sub>|<sub>genes predicted</sub>|<sub>27039</sub>|<sub>-</sub>
+
+\*: entries that are annotated as the following: not provirus, high-quality in both checkv quality and miuvig quality, AAI-based completeness >90%, contamination <5%, no additional warnings.
 
 [ubarrnap]: https://github.com/tseemann/barrnap
 [ucheckm]: https://github.com/Ecogenomics/CheckM
 [ucheckv]: https://bitbucket.org/berkeleylab/checkv/src
+[uviralverify]: https://github.com/ablab/viralVerify
 [uprodigal]: https://github.com/hyattpd/Prodigal
 
-[Mock community ATCC MSA-1003](https://www.ncbi.nlm.nih.gov/sra/SRX8173258[accn]) (with -S --lowq-10 50)
+[Mock community ATCC MSA-1003](https://www.ncbi.nlm.nih.gov/sra/SRX8173258[accn]) (with -S --lowq-10 50): wall clock 76.8 h on 32 cpus, peak memory 449.3 GB.
+
+"pass" means the strain is represented by one circular contig.
 
 **<sub>Strain</sub>**|**<sub>Abundance</sub>**|**<sub>Assembly status</sub>**| |**<sub>Strain</sub>**|**<sub>Abundance</sub>**|**<sub>Assembly status</sub>**
 -----|-----|-----|-----|-----|-----|-----
 <sub>Acinetobacter baumannii</sub>|<sub>0.18%</sub>|<sub>pass</sub>||<sub>Lactobacillus gasseri</sub>|<sub>0.18%</sub>|<sub>pass</sub>
 <sub>Bacillus cereus</sub>|<sub>1.80%</sub>|<sub>pass</sub>||<sub>Neisseria meningitidis</sub>|<sub>0.18%</sub>|<sub>pass</sub>
-<sub>Bacteroides vulgatus</sub>|<sub>0.02%</sub>|<sub>fragmented</sub>||<sub>Porphyromonas gingivalis</sub>|<sub>18.00%</sub>|<sub>pass\*</sub>
+<sub>Bacteroides vulgatus</sub>|<sub>0.02%</sub>|<sub>fragmented</sub>||<sub>Porphyromonas gingivalis</sub>|<sub>18.00%</sub>|<sub>almost</sub>
 <sub>Bifidobacterium adolescentis</sub>|<sub>0.02%</sub>|<sub>lost</sub>||<sub>Pseudomonas aeruginosa</sub>|<sub>1.80%</sub>|<sub>pass</sub>
 <sub>Clostridium beijerinckii</sub>|<sub>1.80%</sub>|<sub>pass</sub>||<sub>Rhodobacter sphaeroides</sub>|<sub>18.00%</sub>|<sub>pass</sub>
 <sub>Cutibacterium acnes</sub>|<sub>0.18%</sub>|<sub>pass</sub>||<sub>Schaalia odontolytica</sub>|<sub>0.02%</sub>|<sub>lost</sub>
 <sub>Deinococcus radiodurans</sub>|<sub>0.02%</sub>|<sub>fragmented</sub>||<sub>Staphylococcus aureus</sub>|<sub>1.80%</sub>|<sub>pass</sub>
 <sub>Enterococcus faecalis</sub>|<sub>0.02%</sub>|<sub>fragmented</sub>||<sub>Staphylococcus epidermidis</sub>|<sub>18.00%</sub>|<sub>pass</sub>
-<sub>Escherichia coli</sub>|<sub>18.00%</sub>|<sub>pass</sub>||<sub>Streptococcus agalactiae</sub>|<sub>1.80%</sub>|<sub>pass\*</sub>
+<sub>Escherichia coli</sub>|<sub>18.00%</sub>|<sub>pass</sub>||<sub>Streptococcus agalactiae</sub>|<sub>1.80%</sub>|<sub>almost</sub>
 <sub>Helicobacter pylori</sub>|<sub>0.18%</sub>|<sub>pass</sub>||<sub>Streptococcus mutans</sub>|<sub>18.00%</sub>|<sub>pass</sub>
 
-\*: not one clean circle.
-
 [Mock community Zymo D6331, standard input library](https://www.ncbi.nlm.nih.gov/sra/SRX9569057[accn]): wall clock 15.7 h on 32 cpus, peak memory 121.7 GB.
+
+"pass" means the strain is represented by one circular contig.
 
 **<sub>Strains</sub>**|**<sub>Abundance</sub>**|**<sub>Assembly status</sub>**|**<sub></sub>**|**<sub>Strains</sub>**|**<sub>Abundance</sub>**|**<sub>Assembly status</sub>**
 -----|-----|-----|-----|-----|-----|-----
@@ -113,4 +120,3 @@ A [Bandage](https://github.com/rrwick/Bandage) plot of primary contig graph:
 <sub>Escherichia coli B766</sub>|<sub>7.83%</sub>|<sub>pass</sub>|<sub></sub>|<sub></sub>|<sub></sub>|<sub></sub>
 
 \*: E.coli strains except B2207 and B766 presented in one subgraph.
-

@@ -1439,7 +1439,7 @@ int hamt_asgarc_util_checkSimpleBubble_edge(asg_t *g, uint32_t v0, int base_labe
     //     0 if no
     //     1 if yes
 
-    uint32_t s, e, e2, sib;  // start, end, sibling
+    uint32_t s, e, e2, sib=0;  // start, end, sibling
     uint32_t nv;
     asg_arc_t *av;
 
@@ -1470,7 +1470,10 @@ int hamt_asgarc_util_checkSimpleBubble_edge(asg_t *g, uint32_t v0, int base_labe
             break;
         }
     }
-    assert(i!=nv);
+    if (i!=nv){
+        fprintf(stderr, "[W::%s] shouldn't happen; continue anyway\n", __func__);
+        return 0;
+    }
     if (hamt_asgarc_util_countPre(g, sib, 0, 0, base_label)!=1 || hamt_asgarc_util_countSuc(g, sib, 0, 0, base_label)!=1){  // compile note: is safe
         return 0;
     }
@@ -1507,6 +1510,7 @@ int hamt_asgarc_util_checkSimpleBubble_multiEddge(asg_t *sg, uint32_t v0, uint32
         }
         // check each edge's target
         aw = asg_arc_a(sg, w);
+        idx = 0;
         for (uint32_t i2=0; i2<asg_arc_n(sg, w); i2++){  // find the non-tip target
             if (aw[i2].del){continue;}
             if (hamt_asgarc_util_isTip(sg, aw[i2].v, 0, 0, base_label)){continue;}
@@ -1514,7 +1518,7 @@ int hamt_asgarc_util_checkSimpleBubble_multiEddge(asg_t *sg, uint32_t v0, uint32
             if (idx==0){
                 u = u_tmp;
             }else{
-                if (u_tmp!=u){  // compile note: this is safe
+                if (u_tmp!=u){
                     return 0;
                 }
             }
@@ -4796,6 +4800,7 @@ int hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug, int base_label, int alt
         nv = asg_arc_n(auxsg, vu);
         av = asg_arc_a(auxsg, vu); 
         l = 0;
+        idx = -1;
         for (i=0; i<nv; i++){
             if (av[i].del){continue;}
             if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label) {continue;}
@@ -4809,6 +4814,7 @@ int hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug, int base_label, int alt
             }
         }
         if (i!=nv){continue;}  // not all targets are tips
+        if (idx<0) {continue;}  // shouldn't happen
         for (i=0; i<nv; i++){
             if (av[i].del){continue;}
             if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label) {continue;}
@@ -5147,7 +5153,7 @@ int hamt_ug_drop_midsizeTips(asg_t *sg, ma_ug_t *ug, int fold, int base_label){
         Will cut the vu->wu arc. Will send vu to the alternative collection.
     */
     asg_t *auxsg = ug->g;
-    uint32_t wu, uu, nv;
+    uint32_t wu, uu=0, nv;
     asg_arc_t *av;
     int nb_cut = 0;
     int r = fold<0? 5 : fold;

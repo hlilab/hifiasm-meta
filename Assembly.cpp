@@ -1903,10 +1903,8 @@ int hamt_assemble(void)
 			ha_extract_print_list(&R_INF, asm_opt.extract_iter, asm_opt.extract_list);
 			exit(0);
 		}
-		if (!(asm_opt.flag & HA_F_SKIP_TRIOBIN) && !(asm_opt.flag & HA_F_VERBOSE_GFA)) ha_triobin(&asm_opt);
 		if (asm_opt.flag & HA_F_WRITE_EC) Output_corrected_reads();
 		if (asm_opt.flag & HA_F_WRITE_PAF) { Output_PAF(); Output_reversePAF();}
-        if (asm_opt.het_cov == -1024) hap_recalculate_peaks(asm_opt.bin_base_name), ovlp_loaded = 2;
 
         // debug_printstat_read_status(&R_INF);  // TODO: preovec doesn't use bit flag right now. (Oct 15)
 
@@ -1918,8 +1916,6 @@ int hamt_assemble(void)
             exit(1);
         }
 
-		// construct hash table for high occurrence k-mers
-        // hamt: also collect per read kmer frequency info
         // TODO: HA_F_NO_KMER_FLT has no effect now, fix it (Dec 18)
         if (asm_opt.is_disable_read_selection){  // read selection disabled
             asm_opt.readselection_sort_order = 0;  // disabling read sorting, since read selection is off
@@ -1933,7 +1929,7 @@ int hamt_assemble(void)
             assert((!R_INF.is_has_nothing) && R_INF.is_has_lengths && (!R_INF.is_all_in_mem));
             // at this point we should have seq lengths, but not the reads (will be read by ha_pt_gen)
         }else{  // read selection
-            hamt_flt_withsorting(&asm_opt, &R_INF);  // TODO: cleanup - used to sort statpack here, now it's in preovec_v2?
+            hamt_flt_withsorting(&asm_opt, &R_INF);
             fprintf(stderr, "[M::%s] read kmer stats collected.\n", __func__);
 
             ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 0);  // high freq filter on retained reads
@@ -1942,16 +1938,16 @@ int hamt_assemble(void)
             assert((!R_INF.is_has_nothing) && R_INF.is_has_lengths && R_INF.is_all_in_mem);
 
             if (hamt_pre_ovec_v2(asm_opt.preovec_coverage)){
-                if (VERBOSE>=1){
+                if (VERBOSE>=2){
                     fprintf(stderr, "[M::%s] dumping debug: read mask...\n", __func__);
                     hamt_dump_read_selection_mask_runtime(&asm_opt, &R_INF);
                 }
-                fprintf(stderr, "[M::%s] preovec dropped reads, recalculate ha_flt_tab...\n", __func__);
+                fprintf(stderr, "[M::%s] read selection dropped reads, recalculate ha_flt_tab...\n", __func__);
                 ha_ft_destroy(ha_flt_tab);  // redo high freq filter
                 ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 0);
                 fprintf(stderr, "[M::%s] finished redo ha_flt_tab.\n", __func__);
             }else{
-                fprintf(stderr, "[M::%s] preovec kept all reads.\n", __func__);
+                fprintf(stderr, "[M::%s] read selection decided to keep all reads.\n", __func__);
             }
             // at this point, reads all in mem
         }
@@ -1977,7 +1973,7 @@ int hamt_assemble(void)
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
         hamt_ovecinfo_init();
 		ha_overlap_final();
-        // hamt_ovecinfo_debugdump(&asm_opt);
+        // hamt_ovecinfo_debugdump(&asm_opt);  // TODO: bit flag
         hamt_ovecinfo_write_to_disk(&asm_opt);
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());
@@ -1987,7 +1983,6 @@ int hamt_assemble(void)
 		if (asm_opt.flag & HA_F_WRITE_PAF) {Output_PAF(); Output_reversePAF();}
 		ha_triobin(&asm_opt);
 	}
-    if(ovlp_loaded == 2) ovlp_loaded = 0;
 
     hist_readlength(&R_INF);
 

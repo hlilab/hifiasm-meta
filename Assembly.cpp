@@ -907,7 +907,7 @@ int hamt_pre_ovec_v2(int threshold){
     fprintf(stderr, "[M::%s] Entered pre-ovec read selection.\n", __func__);
 
     int hom_cov, het_cov;
-    ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, R_INF.is_all_in_mem, 0, &R_INF, &hom_cov, &het_cov);
+    if(ha_idx == NULL) ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, R_INF.is_all_in_mem, 0, &R_INF, &hom_cov, &het_cov);
 
     R_INF.nb_target_reads = (uint64_t*)calloc(R_INF.total_reads, sizeof(uint64_t));
     int cutoff = (int) ((float)R_INF.total_reads*2/3 +0.499);  // heuristic: need less than 2/3 reads to have at most 300 ovlp targets
@@ -953,6 +953,7 @@ int hamt_pre_ovec_v2(int threshold){
     free(R_INF.nb_target_reads);
     fprintf(stderr, "[M::%s] finished read selection, took %0.2fs.\n", __func__, Get_T()-startTime);
     ha_pt_destroy(ha_idx);
+    ha_idx = NULL;  // self note: ha_pt_destroy won't and can't set ha_idx to NULL.
     return ret;
 }
 
@@ -1957,7 +1958,6 @@ int hamt_assemble(void)
 		// error correction
 		assert(asm_opt.number_of_round > 0);
         R_INF.nb_error_corrected = (uint16_t*)calloc(R_INF.total_reads, sizeof(uint16_t));
-        fprintf(stderr, "alloc %d uint16_t\n", (int)R_INF.total_reads);
 		for (r = 0; r < asm_opt.number_of_round; ++r) {
 			ha_opt_reset_to_round(&asm_opt, r); // this update asm_opt.roundID and a few other fields
 			ha_overlap_and_correct(r);

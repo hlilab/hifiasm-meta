@@ -961,6 +961,7 @@ void *ha_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, int *hom_cov, int i
 
 ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_from_store, int is_hp_mode, All_reads *rs, int *hom_cov, int *het_cov)
 {
+	fprintf(stderr, "called ha_pt_gen, RS status: has nothing %d, has lengths %d, all in mem %d\n", R_INF.is_has_nothing, R_INF.is_has_lengths, R_INF.is_all_in_mem);
 	int64_t cnt[YAK_N_COUNTS], tot_cnt;
 	int peak_hom, peak_het, i, extra_flag1, extra_flag2;
 	ha_ct_t *ct;
@@ -1004,8 +1005,6 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 	}
 	pt = ha_pt_gen(ct, asm_opt->thread_num); // prepare the slots
 	ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag2|HAMTF_FORCE_DONT_INIT, pt, flt_tab, rs);  // collect positional info
-	fprintf(stderr, "tot_cnt=%" PRIu64 "\n", tot_cnt);
-	fprintf(stderr, "tot_pos=%" PRIu64 "\n", pt->tot_pos);
 	assert((uint64_t)tot_cnt == pt->tot_pos);
 	//ha_pt_sort(pt, asm_opt->thread_num);
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> indexed %ld positions\n", __func__,

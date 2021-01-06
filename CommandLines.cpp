@@ -472,7 +472,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         // hamt
         else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
         else if (c == 'S') {
-            asm_opt->is_disable_read_selection = 1; 
+            asm_opt->is_disable_read_selection = 0; 
             fprintf(stderr, "Read selection enabled.\n");
         }
         else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "Use bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name

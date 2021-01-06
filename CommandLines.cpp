@@ -473,18 +473,23 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
         else if (c == 'S') {
             asm_opt->is_disable_read_selection = 0; 
-            fprintf(stderr, "Read selection enabled.\n");
+            fprintf(stderr, "[M::%s] Read selection enabled.\n", __func__);
         }
-        else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "Use bin files under the name %s\n", opt.arg);}  // using bin files from another location and/or under different name
+        else if (c == 'B') {asm_opt->bin_base_name = opt.arg; fprintf(stderr, "[M::%s] Use bin files under the name %s\n", __func__, opt.arg);}  // using bin files from another location and/or under different name
         else if (c == 400) {asm_opt->mode_read_kmer_profile = 1; fprintf(stderr, "DEBUG DUMP: get kmer frequency profile for every read.\n");} 
         else if (c == 402) {asm_opt->is_dump_ovec_error_count = 1; fprintf(stderr, "DEBUG DUMP: get ovec error counts\n");}
         else if (c == 406) {asm_opt->is_dump_read_mask = 1; fprintf(stderr, "DEBUG DUMP: will write read selection mask to file.\n");}
         else if (c == 407) {asm_opt->is_dump_read_names = 1; fprintf(stderr, "DEBUG DUMP: read names\n");}
         else if (c == 408) {
-            fprintf(stderr, "NOTICE: forced pre-ovec read selection. Ignoring count of ovlp.\n");            
-            asm_opt->is_ignore_ovlp_cnt = 1;
+            fprintf(stderr, "[M::%s] Forced pre-ovec read selection. Ignoring count of ovlp.\n", __func__);
+            asm_opt->is_ignore_ovlp_cnt = 0;
+            asm_opt->is_disable_read_selection = 0;
         }
-        else if (c == 409) {asm_opt->lowq_thre_10 = atoi(opt.arg);}
+        else if (c == 409) {
+            fprintf(stderr, "[M::%s] Set lowq; note that without --force-preovec, this threshold have no effect if total number of overlaps is considered to be acceptable.\n", __func__);
+            asm_opt->lowq_thre_10 = atoi(opt.arg);
+            asm_opt->is_disable_read_selection = 0;
+        }
         else if (c == 413) {asm_opt->write_debug_gfa = 1;}
         else if (c == 414) {asm_opt->is_use_exp_graph_cleaning = 0;}
         // end of hamt

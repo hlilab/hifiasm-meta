@@ -90,7 +90,11 @@ A [Bandage](https://github.com/rrwick/Bandage) plot of primary contig graph:
 [uviralverify]: https://github.com/ablab/viralVerify
 [uprodigal]: https://github.com/hyattpd/Prodigal
 
-[Mock community ATCC MSA-1003](https://www.ncbi.nlm.nih.gov/sra/SRX8173258[accn]) (with -S --lowq-10 50): wall clock 76.8 h on 32 cpus, peak memory 449.3 GB.
+[Mock community ATCC MSA-1003](https://www.ncbi.nlm.nih.gov/sra/SRX8173258[accn]) 
+
+With read selection -S --lowq-10 50: kept 22% reads (911531 out of 4029238), wall clock 19.9h on 32 cpus, peak memory 250.5 GB.
+
+Without read selection: wall clock 76.8 h on 32 cpus, peak memory 449.3 GB.
 
 "pass" means the strain is represented by one circular contig.
 

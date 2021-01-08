@@ -482,7 +482,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 407) {asm_opt->is_dump_read_names = 1; fprintf(stderr, "DEBUG DUMP: read names\n");}
         else if (c == 408) {
             fprintf(stderr, "[M::%s] Forced pre-ovec read selection. Ignoring count of ovlp.\n", __func__);
-            asm_opt->is_ignore_ovlp_cnt = 0;
+            asm_opt->is_ignore_ovlp_cnt = 1;
             asm_opt->is_disable_read_selection = 0;
         }
         else if (c == 409) {

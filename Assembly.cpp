@@ -900,6 +900,7 @@ int hamt_pre_ovec_v2(int threshold){
 	//        - 2nd pass: recruite reads until we don't want more of them
 
     int ret;
+    double t_profiling = Get_T();
 
     // TODO: clean up
     // (temp treatment: overide any exisiting markings)
@@ -908,6 +909,7 @@ int hamt_pre_ovec_v2(int threshold){
 
     int hom_cov, het_cov;
     if(ha_idx == NULL) ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, R_INF.is_all_in_mem, 0, &R_INF, &hom_cov, &het_cov);
+    fprintf(stderr, "[prof::%s] start ~ done ha_idx: %.2f s\n", __func__, Get_T()-t_profiling); t_profiling = Get_T();
 
     R_INF.nb_target_reads = (uint64_t*)calloc(R_INF.total_reads, sizeof(uint64_t));
     int cutoff = (int) ((float)R_INF.total_reads*2/3 +0.499);  // heuristic: need less than 2/3 reads to have at most 300 ovlp targets
@@ -916,29 +918,35 @@ int hamt_pre_ovec_v2(int threshold){
     // heuristic: let half of the reads (excluding reads with no overlap) to have less than $threshold candidates 
     int is_do_preovec_selection = 1;
     int cnt = 0/*, dropped=0*/;
-    if (asm_opt.is_ignore_ovlp_cnt){
+    
+    // collect counts
+    kt_for(asm_opt.thread_num, worker_read_selection_by_est_ov_v2, NULL, R_INF.total_reads);
+    radix_sort_radix64(R_INF.nb_target_reads, R_INF.nb_target_reads + R_INF.total_reads);  // sort by nb_target + rid
+
+    for (uint64_t i=0; i<R_INF.total_reads; i++){
+        if ((R_INF.nb_target_reads[i]>>32)>(uint64_t)threshold){
+            cnt++;
+        }
+    }
+    fprintf(stderr, "[M::%s] %d reads with more than desired targets(%d). (Total reads: %d)\n", __func__, cnt, threshold, (int)R_INF.total_reads);
+    if (cnt<=cutoff){
         is_do_preovec_selection = 0;
-        fprintf(stderr, "[M::%s] Did not guess the total number of overlaps.\n", __func__);
     }else{
-        // collect counts
-        kt_for(asm_opt.thread_num, worker_read_selection_by_est_ov_v2, NULL, R_INF.total_reads);
-        radix_sort_radix64(R_INF.nb_target_reads, R_INF.nb_target_reads + R_INF.total_reads);  // sort by nb_target + rid
-        
-        for (uint64_t i=0; i<R_INF.total_reads; i++){
-            if ((R_INF.nb_target_reads[i]>>32)>(uint64_t)threshold){
-                cnt++;
-            }
-        }
-        fprintf(stderr, "[M::%s] %d reads with more than desired targets(%d). (Total reads: %d)\n", __func__, cnt, threshold, (int)R_INF.total_reads);
-        if (cnt<=cutoff){
-            is_do_preovec_selection = 0;
-        }
+        is_do_preovec_selection = 1;
+    }
+    fprintf(stderr, "[prof::%s] ha_idx ~ done estimation: %.2f s\n", __func__, Get_T()-t_profiling); t_profiling = Get_T();
+
+    // overide status if switch is present
+    if (asm_opt.is_ignore_ovlp_cnt){
+        is_do_preovec_selection = 1;
+        fprintf(stderr, "[M::%s] Ignore extimated total number of overlaps and proceed to read selection.\n", __func__);
     }
 
     if (is_do_preovec_selection){
-        cnt = R_INF.total_reads - (cnt - cutoff);  // the number of reads we're going to keep
+        cnt = cnt<cutoff ? cutoff : R_INF.total_reads - (cnt - cutoff);  // the number of reads we're going to keep
         fprintf(stderr, "[M::%s] plan to keep %d out of %d reads (%.2f%%).\n",__func__, cnt, (int)R_INF.total_reads, (float)cnt/R_INF.total_reads*100);
         hamt_flt_withsorting_supervised(&asm_opt, &R_INF, cnt);
+        fprintf(stderr, "[prof::%s]     ~ done supervised: %.2f s\n", __func__, Get_T()-t_profiling); t_profiling = Get_T();
         ret = 0;
         for (int idx_read=0; idx_read<R_INF.total_reads; idx_read++){  // check if we've dropped any read
             if (R_INF.mask_readnorm[idx_read]&1){
@@ -1959,8 +1967,11 @@ int hamt_assemble(void)
 		assert(asm_opt.number_of_round > 0);
         R_INF.nb_error_corrected = (uint16_t*)calloc(R_INF.total_reads, sizeof(uint16_t));
 		for (r = 0; r < asm_opt.number_of_round; ++r) {
+            fprintf(stderr, "\n\n[M::%s] entered read correction round %d\n", __func__, r+1);
+
 			ha_opt_reset_to_round(&asm_opt, r); // this update asm_opt.roundID and a few other fields
 			ha_overlap_and_correct(r);
+
 			fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> corrected reads for round %d\n", __func__, yak_realtime(),
 					yak_cpu_usage(), yak_peakrss_in_gb(), r + 1);
 			fprintf(stderr, "[M::%s] # bases: %lld; # corrected bases: %lld; # recorrected bases: %lld\n", __func__,

@@ -914,6 +914,14 @@ int hamt_pre_ovec_v2(int threshold){
     
     // determine if we might want to drop some reads
     // heuristic: let half of the reads (excluding reads with no overlap) to have less than $threshold candidates 
+
+    // self note:
+    //     There's two thresholds: 
+    //          - preovec threshold (targets median kmer freq), aka the `threshold` in this function
+    //          - lowq-10 (targets lower 10% quantile kmer freq), used in `hamt_flt_withsorting_supervised`
+    //     The first one was introduced merely in hope to reduce rounds of read selection (using lowq-10),
+    //       it's not a different criteria, but a subset of lowq-10.
+
     int is_do_preovec_selection = 1;
     int cnt = 0/*, dropped=0*/;
     if (asm_opt.is_ignore_ovlp_cnt){

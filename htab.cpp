@@ -1181,6 +1181,7 @@ typedef struct {  // step data structure (st_data_t)
 	int *len;
 	char **seq;
 	hamt_ch_buf_t *lnbuf;  // $n_seq linear buffers
+	hamt_ch_buf_t **threaded_lnbuf;  // step 2 is slow, trade memory for speed
 	// exp
 	uint64_t *RIDs;
 }pltmt_step_t;
@@ -1200,49 +1201,6 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 	}
 }
 
-// static void worker_process_one_read(void* data, long idx_for, int tid){
-// 	// !!!!!! LAST UPDATE AUG 20. Based on HPC version but not tested, since non-HPC isn't enabled anywhere !!!!!! //
-// 	pltmt_step_t *s = (pltmt_step_t*) data;
-// 	uint64_t rid = s->n_seq0+idx_for;
-// 	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_for]);
-// 	if (!buf) {printf("[error::%s] malloc for buffer failed, thread %d, for_idx %ld.\n", __func__, tid, idx_for); exit(1);}
-// 	int k = s->p->opt->k;
-// 	ha_ct_t *h = s->p->h;
-
-// 	uint32_t idx = 0;  // index of kmer count in the buffer
-// 	khint_t key;
-// 	int i, l;
-// 	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
-// 	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_for]; ++i) {
-// 		int c = seq_nt4_table[(uint8_t)s->seq[idx_for][i]];
-// 		if (c < 4) { // not an "N" base
-// 			x[0] = (x[0] << 1 | (c&1))  & mask;
-// 			x[1] = (x[1] << 1 | (c>>1)) & mask;
-// 			x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
-// 			x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
-// 			if (++l >= k){
-// 					uint64_t hash = yak_hash_long(x);
-// 					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
-// 					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
-// 					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
-// 					else buf[idx] = 0;
-// 					idx++;
-// 				}
-// 		} else l = 0, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
-// 	}
-// 	double mean = meanl(buf, idx);
-// 	double std = stdl(buf, idx, mean);
-// 	radix_sort_hamt16(buf, buf+idx);
-// 	uint16_t median = (uint16_t)buf[idx/2];
-// 	uint8_t code = decide_category(mean, std, buf, idx);
-// 	s->p->rs_out->mean[rid] = mean;
-// 	s->p->rs_out->median[rid] = median;
-// 	s->p->rs_out->std[rid] = std;
-// 	s->p->rs_out->mask_readtype[rid] = code;
-// 	// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
-// 	free(buf);
-// 	// sequence will be freed by the caller
-// }
 
 #define HAMT_DISCARD 0x1
 #define HAMT_VIA_MEDIAN 0x2
@@ -1376,6 +1334,7 @@ static void callback_worker_process_one_read_either(void *data, long i, int tid)
 }
 
 
+// single thread version
 void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, int use_HPC){
 	// note: this function is not called by kt_for, it's linear
 	uint64_t rid = s->RIDs[idx_seq];
@@ -1419,11 +1378,20 @@ void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, 
 		exit(1);
 	}
 
+	// NOTE / BUG / TODO
+	//   (Oct 6 2020) ASan thought there's a heap-use-after-free error right here 
+	//		(or a few lines below at the yak_ct_get part), but I don't see why, 
+	//       and it never segfault without ASan, not sure if it's ASan false positive
+	//       or an obscure bug. With ASan it happens during the 2nd run of this step in kt_pipeline, 
+	//       but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	//   (Jan 7 2021) This happend again with r024-test. It was runing on a 5% subsampled
+	//       readset of the mock dataset. Only ASan complains, no segfaults.
+
 	// collect kmers 
 	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
 	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // runtime kmer frequency container
 	int idx_buf = 0;
-	int k = s->p->opt->k;  // NOTE / might have bugs (Oct 6 2020) ASan thought there's a heap-use-after-free error right here (or a few lines below at the yak_ct_get part), but I don't see why, and it won't segfault without ASan, not sure if it's ASan false positive or an obscure bug. It happens during the 2nd run of this step in kt_pipeline, but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	int k = s->p->opt->k;  
 	ha_ct_t *hd = s->p->hd;
 
 	uint32_t idx = 0;  // index of kmer count in the buffer
@@ -1487,7 +1455,120 @@ void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, 
 	free(buf_norm);
 }
 
+// threaded version of worker_process_one_read_inclusive
+void worker_process_one_read_inclusive2(pltmt_step_t *s, int idx_seq, int round, int use_HPC, int idx_cpu){
+	// no race, each thread has its own linear buffer.
+	uint64_t rid = s->RIDs[idx_seq];
+	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
+		return;
+	}
+	static int flag_round0_said_warning = 0;
+	static int flag_round1_said_warning = 0;
 
+	// early termination criteria
+	if (round==0){  // keep globally infrequent reads
+		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
+			if (!flag_round0_said_warning){
+				fprintf(stderr, "[W::%s] read limit reached while recruiting lowq reads. continue anyway\n", __func__);
+				flag_round0_said_warning = 1;
+			}
+		}
+		if (s->p->rs_in->median[rid]>300 || s->p->rs_in->lowq[rid]>50){
+			return ;
+		}
+	} else if (round==1){  // recruit remaining reads
+		if ((s->p->rs_in->mask_readnorm[rid] & 1)==0){  // this read is already kept
+			return ;
+		}
+		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
+			if (!flag_round1_said_warning){
+				fprintf(stderr, "[W::%s] read limit reached in round#2.\n", __func__);
+				flag_round1_said_warning = 1;
+			}
+			return ;
+		}
+	} else {
+		fprintf(stderr, "ERROR: %s invalid round.\n", __func__);
+		exit(1);
+	}
+
+	// NOTE / BUG / TODO (as-is note from single threaded version)
+	//   (Oct 6 2020) ASan thought there's a heap-use-after-free error right here 
+	//		(or a few lines below at the yak_ct_get part), but I don't see why, 
+	//       and it never segfault without ASan, not sure if it's ASan false positive
+	//       or an obscure bug. With ASan it happens during the 2nd run of this step in kt_pipeline, 
+	//       but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	//   (Jan 7 2021) This happend again with r024-test. It was runing on a 5% subsampled
+	//       readset of the mock dataset. Only ASan complains, no segfaults.
+
+	// collect kmers 
+	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
+	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // runtime kmer frequency container
+	int idx_buf = 0;
+	int k = s->p->opt->k;  
+	ha_ct_t *hd = s->p->hd;
+
+	uint32_t idx = 0;  // index of kmer count in the buffer
+	khint_t key;
+	int i, l, last = -1;
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	hamt_ch_buf_t *b = 0;// uint64_t *b = 0;
+
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_seq]; ++i) {
+		int c = seq_nt4_table[(uint8_t)s->seq[idx_seq][i]];
+		if (c < 4) { // not an "N" base
+			// if (c != last) {
+			if (c!=last || (!use_HPC)){
+				x[0] = (x[0] << 1 | (c&1))  & mask;
+				x[1] = (x[1] << 1 | (c>>1)) & mask;
+				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+				if (++l >= k){
+					uint64_t hash = yak_hash_long(x); 
+					buf[idx_buf++] = hash;
+					yak_ct_t *h_ = hd->h[hash & ((1<<hd->pre)-1)].h;  // runtime count hashtable
+					key = yak_ct_get(h_, hash>>hd->pre<<YAK_COUNTER_BITS1);
+					if (key!=kh_end(h_)){buf_norm[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+					else buf_norm[idx] = 1;  // because bf
+					idx++;
+				}
+				last = c;
+			}
+		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+	
+	int flag_is_keep_read = 0;
+	if (round==0) {flag_is_keep_read = 1;}  // median has been checked upfront
+	else if (round==1){
+		radix_sort_hamt16(buf_norm, buf_norm+idx);
+		if (buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10){
+			flag_is_keep_read = 1;
+		}
+	}
+
+	// flip mask and update linear buffer
+	if (flag_is_keep_read){
+		s->p->rs_out->mask_readnorm[rid] = 0;
+		s->p->nb_reads_kept++;
+		for (i=0; i<idx_buf; i++){
+			// b = &s->lnbuf[buf[i] & ((1<<hd->pre)-1)];// inert into linear buffer for kmer counting
+			b = &s->threaded_lnbuf[idx_cpu][buf[i] & ((1<<hd->pre)-1)];// inert into linear buffer for kmer counting
+			if ((b->n+3)>=b->m){
+				b->m = b->m<16? 16 : b->m+((b->m)>>1);
+				REALLOC(b->a, b->m);
+				assert(b->a);
+			}
+			b->a[b->n++] = buf[i];
+		}
+	}
+	free(buf);
+	free(buf_norm);
+}
+static void callback_worker_process_one_read_inclusive2(void *data, long i, int tid){
+	// callback of kt_for
+	pltmt_step_t *s = (pltmt_step_t*)data;
+	worker_process_one_read_inclusive2(s, (int)i, s->p->round, s->p->opt->is_HPC, tid);
+}
 
 static void *worker_mark_reads(void *data, int step, void *in){  // callback of kt_pipeline
 	plmt_data_t *p = (plmt_data_t*)data;
@@ -2246,6 +2327,28 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		else {return s;}
 	} else if (step==1){  // process reads
 		pltmt_step_t *s = (pltmt_step_t*)in;
+		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>16? 16 : s->p->opt->n_thread);
+
+		// allocate bufers
+		s->threaded_lnbuf = (hamt_ch_buf_t**)calloc(nb_cpu, sizeof(hamt_ch_buf_t*));
+		int n_pre = (1<<s->p->hd->pre);
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			s->threaded_lnbuf[i_cpu] = (hamt_ch_buf_t*)calloc(n_pre, sizeof(hamt_ch_buf_t));
+			for (int i=0; i<n_pre; i++){
+				s->threaded_lnbuf[i_cpu][i].a = (uint64_t*)malloc(16*sizeof(uint64_t));
+				s->threaded_lnbuf[i_cpu][i].m = 16;
+			}
+		}
+		kt_for(nb_cpu, callback_worker_process_one_read_inclusive2, s, s->n_seq);
+		int san = 0;
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			for (int i=0; i<n_pre; i++){
+				san+= s->threaded_lnbuf[i_cpu][i].n;
+			}
+		}
+
+		#if 0
+		// (single thread approach)
 		// note: do not use kt_for here, or it's race
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
@@ -2258,33 +2361,59 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		for (int i=0; i<1<<p->hd->pre; i++){
 			san+=s->lnbuf[i].n;
 		}
+		#endif
+		
+
 		p->accumulated_time_step2 += Get_T() - t_profiling;
 		if (san==0){  // linear buffer is empty, terminate
 			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
 			free(s->len); s->len = 0;
 			free(s->seq); s->seq = 0; 
+			for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+				for (int i=0; i<n_pre; i++){
+					free(s->threaded_lnbuf[i_cpu][i].a);
+				}
+				free(s->threaded_lnbuf[i_cpu]);
+			}
+			free(s->threaded_lnbuf);
+			#if 0
 			for (int i=0; i<1<<p->hd->pre; i++){
 				free(s->lnbuf[i].a);
 				}				
 			free(s->lnbuf);
+			#endif
 			free(s->RIDs);
 			free(s);
 		}else{
 			return s;
 		}
-		// return s;
 	} else if (step==2){  // insert the linear buffer
 		pltmt_step_t *s = (pltmt_step_t*)in;
+		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>16? 16 : s->p->opt->n_thread);
+		int n_pre = (1<<s->p->hd->pre);
+
 		// update runtime hashtable
-		kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->hd->pre);
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			s->lnbuf = s->threaded_lnbuf[i_cpu];
+			kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->hd->pre);
+		}
 		// clean up
 		for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
 		free(s->len); s->len = 0;
 		free(s->seq); s->seq = 0; 
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			for (int i=0; i<n_pre; i++){
+				free(s->threaded_lnbuf[i_cpu][i].a);
+			}
+			free(s->threaded_lnbuf[i_cpu]);
+		}
+		free(s->threaded_lnbuf);
+		#if 0
 		for (int i=0; i<1<<p->hd->pre; i++){
 			free(s->lnbuf[i].a);
 			}				
 		free(s->lnbuf);
+		#endif
 		free(s->RIDs);
 		free(s);
 		p->accumulated_time_step3 += Get_T() - t_profiling;

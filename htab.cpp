@@ -19,6 +19,8 @@
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS1)  // used for histogram, so it refers to counter bits, not pre bits
 #define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS1)-1)
 
+#define KTPIPE_NB_CPU 32  // threaded step 2
+
 // #define HAMT_DIG_KMERRESCUE 30
 
 const unsigned char seq_nt4_table[256] = { // translate ACGT to 0123
@@ -546,6 +548,11 @@ typedef struct { // global data structure for kt_pipeline()
 	const All_reads *rs_in;
 	All_reads *rs_out;
 	All_reads *rs;  // hamt meta. ALWAYS carry this
+
+	// debug (profiling)
+	double accumulated_time_step1;
+	double accumulated_time_step2;
+	double accumulated_time_step3;
 } pl_data_t;
 
 typedef struct { // data structure for each step in kt_pipeline()
@@ -557,7 +564,8 @@ typedef struct { // data structure for each step in kt_pipeline()
 	char **seq;
 	ha_mz1_v *mz_buf;
 	ha_mz1_v *mz;
-	ch_buf_t *buf;
+	ch_buf_t *buf;  // linear buffer
+	ch_buf_t **threaded_buf;  // for threaded step2
 } st_data_t;
 
 static void worker_for_insert(void *data, long i, int tid) // callback for kt_for()
@@ -583,9 +591,62 @@ static void worker_for_mz(void *data, long i, int tid)
 	memcpy(s->mz[i].a, b->a, b->n * sizeof(ha_mz1_t));
 }
 
+typedef struct{
+	int is_use_minimizer;
+	st_data_t *s;
+	pl_data_t *p;
+}pl_step2_data_t;
+static void worker_count_step2sub_worker(void *data, long i, int tid){  // kt_for() callback
+	// Trade memory for speed at kmer counting step 2 (the middle step).
+	// The ovec will use a lot of mem anyway, so it doesn't matter too much
+	//  if kmer counting gets a few more buffers.
+	// A rough profiling by Get_T() suggested step2 is ~2x or slower than the other two steps.
+	pl_step2_data_t *pp = (pl_step2_data_t*)data;
+	pl_data_t *p = pp->p;
+	st_data_t *s = pp->s;
+
+	// handle read selection mask
+	if (p->flag & HAMTF_HAS_MARKS){
+		uint64_t rid = s->n_seq0+i;
+		assert(rid<R_INF.total_reads);
+		assert(rid<p->rs->hamt_stat_buf_size);
+		if (p->rs->mask_readnorm[rid] & 1) // initial marking hasn't finished; read is marked as dropped
+			{return;}
+	}
+
+	// count kmer/minimizers
+	if (!pp->is_use_minimizer){  // all kmers
+		if (p->opt->is_HPC){
+			count_seq_buf_HPC(s->threaded_buf[tid], p->opt->k, p->opt->pre, s->len[i], s->seq[i]);
+		}else{
+			count_seq_buf(s->threaded_buf[tid], p->opt->k, p->opt->pre, s->len[i], s->seq[i]);
+		}
+	}else{  // minimizers
+		if (p->pt){
+			for (uint32_t j = 0; j < s->mz[i].n; ++j)
+				pt_insert_buf(s->threaded_buf[tid], p->opt->pre, &s->mz[i].a[j]);
+		}else{
+			for (uint32_t j = 0; j < s->mz[i].n; ++j)
+				ct_insert_buf(s->threaded_buf[tid], p->opt->pre, s->mz[i].a[j].x);
+		}
+	}
+	if (!p->is_store) free(s->seq[i]);
+}
+void worker_count_step2sub(pl_data_t *p, st_data_t *s, int nb_cpu){
+	int is_use_minimizer = !(p->opt->w==1);
+
+	pl_step2_data_t pp;
+	pp.is_use_minimizer = is_use_minimizer;
+	pp.s = s;
+	pp.p = p;
+	
+	kt_for(nb_cpu, worker_count_step2sub_worker, &pp, s->n_seq);
+}
+
 static void *worker_count(void *data, int step, void *in) // callback for kt_pipeline()
 {
 	pl_data_t *p = (pl_data_t*)data;
+	double t_profiling = Get_T();
 	if (step == 0) { // step 1: read a block of sequences
 		int ret;
 		st_data_t *s;
@@ -655,43 +716,32 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 					break;
 			}
 		}
+		p->accumulated_time_step1 += Get_T() - t_profiling;
 		if (s->sum_len == 0) free(s);
 		else return s;
 	} else if (step == 1) { // step 2: extract k-mers
-		///s is the block of reads
 		st_data_t *s = (st_data_t*)in;
-		///for 0-th counting, n_pre = 4096
 		int i, n_pre = 1<<p->opt->pre, m;
+		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : p->opt->n_thread);
+
 		// allocate the k-mer buffer
-		CALLOC(s->buf, n_pre);
+		// CALLOC(s->buf, n_pre);
 		m = (int)(s->nk * 1.2 / n_pre) + 1;
-		//pre-allocate memory for each of 4096 buffer
-		for (i = 0; i < n_pre; ++i) {
-			s->buf[i].m = m;
-			///for 0-th counting, p->pt = NULL
-			if (p->pt) MALLOC(s->buf[i].b, m);
-			else MALLOC(s->buf[i].a, m);
-		}
-		// fill the buffer
-		///for 0-th counting, p->opt->w == 1
-		if (p->opt->w == 1) { // enumerate all k-mers
-			///scan all reads
-			for (i = 0; i < s->n_seq; ++i) {
-				//////////////////  meta   ////////////////////
-				// if (s->p->flag & HAMTF_FORCE_DONT_INIT){
-				if (p->flag & HAMTF_HAS_MARKS){
-					uint64_t rid = s->n_seq0+i;
-					assert(rid<p->rs->hamt_stat_buf_size);
-					if (p->rs->mask_readnorm[rid] & 1) // initial marking hasn't finished; read is marked as dropped
-						{continue;}
-				}
-				//////////////////////////////////////////////
-				if (p->opt->is_HPC)
-					count_seq_buf_HPC(s->buf, p->opt->k, p->opt->pre, s->len[i], s->seq[i]);
-				else
-					count_seq_buf(s->buf, p->opt->k, p->opt->pre, s->len[i], s->seq[i]);
-				if (!p->is_store) free(s->seq[i]);
+		s->threaded_buf = (ch_buf_t**)calloc(nb_cpu, sizeof(ch_buf_t*));
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			CALLOC(s->threaded_buf[i_cpu], n_pre);
+			for (i = 0; i < n_pre; ++i) {
+				///for 0-th counting, p->pt = NULL
+				s->threaded_buf[i_cpu][i].m = m;
+				if (p->pt) MALLOC(s->threaded_buf[i_cpu][i].b, m);  // if (p->pt) MALLOC(s->buf[i].b, m);
+				else MALLOC(s->threaded_buf[i_cpu][i].a, m);  // else MALLOC(s->buf[i].a, m);
 			}
+		}
+
+
+		// fill the buffer
+		if (p->opt->w == 1) { // enumerate all k-mers
+			worker_count_step2sub(p, s, nb_cpu);
 		} else { // minimizers only
 			uint32_t j;
 			// compute minimizers
@@ -704,41 +754,16 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 			for (i = 0; i < p->opt->n_thread; ++i)
 				free(s->mz_buf[i].a);
 			free(s->mz_buf);
+			
 			// insert minimizers
-			if (p->pt) {
-				for (i = 0; i < s->n_seq; ++i){
-					//////////////////  meta   ////////////////////
-					// if (p->flag & HAMTF_FORCE_DONT_INIT){
-					if (p->flag & HAMTF_HAS_MARKS){
-						uint64_t rid = s->n_seq0+i;
-						assert(rid<p->rs->hamt_stat_buf_size);
-						if (s->p->rs->mask_readnorm[rid] & 1) // initial marking hasn't finished; read is marked as dropped
-							{continue;}
-					}
-					//////////////////////////////////////////////
-					for (j = 0; j < s->mz[i].n; ++j)
-						pt_insert_buf(s->buf, p->opt->pre, &s->mz[i].a[j]);
-				}
-			} else {
-				for (i = 0; i < s->n_seq; ++i){
-					//////////////////  meta   ////////////////////
-					// if (p->flag & HAMTF_FORCE_DONT_INIT){
-					if (p->flag & HAMTF_HAS_MARKS){
-						uint64_t rid = s->n_seq0+i;
-						if (s->p->rs->mask_readnorm[rid] & 1) // initial marking hasn't finished; read is marked as dropped
-							{continue;}
-					}
-					//////////////////////////////////////////////
-					for (j = 0; j < s->mz[i].n; ++j)
-						ct_insert_buf(s->buf, p->opt->pre, s->mz[i].a[j].x);
-				}
-			}
+			worker_count_step2sub(p, s, nb_cpu);
+
 			for (i = 0; i < s->n_seq; ++i) {
 				free(s->mz[i].a);
-				if (!p->is_store) free(s->seq[i]);
 			}
 			free(s->mz);
 		}
+		p->accumulated_time_step2 += Get_T() - t_profiling;
 		///just clean seq
 		free(s->seq); free(s->len);
 		s->seq = 0, s->len = 0;
@@ -748,22 +773,34 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 		int i, n = 1<<p->opt->pre;
 		uint64_t n_ins = 0;
 		///for 0-th counting, p->pt = NULL
-		kt_for(p->opt->n_thread, worker_for_insert, s, n);
-		///n_ins is number of distinct k-mers
-		for (i = 0; i < n; ++i) {
-			n_ins += s->buf[i].n_ins;
-			if (p->pt) free(s->buf[i].b);
-			else free(s->buf[i].a);
+
+		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : p->opt->n_thread);
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			s->buf = s->threaded_buf[i_cpu];
+			kt_for(p->opt->n_thread, worker_for_insert, s, n);
+			for (int i_mer=0; i_mer<n; i_mer++){
+				n_ins += s->buf[i_mer].n_ins;
+			}
 		}
 		if (p->ct) p->ct->tot += n_ins;
 		if (p->pt) p->pt->tot_pos += n_ins;
-		free(s->buf);
+		
+		///n_ins is number of distinct k-mers
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			for (i = 0; i < n; ++i) {
+				if (p->pt) free(s->threaded_buf[i_cpu][i].b);
+				else free(s->threaded_buf[i_cpu][i].a);
+			}
+			free(s->threaded_buf[i_cpu]);
+		}
+		free(s->threaded_buf);
 		#if 0
 		fprintf(stderr, "[M::%s::%.3f*%.2f] processed %ld sequences; %ld %s in the hash table\n", __func__,
 				yak_realtime(), yak_cpu_usage(), (long)s->n_seq0 + s->n_seq,
 				(long)(p->pt? p->pt->tot_pos : p->ct->tot), p->pt? "positions" : "distinct k-mers");
 		#endif
 		free(s);
+		p->accumulated_time_step3 += Get_T() - t_profiling;
 	}
 	return 0;
 }
@@ -806,6 +843,12 @@ static ha_ct_t *yak_count(const yak_copt_t *opt, const char *fn, int flag, ha_pt
 		pl.ct = ha_ct_init(opt->k, opt->pre, opt->bf_n_hash, opt->bf_shift);
 	}
 	kt_pipeline(3, worker_count, &pl, 3);
+
+	fprintf(stderr, "[prof::%s] step 1 total %.2f s, step2 %.2f s, step3 %.2f s.\n",
+							__func__, pl.accumulated_time_step1, 
+									  pl.accumulated_time_step2,
+									  pl.accumulated_time_step3);
+
 	if (read_rs) {
 		destory_UC_Read(&pl.ucr);
 	} else {
@@ -976,6 +1019,7 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 		extra_flag2 = HAF_RS_READ;
 	}
 	if (asm_opt->is_use_exp_graph_cleaning){
+		fprintf(stderr, "[M::%s] counting - minimzers\n", __func__);
 		ct = ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag1|HAMTF_FORCE_DONT_INIT, NULL, flt_tab, rs);  // collect minimizer (aware of high freq filter)
 	}else{
 		if(is_hp_mode) extra_flag1 |= HAF_SKIP_READ, extra_flag2 |= HAF_SKIP_READ;
@@ -1004,8 +1048,13 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 		for (i = 2, tot_cnt = 0; i <= YAK_MAX_COUNT - 1; ++i) tot_cnt += cnt[i] * i;
 	}
 	pt = ha_pt_gen(ct, asm_opt->thread_num); // prepare the slots
+	fprintf(stderr, "[M::%s] counting - minimzer positions\n", __func__);
 	ha_count(asm_opt, HAF_COUNT_EXACT|extra_flag2|HAMTF_FORCE_DONT_INIT, pt, flt_tab, rs);  // collect positional info
+	
+	fprintf(stderr, "[debug::%s] tot_cnt is %" PRIu64", pt->tot_pos is %" PRIu64 "\n", __func__,
+					tot_cnt, pt->tot_pos);
 	assert((uint64_t)tot_cnt == pt->tot_pos);
+	
 	//ha_pt_sort(pt, asm_opt->thread_num);
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> indexed %ld positions\n", __func__,
 			yak_realtime(), yak_cpu_usage(), (long)pt->tot_pos);
@@ -1119,6 +1168,12 @@ typedef struct {  // global data structure for pipeline (pl_data_t)
 	int nb_reads_kept;  
 	int nb_reads_limit;
 	int runtime_median_threshold;
+
+	// debug (profiling)
+	double accumulated_time_step1;
+	double accumulated_time_step2;
+	double accumulated_time_step3;
+
 }plmt_data_t;
 
 typedef struct {  // step data structure (st_data_t)
@@ -1128,12 +1183,13 @@ typedef struct {  // step data structure (st_data_t)
 	int *len;
 	char **seq;
 	hamt_ch_buf_t *lnbuf;  // $n_seq linear buffers
+	hamt_ch_buf_t **threaded_lnbuf;  // step 2 is slow, trade memory for speed
 	// exp
 	uint64_t *RIDs;
-}pltmt_step_t;
+}plmt_step_t;
 
 static void worker_insert_lnbuf(void* data, long idx_for, int tid){
-	pltmt_step_t *s = (pltmt_step_t*) data;
+	plmt_step_t *s = (plmt_step_t*) data;
 	uint64_t *buf = s->lnbuf[idx_for].a;
 	uint64_t n = s->lnbuf[idx_for].n;
 	yak_ct_t *h = s->p->hd->h[idx_for].h;
@@ -1147,55 +1203,12 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 	}
 }
 
-// static void worker_process_one_read(void* data, long idx_for, int tid){
-// 	// !!!!!! LAST UPDATE AUG 20. Based on HPC version but not tested, since non-HPC isn't enabled anywhere !!!!!! //
-// 	pltmt_step_t *s = (pltmt_step_t*) data;
-// 	uint64_t rid = s->n_seq0+idx_for;
-// 	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_for]);
-// 	if (!buf) {printf("[error::%s] malloc for buffer failed, thread %d, for_idx %ld.\n", __func__, tid, idx_for); exit(1);}
-// 	int k = s->p->opt->k;
-// 	ha_ct_t *h = s->p->h;
-
-// 	uint32_t idx = 0;  // index of kmer count in the buffer
-// 	khint_t key;
-// 	int i, l;
-// 	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
-// 	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_for]; ++i) {
-// 		int c = seq_nt4_table[(uint8_t)s->seq[idx_for][i]];
-// 		if (c < 4) { // not an "N" base
-// 			x[0] = (x[0] << 1 | (c&1))  & mask;
-// 			x[1] = (x[1] << 1 | (c>>1)) & mask;
-// 			x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
-// 			x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
-// 			if (++l >= k){
-// 					uint64_t hash = yak_hash_long(x);
-// 					yak_ct_t *h_ = h->h[hash & ((1<<h->pre)-1)].h;
-// 					key = yak_ct_get(h_, hash>>h->pre<<YAK_COUNTER_BITS1);
-// 					if (key!=kh_end(h_)){buf[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
-// 					else buf[idx] = 0;
-// 					idx++;
-// 				}
-// 		} else l = 0, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
-// 	}
-// 	double mean = meanl(buf, idx);
-// 	double std = stdl(buf, idx, mean);
-// 	radix_sort_hamt16(buf, buf+idx);
-// 	uint16_t median = (uint16_t)buf[idx/2];
-// 	uint8_t code = decide_category(mean, std, buf, idx);
-// 	s->p->rs_out->mean[rid] = mean;
-// 	s->p->rs_out->median[rid] = median;
-// 	s->p->rs_out->std[rid] = std;
-// 	s->p->rs_out->mask_readtype[rid] = code;
-// 	// printf("~%" PRIu64 "\t%f\t%f\t%d\n", rid, mean, std, code);
-// 	free(buf);
-// 	// sequence will be freed by the caller
-// }
 
 #define HAMT_DISCARD 0x1
 #define HAMT_VIA_MEDIAN 0x2
 #define HAMT_VIA_LONGLOW 0x4
 #define HAMT_VIA_KMER 0x8
-void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
+void worker_process_one_read_HPC(plmt_step_t *s, int idx_seq){
 	uint64_t rid;
 	if (/*s->p->asm_opt->readselection_sort_order==0 || */s->p->round==0)
 		{rid = s->n_seq0+idx_seq;}
@@ -1249,7 +1262,7 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 
 	free(buf);  // sequence will be freed by the caller	
 }
-void worker_process_one_read_noHPC(pltmt_step_t *s, int idx_seq){
+void worker_process_one_read_noHPC(plmt_step_t *s, int idx_seq){
 	// mirrored from the HPC version above (Dec 22 2020, ~r20)
 	uint64_t rid;
 	if (/*s->p->asm_opt->readselection_sort_order==0 || */s->p->round==0)
@@ -1305,8 +1318,26 @@ void worker_process_one_read_noHPC(pltmt_step_t *s, int idx_seq){
 	free(buf);  // sequence will be freed by the caller	
 }
 
+typedef struct{
+	plmt_data_t *p;
+	plmt_step_t *s;
+}pl_flt_withsorting;
 
-void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, int use_HPC){
+static void callback_worker_process_one_read_either(void *data, long i, int tid){
+	// callback of kt_for for 
+	//   - worker_process_one_read_HPC
+	//   - worker_process_one_read_noHPC
+	// (used by hamt_flt_withsorting)
+	pl_flt_withsorting *d = (pl_flt_withsorting*)data;
+	if (d->p->opt->is_HPC)
+		worker_process_one_read_HPC(d->s, i);
+	else
+		worker_process_one_read_noHPC(d->s, i);
+}
+
+
+// single thread version
+void worker_process_one_read_inclusive(plmt_step_t *s, int idx_seq, int round, int use_HPC){
 	// note: this function is not called by kt_for, it's linear
 	uint64_t rid = s->RIDs[idx_seq];
 	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
@@ -1326,8 +1357,12 @@ void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, 
 			}
 		}
 		if (s->p->rs_in->median[rid]>300 || s->p->rs_in->lowq[rid]>50){
+			// fprintf(stderr, "[debug::%s] round 0, median %d, lowq %d\n", __func__, 
+			// 							(int)s->p->rs_in->median[rid],
+			// 							(int)s->p->rs_in->lowq[rid]);
 			return ;
 		}
+		// fprintf(stderr, "[debug::%s] kept a read\n", __func__);
 	} else if (round==1){  // recruit remaining reads
 		// fprintf(stderr, "round1DEBUG: read %d, round %d, median %d, lowq %d.\n", (int)rid, round, (int)s->p->rs_in->median[rid], (int)s->p->rs_in->lowq[rid]);
 		if ((s->p->rs_in->mask_readnorm[rid] & 1)==0){  // this read is already kept
@@ -1345,11 +1380,20 @@ void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, 
 		exit(1);
 	}
 
+	// NOTE / BUG / TODO
+	//   (Oct 6 2020) ASan thought there's a heap-use-after-free error right here 
+	//		(or a few lines below at the yak_ct_get part), but I don't see why, 
+	//       and it never segfault without ASan, not sure if it's ASan false positive
+	//       or an obscure bug. With ASan it happens during the 2nd run of this step in kt_pipeline, 
+	//       but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	//   (Jan 7 2021) This happend again with r024-test. It was runing on a 5% subsampled
+	//       readset of the mock dataset. Only ASan complains, no segfaults.
+
 	// collect kmers 
 	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
 	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // runtime kmer frequency container
 	int idx_buf = 0;
-	int k = s->p->opt->k;  // NOTE / might have bugs (Oct 6 2020) ASan thought there's a heap-use-after-free error right here (or a few lines below at the yak_ct_get part), but I don't see why, and it won't segfault without ASan, not sure if it's ASan false positive or an obscure bug. It happens during the 2nd run of this step in kt_pipeline, but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	int k = s->p->opt->k;  
 	ha_ct_t *hd = s->p->hd;
 
 	uint32_t idx = 0;  // index of kmer count in the buffer
@@ -1413,13 +1457,127 @@ void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, 
 	free(buf_norm);
 }
 
+// threaded version of worker_process_one_read_inclusive
+void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, int use_HPC, int idx_cpu){
+	// no race, each thread has its own linear buffer.
+	uint64_t rid = s->RIDs[idx_seq];
+	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
+		return;
+	}
+	static int flag_round0_said_warning = 0;
+	static int flag_round1_said_warning = 0;
 
+	// early termination criteria
+	if (round==0){  // keep globally infrequent reads
+		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
+			if (!flag_round0_said_warning){
+				fprintf(stderr, "[W::%s] read limit reached while recruiting lowq reads. continue anyway\n", __func__);
+				flag_round0_said_warning = 1;
+			}
+		}
+		if (s->p->rs_in->median[rid]>300 || s->p->rs_in->lowq[rid]>50){
+			return ;
+		}
+	} else if (round==1){  // recruit remaining reads
+		if ((s->p->rs_in->mask_readnorm[rid] & 1)==0){  // this read is already kept
+			return ;
+		}
+		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
+			if (!flag_round1_said_warning){
+				fprintf(stderr, "[W::%s] read limit reached in round#2.\n", __func__);
+				flag_round1_said_warning = 1;
+			}
+			return ;
+		}
+	} else {
+		fprintf(stderr, "ERROR: %s invalid round.\n", __func__);
+		exit(1);
+	}
+
+	// NOTE / BUG / TODO (as-is note from single threaded version)
+	//   (Oct 6 2020) ASan thought there's a heap-use-after-free error right here 
+	//		(or a few lines below at the yak_ct_get part), but I don't see why, 
+	//       and it never segfault without ASan, not sure if it's ASan false positive
+	//       or an obscure bug. With ASan it happens during the 2nd run of this step in kt_pipeline, 
+	//       but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	//   (Jan 7 2021) This happend again with r024-test. It was runing on a 5% subsampled
+	//       readset of the mock dataset. Only ASan complains, no segfaults.
+
+	// collect kmers 
+	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
+	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // runtime kmer frequency container
+	int idx_buf = 0;
+	int k = s->p->opt->k;  
+	ha_ct_t *hd = s->p->hd;
+
+	uint32_t idx = 0;  // index of kmer count in the buffer
+	khint_t key;
+	int i, l, last = -1;
+	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
+	hamt_ch_buf_t *b = 0;// uint64_t *b = 0;
+
+	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_seq]; ++i) {
+		int c = seq_nt4_table[(uint8_t)s->seq[idx_seq][i]];
+		if (c < 4) { // not an "N" base
+			// if (c != last) {
+			if (c!=last || (!use_HPC)){
+				x[0] = (x[0] << 1 | (c&1))  & mask;
+				x[1] = (x[1] << 1 | (c>>1)) & mask;
+				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
+				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
+				if (++l >= k){
+					uint64_t hash = yak_hash_long(x); 
+					buf[idx_buf++] = hash;
+					yak_ct_t *h_ = hd->h[hash & ((1<<hd->pre)-1)].h;  // runtime count hashtable
+					key = yak_ct_get(h_, hash>>hd->pre<<YAK_COUNTER_BITS1);
+					if (key!=kh_end(h_)){buf_norm[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
+					else buf_norm[idx] = 1;  // because bf
+					idx++;
+				}
+				last = c;
+			}
+		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
+	}
+	
+	int flag_is_keep_read = 0;
+	if (round==0) {flag_is_keep_read = 1;}  // median has been checked upfront
+	else if (round==1){
+		radix_sort_hamt16(buf_norm, buf_norm+idx);
+		if (buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10){
+			flag_is_keep_read = 1;
+		}
+	}
+
+	// flip mask and update linear buffer
+	if (flag_is_keep_read){
+		s->p->rs_out->mask_readnorm[rid] = 0;
+		s->p->nb_reads_kept++;
+		for (i=0; i<idx_buf; i++){
+			// b = &s->lnbuf[buf[i] & ((1<<hd->pre)-1)];// inert into linear buffer for kmer counting
+			b = &s->threaded_lnbuf[idx_cpu][buf[i] & ((1<<hd->pre)-1)];// inert into linear buffer for kmer counting
+			if ((b->n+3)>=b->m){
+				b->m = b->m<16? 16 : b->m+((b->m)>>1);
+				REALLOC(b->a, b->m);
+				assert(b->a);
+			}
+			b->a[b->n++] = buf[i];
+		}
+	}
+	free(buf);
+	free(buf_norm);
+}
+static void callback_worker_process_one_read_inclusive2(void *data, long i, int tid){
+	// callback of kt_for
+	plmt_step_t *s = (plmt_step_t*)data;
+	worker_process_one_read_inclusive2(s, (int)i, s->p->round, s->p->opt->is_HPC, tid);
+}
 
 static void *worker_mark_reads(void *data, int step, void *in){  // callback of kt_pipeline
 	plmt_data_t *p = (plmt_data_t*)data;
+	double t_profiling = Get_T();
 	if (step==0){ // step 1: read a block of sequences
 		int ret;
-		pltmt_step_t *s;
+		plmt_step_t *s;
 		CALLOC(s, 1);
 		s->p = p;
 		s->n_seq0 = *p->n_seq;
@@ -1492,6 +1650,8 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 			}
 		}
 
+		p->accumulated_time_step1 += Get_T() - t_profiling;
+
 		if (s->sum_len == 0) {
 			free(s); 
 		}
@@ -1499,13 +1659,20 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 
 	}else if (step==1){  // step2: (round 0:)get kmer profile of each read && mark their status (mask_readtype and mask_readnorm) || (round 1:) count kmers into linear buffers, then insert into hashtables
 
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
+		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : p->opt->n_thread);
+		#if 0
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
 				worker_process_one_read_HPC(s, idx_seq);
 			else
 				worker_process_one_read_noHPC(s, idx_seq);
 		}
+		#endif
+		pl_flt_withsorting pld;
+		pld.p = p;
+		pld.s = s;
+		kt_for(nb_cpu, callback_worker_process_one_read_either, &pld, s->n_seq);
 		if (s->p->round==0){
 			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
 			free(s->len);
@@ -1516,20 +1683,8 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 		}else{  // insert the linear buffers
 			fprintf(stderr, "warn: shouldnt hit here; legacy read selection code??\n");
 			exit(1);
-			// assert(s->p->hd);
-			// kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->h->pre);
-			// // clean up
-			// for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
-			// free(s->len);
-			// free(s->seq);
-			// s->seq = 0; 
-			// s->len = 0;
-			// for (int i=0; i<1<<p->h->pre; i++){
-			// 	free(s->lnbuf[i].a);
-			// 	}				
-			// free(s->lnbuf);
-			// free(s);
 		}
+		p->accumulated_time_step2 += Get_T() - t_profiling;
 	}
 	return 0;
 }
@@ -1579,6 +1734,10 @@ void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h){
 		plmt.ks = kseq_init(fp);
 		init_UC_Read(&plmt.ucr);
 		kt_pipeline(2, worker_mark_reads, &plmt, 2);
+
+		fprintf(stderr, "[prof::%s] step1 total %.2f s, step2 %.2f s\n", __func__,
+								plmt.accumulated_time_step1, plmt.accumulated_time_step2);
+
 
 		if (rs->is_has_nothing){
 			rs->is_has_nothing = 0;
@@ -1689,12 +1848,12 @@ typedef struct {  // step data structure (st_data_t)
 	char **seq;
 	char **qname; int *qnamelen;
 	debugrkp_linearbuf_t *lnbuf;  // $n_seq linear buffers
-}debugrkp_pltmt_step_t;
+}debugrkp_plmt_step_t;
 
 
 static void worker_get_one_read_kmer_profile_noHPC(void* data, long idx_for, int tid) // insert k-mers in $seq to linear buffer $buf
 {
-	debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*) data;
+	debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*) data;
 	int i, l;
 	int k = s->p->opt->k;
 	char *seq = s->seq[idx_for];
@@ -1736,7 +1895,7 @@ static void worker_get_one_read_kmer_profile_noHPC(void* data, long idx_for, int
 
 static void worker_get_one_read_kmer_profile_HPC(void* data, long idx_for, int tid) // insert k-mers in $seq to linear buffer $buf
 {// ch_buf_t *buf, int k, int p, int len, const char *seq
-	debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*) data;
+	debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*) data;
 	int i, l, last = -1;
 	int k = s->p->opt->k;
 	char *seq = s->seq[idx_for];
@@ -1784,7 +1943,7 @@ static void *worker_read_kmer_profile(void *data, int step, void *in){  // callb
 	debugrkp_plmt_data_t *p = (debugrkp_plmt_data_t*)data;
 	if (step==0){ // step 1: read a block of sequences
 		int ret;
-		debugrkp_pltmt_step_t *s;
+		debugrkp_plmt_step_t *s;
 		CALLOC(s, 1);
 		s->p = p;
 		s->n_seq0 = *p->n_seq;
@@ -1843,14 +2002,14 @@ static void *worker_read_kmer_profile(void *data, int step, void *in){  // callb
 		else return s;
 
 	}else if (step==1){  // step2 get profile
-		debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*)in;
+		debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*)in;
 		if (p->opt->is_HPC)
 			kt_for(s->p->opt->n_thread, worker_get_one_read_kmer_profile_HPC, s, s->n_seq);
 		else
 			kt_for(s->p->opt->n_thread, worker_get_one_read_kmer_profile_noHPC, s, s->n_seq);
 		return s;
 	}else if(step==2){  // write to disk
-		debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*)in;
+		debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*)in;
 		int i;
 		for (int j=0; j<s->n_seq; j++){
 			fprintf(s->p->fp_out, "%s\t", s->qname[j]);
@@ -1991,7 +2150,7 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
     // interate over reads by the specified order, instead using the ordering from input file(s)
 	plmt_data_t *p = (plmt_data_t*)data;
 	if (step==0){ // collect reads
-		pltmt_step_t *s;
+		plmt_step_t *s;
 		// prepare s
 		CALLOC(s, 1);
 		s->p = p;
@@ -2085,7 +2244,7 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
 		}
 		else return s;
 	} else if (step==1){  // process reads
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
 		// note: do not use kt_for here, or it's race (that *doesn't always* but occassionally fail)! 
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
@@ -2117,8 +2276,9 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
 static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // callback of kt_pipeline
 	// mark all reads with a low enough lower quantile value to be included 
 	plmt_data_t *p = (plmt_data_t*)data;
+	double t_profiling = Get_T();
 	if (step==0){ // collect reads
-		pltmt_step_t *s;
+		plmt_step_t *s;
 		// prepare s
 		CALLOC(s, 1);
 		s->p = p;
@@ -2157,6 +2317,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 			s->sum_len += l;
 			s->nk += l >= p->opt->k? l - p->opt->k + 1 : 0;
 		}
+		p->accumulated_time_step1 += Get_T() - t_profiling;
 		if (s->sum_len == 0) {
 			for (int i=0; i<1<<p->hd->pre; i++){
 				free(s->lnbuf[i].a);
@@ -2167,7 +2328,29 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		}
 		else {return s;}
 	} else if (step==1){  // process reads
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
+		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
+
+		// allocate bufers
+		s->threaded_lnbuf = (hamt_ch_buf_t**)calloc(nb_cpu, sizeof(hamt_ch_buf_t*));
+		int n_pre = (1<<s->p->hd->pre);
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			s->threaded_lnbuf[i_cpu] = (hamt_ch_buf_t*)calloc(n_pre, sizeof(hamt_ch_buf_t));
+			for (int i=0; i<n_pre; i++){
+				s->threaded_lnbuf[i_cpu][i].a = (uint64_t*)malloc(16*sizeof(uint64_t));
+				s->threaded_lnbuf[i_cpu][i].m = 16;
+			}
+		}
+		kt_for(nb_cpu, callback_worker_process_one_read_inclusive2, s, s->n_seq);
+		int san = 0;
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			for (int i=0; i<n_pre; i++){
+				san+= s->threaded_lnbuf[i_cpu][i].n;
+			}
+		}
+
+		#if 0
+		// (single thread approach)
 		// note: do not use kt_for here, or it's race
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
@@ -2180,34 +2363,62 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		for (int i=0; i<1<<p->hd->pre; i++){
 			san+=s->lnbuf[i].n;
 		}
+		#endif
+		
+
+		p->accumulated_time_step2 += Get_T() - t_profiling;
 		if (san==0){  // linear buffer is empty, terminate
 			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
 			free(s->len); s->len = 0;
 			free(s->seq); s->seq = 0; 
+			for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+				for (int i=0; i<n_pre; i++){
+					free(s->threaded_lnbuf[i_cpu][i].a);
+				}
+				free(s->threaded_lnbuf[i_cpu]);
+			}
+			free(s->threaded_lnbuf);
+			#if 0
 			for (int i=0; i<1<<p->hd->pre; i++){
 				free(s->lnbuf[i].a);
 				}				
 			free(s->lnbuf);
+			#endif
 			free(s->RIDs);
 			free(s);
 		}else{
 			return s;
 		}
-		// return s;
 	} else if (step==2){  // insert the linear buffer
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
+		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
+		int n_pre = (1<<s->p->hd->pre);
+
 		// update runtime hashtable
-		kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->hd->pre);
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			s->lnbuf = s->threaded_lnbuf[i_cpu];
+			kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->hd->pre);
+		}
 		// clean up
 		for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
 		free(s->len); s->len = 0;
 		free(s->seq); s->seq = 0; 
+		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+			for (int i=0; i<n_pre; i++){
+				free(s->threaded_lnbuf[i_cpu][i].a);
+			}
+			free(s->threaded_lnbuf[i_cpu]);
+		}
+		free(s->threaded_lnbuf);
+		#if 0
 		for (int i=0; i<1<<p->hd->pre; i++){
 			free(s->lnbuf[i].a);
 			}				
 		free(s->lnbuf);
+		#endif
 		free(s->RIDs);
 		free(s);
+		p->accumulated_time_step3 += Get_T() - t_profiling;
 	} 
 	return 0;
 }
@@ -2244,6 +2455,7 @@ void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs
 	// all stats have been collected before this (global median etc + sorting by `hamt_flt_withsorting`)
 
 	memset(R_INF.mask_readnorm, 1, R_INF.total_reads);  // we will be including reads, not excluding
+	double t_profiling = Get_T();
 
 	uint64_t n_seq = 0;
 	yak_copt_t opt;
@@ -2269,6 +2481,8 @@ void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs
 	fprintf(stderr, "[M::%s] entering round#1...\n", __func__);
 	kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 3);
 	fprintf(stderr, "[M::%s] finished round#1, retaining %d reads.\n",__func__, plmt.nb_reads_kept);
+	fprintf(stderr, "[prof::%s] used %.2f s\n", __func__, Get_T() - t_profiling);
+	t_profiling = Get_T();
 
 	// 2nd pass: include reads until reaching the limit
 	// repack the stat
@@ -2285,6 +2499,10 @@ void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs
 			fprintf(stderr, "[M::%s] entering round#2, pass#%d...\n", __func__, rounds_of_dropping);
 			n_seq = 0;  // reset!
 			kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 3);
+			fprintf(stderr, "[prof::%s] step1 %.2f s, step2 %.2f s, step3 %.2f s\n", __func__, 
+									plmt.accumulated_time_step1, plmt.accumulated_time_step2, plmt.accumulated_time_step3);
+			fprintf(stderr, "[prof::%s] used %.2f s\n", __func__, Get_T() - t_profiling);
+			t_profiling = Get_T();
 
 			plmt.runtime_median_threshold +=50;  ///////////////50
 			rounds_of_dropping++;

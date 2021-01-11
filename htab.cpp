@@ -19,6 +19,8 @@
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS1)  // used for histogram, so it refers to counter bits, not pre bits
 #define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS1)-1)
 
+#define KTPIPE_NB_CPU 16  // threaded step 2
+
 // #define HAMT_DIG_KMERRESCUE 30
 
 const unsigned char seq_nt4_table[256] = { // translate ACGT to 0123
@@ -720,7 +722,7 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 	} else if (step == 1) { // step 2: extract k-mers
 		st_data_t *s = (st_data_t*)in;
 		int i, n_pre = 1<<p->opt->pre, m;
-		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>16? 16 : p->opt->n_thread);
+		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : p->opt->n_thread);
 
 		// allocate the k-mer buffer
 		// CALLOC(s->buf, n_pre);
@@ -772,7 +774,7 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 		uint64_t n_ins = 0;
 		///for 0-th counting, p->pt = NULL
 
-		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>16? 16 : p->opt->n_thread);
+		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : p->opt->n_thread);
 		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
 			s->buf = s->threaded_buf[i_cpu];
 			kt_for(p->opt->n_thread, worker_for_insert, s, n);
@@ -1658,7 +1660,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 	}else if (step==1){  // step2: (round 0:)get kmer profile of each read && mark their status (mask_readtype and mask_readnorm) || (round 1:) count kmers into linear buffers, then insert into hashtables
 
 		pltmt_step_t *s = (pltmt_step_t*)in;
-		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>24? 24 : p->opt->n_thread);
+		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : p->opt->n_thread);
 		#if 0
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
@@ -2327,7 +2329,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		else {return s;}
 	} else if (step==1){  // process reads
 		pltmt_step_t *s = (pltmt_step_t*)in;
-		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>16? 16 : s->p->opt->n_thread);
+		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
 
 		// allocate bufers
 		s->threaded_lnbuf = (hamt_ch_buf_t**)calloc(nb_cpu, sizeof(hamt_ch_buf_t*));
@@ -2389,7 +2391,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		}
 	} else if (step==2){  // insert the linear buffer
 		pltmt_step_t *s = (pltmt_step_t*)in;
-		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>16? 16 : s->p->opt->n_thread);
+		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
 		int n_pre = (1<<s->p->hd->pre);
 
 		// update runtime hashtable

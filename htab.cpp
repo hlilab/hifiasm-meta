@@ -19,7 +19,7 @@
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS1)  // used for histogram, so it refers to counter bits, not pre bits
 #define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS1)-1)
 
-#define KTPIPE_NB_CPU 16  // threaded step 2
+#define KTPIPE_NB_CPU 32  // threaded step 2
 
 // #define HAMT_DIG_KMERRESCUE 30
 
@@ -1186,10 +1186,10 @@ typedef struct {  // step data structure (st_data_t)
 	hamt_ch_buf_t **threaded_lnbuf;  // step 2 is slow, trade memory for speed
 	// exp
 	uint64_t *RIDs;
-}pltmt_step_t;
+}plmt_step_t;
 
 static void worker_insert_lnbuf(void* data, long idx_for, int tid){
-	pltmt_step_t *s = (pltmt_step_t*) data;
+	plmt_step_t *s = (plmt_step_t*) data;
 	uint64_t *buf = s->lnbuf[idx_for].a;
 	uint64_t n = s->lnbuf[idx_for].n;
 	yak_ct_t *h = s->p->hd->h[idx_for].h;
@@ -1208,7 +1208,7 @@ static void worker_insert_lnbuf(void* data, long idx_for, int tid){
 #define HAMT_VIA_MEDIAN 0x2
 #define HAMT_VIA_LONGLOW 0x4
 #define HAMT_VIA_KMER 0x8
-void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
+void worker_process_one_read_HPC(plmt_step_t *s, int idx_seq){
 	uint64_t rid;
 	if (/*s->p->asm_opt->readselection_sort_order==0 || */s->p->round==0)
 		{rid = s->n_seq0+idx_seq;}
@@ -1262,7 +1262,7 @@ void worker_process_one_read_HPC(pltmt_step_t *s, int idx_seq){
 
 	free(buf);  // sequence will be freed by the caller	
 }
-void worker_process_one_read_noHPC(pltmt_step_t *s, int idx_seq){
+void worker_process_one_read_noHPC(plmt_step_t *s, int idx_seq){
 	// mirrored from the HPC version above (Dec 22 2020, ~r20)
 	uint64_t rid;
 	if (/*s->p->asm_opt->readselection_sort_order==0 || */s->p->round==0)
@@ -1320,7 +1320,7 @@ void worker_process_one_read_noHPC(pltmt_step_t *s, int idx_seq){
 
 typedef struct{
 	plmt_data_t *p;
-	pltmt_step_t *s;
+	plmt_step_t *s;
 }pl_flt_withsorting;
 
 static void callback_worker_process_one_read_either(void *data, long i, int tid){
@@ -1337,7 +1337,7 @@ static void callback_worker_process_one_read_either(void *data, long i, int tid)
 
 
 // single thread version
-void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, int use_HPC){
+void worker_process_one_read_inclusive(plmt_step_t *s, int idx_seq, int round, int use_HPC){
 	// note: this function is not called by kt_for, it's linear
 	uint64_t rid = s->RIDs[idx_seq];
 	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
@@ -1458,7 +1458,7 @@ void worker_process_one_read_inclusive(pltmt_step_t *s, int idx_seq, int round, 
 }
 
 // threaded version of worker_process_one_read_inclusive
-void worker_process_one_read_inclusive2(pltmt_step_t *s, int idx_seq, int round, int use_HPC, int idx_cpu){
+void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, int use_HPC, int idx_cpu){
 	// no race, each thread has its own linear buffer.
 	uint64_t rid = s->RIDs[idx_seq];
 	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
@@ -1568,7 +1568,7 @@ void worker_process_one_read_inclusive2(pltmt_step_t *s, int idx_seq, int round,
 }
 static void callback_worker_process_one_read_inclusive2(void *data, long i, int tid){
 	// callback of kt_for
-	pltmt_step_t *s = (pltmt_step_t*)data;
+	plmt_step_t *s = (plmt_step_t*)data;
 	worker_process_one_read_inclusive2(s, (int)i, s->p->round, s->p->opt->is_HPC, tid);
 }
 
@@ -1577,7 +1577,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 	double t_profiling = Get_T();
 	if (step==0){ // step 1: read a block of sequences
 		int ret;
-		pltmt_step_t *s;
+		plmt_step_t *s;
 		CALLOC(s, 1);
 		s->p = p;
 		s->n_seq0 = *p->n_seq;
@@ -1659,7 +1659,7 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 
 	}else if (step==1){  // step2: (round 0:)get kmer profile of each read && mark their status (mask_readtype and mask_readnorm) || (round 1:) count kmers into linear buffers, then insert into hashtables
 
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
 		int nb_cpu = p->opt->n_thread<=1? 1 : (p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : p->opt->n_thread);
 		#if 0
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
@@ -1848,12 +1848,12 @@ typedef struct {  // step data structure (st_data_t)
 	char **seq;
 	char **qname; int *qnamelen;
 	debugrkp_linearbuf_t *lnbuf;  // $n_seq linear buffers
-}debugrkp_pltmt_step_t;
+}debugrkp_plmt_step_t;
 
 
 static void worker_get_one_read_kmer_profile_noHPC(void* data, long idx_for, int tid) // insert k-mers in $seq to linear buffer $buf
 {
-	debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*) data;
+	debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*) data;
 	int i, l;
 	int k = s->p->opt->k;
 	char *seq = s->seq[idx_for];
@@ -1895,7 +1895,7 @@ static void worker_get_one_read_kmer_profile_noHPC(void* data, long idx_for, int
 
 static void worker_get_one_read_kmer_profile_HPC(void* data, long idx_for, int tid) // insert k-mers in $seq to linear buffer $buf
 {// ch_buf_t *buf, int k, int p, int len, const char *seq
-	debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*) data;
+	debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*) data;
 	int i, l, last = -1;
 	int k = s->p->opt->k;
 	char *seq = s->seq[idx_for];
@@ -1943,7 +1943,7 @@ static void *worker_read_kmer_profile(void *data, int step, void *in){  // callb
 	debugrkp_plmt_data_t *p = (debugrkp_plmt_data_t*)data;
 	if (step==0){ // step 1: read a block of sequences
 		int ret;
-		debugrkp_pltmt_step_t *s;
+		debugrkp_plmt_step_t *s;
 		CALLOC(s, 1);
 		s->p = p;
 		s->n_seq0 = *p->n_seq;
@@ -2002,14 +2002,14 @@ static void *worker_read_kmer_profile(void *data, int step, void *in){  // callb
 		else return s;
 
 	}else if (step==1){  // step2 get profile
-		debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*)in;
+		debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*)in;
 		if (p->opt->is_HPC)
 			kt_for(s->p->opt->n_thread, worker_get_one_read_kmer_profile_HPC, s, s->n_seq);
 		else
 			kt_for(s->p->opt->n_thread, worker_get_one_read_kmer_profile_noHPC, s, s->n_seq);
 		return s;
 	}else if(step==2){  // write to disk
-		debugrkp_pltmt_step_t *s = (debugrkp_pltmt_step_t*)in;
+		debugrkp_plmt_step_t *s = (debugrkp_plmt_step_t*)in;
 		int i;
 		for (int j=0; j<s->n_seq; j++){
 			fprintf(s->p->fp_out, "%s\t", s->qname[j]);
@@ -2150,7 +2150,7 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
     // interate over reads by the specified order, instead using the ordering from input file(s)
 	plmt_data_t *p = (plmt_data_t*)data;
 	if (step==0){ // collect reads
-		pltmt_step_t *s;
+		plmt_step_t *s;
 		// prepare s
 		CALLOC(s, 1);
 		s->p = p;
@@ -2244,7 +2244,7 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
 		}
 		else return s;
 	} else if (step==1){  // process reads
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
 		// note: do not use kt_for here, or it's race (that *doesn't always* but occassionally fail)! 
 		for (int idx_seq=0; idx_seq<s->n_seq; idx_seq++){
 			if (p->opt->is_HPC)
@@ -2278,7 +2278,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 	plmt_data_t *p = (plmt_data_t*)data;
 	double t_profiling = Get_T();
 	if (step==0){ // collect reads
-		pltmt_step_t *s;
+		plmt_step_t *s;
 		// prepare s
 		CALLOC(s, 1);
 		s->p = p;
@@ -2328,7 +2328,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		}
 		else {return s;}
 	} else if (step==1){  // process reads
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
 		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
 
 		// allocate bufers
@@ -2390,7 +2390,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 			return s;
 		}
 	} else if (step==2){  // insert the linear buffer
-		pltmt_step_t *s = (pltmt_step_t*)in;
+		plmt_step_t *s = (plmt_step_t*)in;
 		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
 		int n_pre = (1<<s->p->hd->pre);
 

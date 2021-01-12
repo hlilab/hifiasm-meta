@@ -263,7 +263,7 @@ void write_All_reads(All_reads* r, char* read_file_name)
 
 	//  hamt modification - include misc info at the end of bin files
 	char* str_cmd = (char*)malloc(1000*sizeof(char));
-	sprintf(str_cmd, "version=%s, ", HA_VERSION);
+	sprintf(str_cmd, "hamt version=%s, ha base version=%s, ", HAMT_VERSION, HA_VERSION);
 	sprintf(str_cmd+strlen(str_cmd), "CMD=");
 	for (int j = 0; j < asm_argcv.ha_argc; ++j)
 		sprintf(str_cmd+strlen(str_cmd), " %s", asm_argcv.ha_argv[j]);
@@ -305,16 +305,18 @@ void write_All_reads(All_reads* r, char* read_file_name)
 	fwrite(&r->total_reads_bases, sizeof(r->total_reads_bases), 1, fp);
 	fwrite(&r->total_name_length, sizeof(r->total_name_length), 1, fp);
 
-	// hamt special
-	fwrite(r->mean, sizeof(double), r->total_reads, fp);
-	fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
-	fwrite(r->lowq, sizeof(uint16_t), r->total_reads, fp);
-	fwrite(r->std, sizeof(double), r->total_reads, fp);
-	fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
-	fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
+	if (asm_opt.is_use_exp_graph_cleaning){
+		// hamt special
+		fwrite(r->mean, sizeof(double), r->total_reads, fp);
+		fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
+		fwrite(r->lowq, sizeof(uint16_t), r->total_reads, fp);
+		fwrite(r->std, sizeof(double), r->total_reads, fp);
+		fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
+		fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
 
-	// hamt special 2: read error correction info
-	fwrite(r->nb_error_corrected, sizeof(uint16_t), r->total_reads, fp);
+		// hamt special 2: read error correction info
+		fwrite(r->nb_error_corrected, sizeof(uint16_t), r->total_reads, fp);
+	}
 
 	free(index_name);
 	fflush(fp);
@@ -465,6 +467,8 @@ int load_All_reads(All_reads* r, char* read_file_name)
 	fprintf(stderr, "Loading hamt bin...\n");
 
 	///////// hamt load from disk ///////////////
+	if (asm_opt.is_use_exp_graph_cleaning){
+
 	if (fp_hamt){
 		r->hamt_stat_buf_size = r->total_reads;
 		r->mean = (double*)malloc(r->total_reads*sizeof(double));
@@ -518,6 +522,8 @@ int load_All_reads(All_reads* r, char* read_file_name)
 	// hamt, ovec info
 	hamt_ovecinfo_load_from_disk(&asm_opt);
 	// hamt_ovecinfo_debugdump(&asm_opt);
+
+	}  // end of hamt loading
 
 	return 1;
 }

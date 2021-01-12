@@ -634,7 +634,9 @@ static void worker_ovec(void *data, long i, int tid)
 
     e1 = get_cigar_errors(&b->cigar1);
     e2 = get_cigar_errors(&b->round2.cigar);
-    R_INF.nb_error_corrected[i] += (uint16_t)e1 + (uint16_t)e2;
+    if (asm_opt.is_use_exp_graph_cleaning){
+        R_INF.nb_error_corrected[i] += (uint16_t)e1 + (uint16_t)e2;
+    }
 
 	R_INF.paf[i].is_fully_corrected = 0;
 	if (fully_cov) {
@@ -1501,7 +1503,9 @@ static void worker_ov_final(void *data, long i, int tid)
     ///Final_phasing(&overlap_list, &cigarline, &g_read, &overlap_read, c2n);
     push_final_overlaps(&(R_INF.paf[i]), R_INF.reverse_paf, &b->olist, 1);
     push_final_overlaps(&(R_INF.reverse_paf[i]), R_INF.reverse_paf, &b->olist, 2);
-    hamt_ovecinfo_workerpush(&R_INF.OVEC_INF, i, &b->olist);
+    if (asm_opt.is_use_exp_graph_cleaning){
+        hamt_ovecinfo_workerpush(&R_INF.OVEC_INF, i, &b->olist);
+    }
 
 }
 

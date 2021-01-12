@@ -39,6 +39,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "[M::%s] Hifiasm code base version: %s\n", __func__, HA_VERSION);
 		fprintf(stderr, "[M::%s] Hifiasm_meta version: %s\n", __func__, HAMT_VERSION);
 	}else{
+		fprintf(stderr, "[M::%s] (only for experiment) Disabled meta; note this is not identical to stable hifiasm\n", __func__);
 		ret = ha_assemble();
 		fprintf(stderr, "[M::%s] Hifiasm %s\n", __func__, HA_VERSION);
 	}

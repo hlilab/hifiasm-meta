@@ -28091,6 +28091,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     
     // hamt: spare some low coverage simple cases
     detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
+    // detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
     ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
@@ -28547,8 +28548,9 @@ long long bubble_dist, int read_graph, int write)
             max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
             output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 0);
         }
-        
-        write_debug_assembly_graph(sg, &R_INF, output_file_name);
+        if (asm_opt.is_use_exp_graph_cleaning){
+            write_debug_assembly_graph(sg, &R_INF, output_file_name);
+        }
 
         asg_destroy(sg);
         free(coverage_cut);

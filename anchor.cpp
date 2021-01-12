@@ -133,10 +133,6 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs, int sor
 
 }
 
-// void hamt_count_new_candidates_v2(int64_t rid, UC_Read *ucr, All_reads *rs){
-	
-
-// }
 
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain, kvec_t_u8_warp* k_flag,
 kvec_t_u64_warp* chain_idx, void *ha_flt_tab, ha_pt_t *ha_idx, overlap_region* f_cigar, kvec_t_u64_warp* dbg_ct)

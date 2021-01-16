@@ -1470,8 +1470,8 @@ int hamt_asgarc_util_checkSimpleBubble_edge(asg_t *g, uint32_t v0, int base_labe
             break;
         }
     }
-    if (i!=nv){
-        fprintf(stderr, "[W::%s] shouldn't happen; continue anyway\n", __func__);
+    if (i==nv){
+        fprintf(stderr, "[W::%s] shouldn't happen - failed to get the sibling edge; continue anyway\n", __func__);
         return 0;
     }
     if (hamt_asgarc_util_countPre(g, sib, 0, 0, base_label)!=1 || hamt_asgarc_util_countSuc(g, sib, 0, 0, base_label)!=1){  // compile note: is safe

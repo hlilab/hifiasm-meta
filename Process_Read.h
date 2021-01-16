@@ -113,6 +113,12 @@ typedef struct {
     ovecinfo_t *a;
 } ovecinfo_v;
 
+
+// #define hamt_ov_eq(a, b) ((a) == (b))
+// #define hamt_ov_hash(a) ((a))
+// KHASHL_SET_INIT(static klib_unused, hamt_ov_t, hamt_ov, uint64_t, hamt_ov_hash, hamt_ov_eq)
+
+
 typedef struct
 {
 	uint64_t** N_site;
@@ -153,8 +159,10 @@ typedef struct
     uint64_t *statpack;  // pack stat with readID for sorting
     uint64_t *nb_target_reads;  // experimental! guessed number of candiates, for triggering read selection
     int is_has_nothing, is_has_lengths, is_all_in_mem;
+    
     uint16_t *nb_error_corrected;  // collect number of error corrected during ovec
     ovecinfo_v OVEC_INF;
+    // void *hamt_existed_ov;  // containtment mitigation
 
     ///kvec_t_u64_warp* pb_regions;
 } All_reads;

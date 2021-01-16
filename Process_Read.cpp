@@ -181,6 +181,14 @@ void reset_All_reads(All_reads *r){
 void destory_All_reads(All_reads* r)
 {
 	uint64_t i = 0;
+	// if (asm_opt.is_use_exp_graph_cleaning){  // hamt containment mitigation
+	// 	for (int i=0; i<r->total_reads; i++){
+	// 		if (r->paf[i].length>0)
+	// 			free(r->paf[i].was_symm);
+	// 		if (r->reverse_paf[i].length>0)
+	// 		free(r->reverse_paf[i].was_symm);
+	// 	}
+	// }
 	for (i = 0; i < r->total_reads; i++) {
 		if (r->N_site[i]) free(r->N_site[i]);
 		if (r->read_sperate[i]) free(r->read_sperate[i]);
@@ -220,7 +228,7 @@ void destory_All_reads(All_reads* r)
 void write_All_reads(All_reads* r, char* read_file_name)
 {
     fprintf(stderr, "Writing reads to disk... \n");
-    char* index_name = (char*)malloc(strlen(read_file_name)+15);
+    char* index_name = (char*)malloc(strlen(read_file_name)+50);
     sprintf(index_name, "%s.bin", read_file_name);
     FILE* fp = fopen(index_name, "w");
 	fwrite(&asm_opt.adapterLen, sizeof(asm_opt.adapterLen), 1, fp);
@@ -318,10 +326,32 @@ void write_All_reads(All_reads* r, char* read_file_name)
 		fwrite(r->nb_error_corrected, sizeof(uint16_t), r->total_reads, fp);
 	}
 
-	free(index_name);
 	fflush(fp);
     fclose(fp);
 	fprintf(stderr, "[hamt::%s] Finished writing.\n", __func__); 
+
+	/////////// hamt containtment mitigation //////////////
+	// if (asm_opt.is_final_round){
+	// 	sprintf(index_name, "%s.was_symm.bin", read_file_name);
+	// 	fp = fopen(index_name, "w");
+	// 	// paf
+	// 	for (int i=0; i<r->total_reads; i++){
+	// 		fwrite(&r->paf[i].length, sizeof(uint32_t), 1, fp);
+	// 	}
+	// 	for (int i=0; i<r->total_reads; i++){
+	// 		fwrite(r->paf[i].was_symm, sizeof(uint8_t), r->paf[i].length, fp);
+	// 	}
+	// 	// reverse_paf
+	// 	for (int i=0; i<r->total_reads; i++){
+	// 		fwrite(&r->reverse_paf[i].length, sizeof(uint32_t), 1, fp);
+	// 	}
+	// 	for (int i=0; i<r->total_reads; i++){
+	// 		fwrite(r->reverse_paf[i].was_symm, sizeof(uint8_t), r->reverse_paf[i].length, fp);
+	// 	}
+	// 	fflush(fp);
+	// 	fclose(fp);
+	// }
+	free(index_name);
 }
 
 int load_All_reads(All_reads* r, char* read_file_name)

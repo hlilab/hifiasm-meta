@@ -426,10 +426,72 @@ ma_hit_t *get_specific_overlap_handle(ma_hit_t_alloc *sources, uint32_t qn, uint
 /////    graph methods   ////////
 /////////////////////////////////
 
+int hit_is_perfect_containment(ma_hit_t *hit){
+    uint32_t qs = (uint32_t)hit->qns;
+    uint32_t qn = (uint32_t)(hit->qns>>32);
+    if ( (qs==0 && hit->qe==R_INF.read_length[qn]) ||
+         (hit->ts==0 && hit->te==R_INF.read_length[hit->tn]) ){
+        return 1;
+    }
+    return 0;
+}
+void hamt_try_rescue_containment(ma_hit_t_alloc* sources, long long nb_reads){
+    // FUNC
+    //     Set reverse overlap for one-direction overlaps that happen to be perfect containments.
+    //     The added overlap will be in the same collection as the query.
+    // NOTE
+    //     Introduce to resolve a problem happens in very high coverage occasions (roughly >200x).
+    //     Doesn't align the other direction for double check.
+    //     This was done inside `normalize_ma_hit_t_single_side_advance`. Seperating out
+    //       for clarity.
+    //     The better way is to either a) verify this rescued overlap, or b) probe from the 
+    //       final ov. b) was clumsy. Do we need a)? (r27)
+    uint32_t qID, tID;
+    int rev_index;
+    ma_hit_t new_hit;
+    for (int i=0; i<nb_reads; i++){
+        for (int j=0; j<sources[i].length; j++){
+            qID = Get_qn(sources[i].buffer[j]);
+            tID = Get_tn(sources[i].buffer[j]);
+            rev_index = get_specific_overlap(&(sources[tID]), tID, qID);  // find ovlp of t->q
+            if ( (rev_index==-1) && (hit_is_perfect_containment(&sources[i].buffer[j])) ){
+                set_reverse_overlap(&new_hit, &(sources[i].buffer[j]));  // add the reversed overlap
+                add_ma_hit_t_alloc(&(sources[tID]), &new_hit);
+            }
+        }
+    }
+}
+
+void hamt_smash_haplotype(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, long long nb_reads){
+    // FUNC
+    //    Copy het overlaps into the hom buffer. Will not diallocate reverse_sources.
+    // NOTE
+    //    Introduced after tests in the marine sample. If the input has very low coverage (<10x everywhere),
+    //       and also contains many haplotypes, maybe ignore phasing for most of the time
+    //       can help to build a better graph.
+    uint32_t qID, tID;
+    int index;
+    ma_hit_t *hit;
+    for (int i=0; i<nb_reads; i++){
+        for (int j=0; j<reverse_sources[i].length; j++){
+            hit = &reverse_sources[i].buffer[j];
+            qID = Get_qn(*hit);
+            tID = Get_tn(*hit);
+
+            // check if the overlap is already present in the `sources` (e.g. added by a resuce)
+            index = get_specific_overlap(&(sources[qID]), qID, tID);
+            if (index!=-1) continue;
+
+            // copy the overlap
+            add_ma_hit_t_alloc(&(sources[qID]), hit);
+        }
+    }
+}
 
 void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long num_sources)
-{  // num_sources is fed n_read
+{
     double startTime = Get_T();
+    int verbose = 1;
 
     long long i, j, index;
     uint32_t qn, tn, is_del = 0;
@@ -479,9 +541,9 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
                 sources[tn].buffer[index].del = is_del;
             }
             else ///means this edge just occurs in one direction
-            {  // add the reversed overlap, but also set both to be deleted
-                set_reverse_overlap(&ele, &(sources[i].buffer[j]));
-                sources[i].buffer[j].del = ele.del = 1;
+            {  
+                set_reverse_overlap(&ele, &(sources[i].buffer[j]));  // add the reversed overlap
+                sources[i].buffer[j].del = ele.del = 1;  // but also delete it; note: assuming containment problem in high coverage occasions are already handled
                 add_ma_hit_t_alloc(&(sources[tn]), &ele);
             }
         }
@@ -15031,6 +15093,35 @@ int load_all_data_from_disk(ma_hit_t_alloc **sources, ma_hit_t_alloc **reverse_s
 		free(gfa_name);
 		return 0;
 	}
+
+    // /////////// hamt containtment bug resolve //////////////
+	// sprintf(gfa_name, "%s.ec.was_symm.bin", output_file_name);
+    // FILE *fp = fopen(gfa_name, "r");
+    // if (!fp){
+    //     fprintf(stderr, "symm file missing\n");
+    //     free(gfa_name);
+    //     return 0;
+    // }else{
+    //     // paf
+    //     for (int i=0; i<R_INF.total_reads; i++){
+    //         fread(&R_INF.paf[i].length, sizeof(uint32_t), 1, fp);
+    //     }
+    //     for (int i=0; i<R_INF.total_reads; i++){
+    //         R_INF.paf[i].was_symm = (uint8_t*)calloc(R_INF.paf[i].length, 1);
+    //         fread(R_INF.paf[i].was_symm, sizeof(uint8_t), R_INF.paf[i].length, fp);
+    //     }
+    //     // reverse paf
+    //     for (int i=0; i<R_INF.total_reads; i++){
+    //         fread(&R_INF.reverse_paf[i].length, sizeof(uint32_t), 1, fp);
+    //     }
+    //     for (int i=0; i<R_INF.total_reads; i++){
+    //         R_INF.reverse_paf[i].was_symm = (uint8_t*)calloc(R_INF.reverse_paf[i].length, 1);
+    //         fread(R_INF.reverse_paf[i].was_symm, sizeof(uint8_t), R_INF.reverse_paf[i].length, fp);
+    //     }
+    //     fclose(fp);
+    // }
+    
+
 	free(gfa_name);
 	return 1;
 }
@@ -23472,7 +23563,7 @@ char* output_file_name, ma_hit_t_alloc** reverse_sources, R_to_U* ruIndex, long 
     }
 
     R_INF.paf = (*sources); R_INF.reverse_paf = (*reverse_sources);
-    
+
     free(gfa_name);
     return 1;
 }
@@ -28071,6 +28162,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	ma_sub_t *coverage_cut = *coverage_cut_ptr;
 	asg_t *sg = *sg_ptr;
 
+    // extra rescues and others
+    if (asm_opt.is_mode_low_cov){
+        hamt_smash_haplotype(sources, reverse_sources, n_read);
+    }
+    hamt_try_rescue_containment(sources, n_read);
+
+
+
     if(debug_g) goto debug_gfa;
 
     ///just for debug
@@ -28079,7 +28178,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     ///it's hard to say which function is better       
     ///normalize_ma_hit_t_single_side(sources, n_read);
+    asm_opt.is_reverse_source = 0;
     normalize_ma_hit_t_single_side_advance(sources, n_read);  // TODO: faster?
+    asm_opt.is_reverse_source = 1;
     normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
     
 
@@ -28169,14 +28270,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             ///asg_arc_identify_simple_bubbles_multi(sg, 1);
             asg_arc_identify_simple_bubbles_multi(sg, 0);
             ///asg_arc_del_short_diploid_unclean_exact(sg, drop_ratio, sources);
-            if (ha_opt_triobin(&asm_opt))
-            {
-                asg_arc_del_short_diploid_by_exact_trio(sg, asm_opt.max_short_tip, sources);
-            }
-            else
-            {
-                asg_arc_del_short_diploid_by_exact(sg, asm_opt.max_short_tip, sources);
-            }
+
+            asg_arc_del_short_diploid_by_exact(sg, asm_opt.max_short_tip, sources);
             asg_cut_tip(sg, asm_opt.max_short_tip);
             /****************************may have bugs********************************/
 
@@ -28244,6 +28339,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         debug_gfa:;
         /*******************************for debug***************************************/
     }
+    if (asm_opt.write_new_graph_bins)
+        write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
     /**
     debug_ma_hit_t(sources, coverage_cut, n_read, max_hang_length, 
     mini_overlap_length);
@@ -28278,21 +28375,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     // hamt_destroy_utg_coverage(tmp_ug);
     // ma_ug_destroy(tmp_ug);
 
-    if (ha_opt_triobin(&asm_opt))
-    {
-		char *buf = (char*)calloc(strlen(output_file_name) + 25, 1);
-		sprintf(buf, "%s.dip", output_file_name);
-        output_unitig_graph(sg, coverage_cut, buf, sources, ruIndex, max_hang_length, mini_overlap_length);
-		free(buf);
-        
-        output_trio_unitig_graph(sg, coverage_cut, output_file_name, FATHER, sources, 
-        reverse_sources, bubble_dist, (asm_opt.max_short_tip*2), 0.15, 3, ruIndex, 
-        0.05, 0.9, max_hang_length, mini_overlap_length);
-        output_trio_unitig_graph(sg, coverage_cut, output_file_name, MOTHER, sources,
-        reverse_sources, bubble_dist, (asm_opt.max_short_tip*2), 0.15, 3, ruIndex, 
-        0.05, 0.9, max_hang_length, mini_overlap_length);
-    }
-    else
+
     {
         // r_utg
         output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
@@ -28307,26 +28390,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             int cleanID = 0;
 
             ma_ug_t *hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
-
-            // // rescue stuff
-            // {
-            //     char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-            //     sprintf(unlean_name, "%s.sgbefore", output_file_name);
-            //     output_read_graph(sg, coverage_cut, unlean_name, n_read);
-            //     output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-            //     free(unlean_name);
-            // }
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_hapgap", cleanID);
-            // hamt_ug_rescueLowCovHapGap_simple(sg, hamt_ug, sources, reverse_sources, coverage_cut, readLen);
-            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_hapgap", cleanID);
-            // {
-            //     char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-            //     sprintf(unlean_name, "%s.sgafters", output_file_name);
-            //     output_read_graph(sg, coverage_cut, unlean_name, n_read);
-            //     output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-            //     free(unlean_name);
-            // }
 
             // topo pre clean
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
@@ -28366,16 +28429,16 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // more topo cleaning
             hamt_ug_prectgTopoClean(sg, coverage_cut, sources, ruIndex, 0, 1, 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2_and_prectg", 0);}
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_oneutgCircleCut(sg, hamt_ug, 0);
 
             // one more round of basic topo cleaning
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", 0);}
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", 0);}
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
 
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_after", 0);}
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // resolve complex bubble
@@ -28525,7 +28588,7 @@ long long bubble_dist, int read_graph, int write)
         }
     }
     
-    // output stuff before the graph generating
+    // output stuff before generate graph
     if (asm_opt.write_index_to_disk && write)  // write_index_to_disk is always 1; write is !overlap_loaded
     {
         write_all_data_to_disk(sources, reverse_sources, 

@@ -2,6 +2,7 @@
 #include "htab.h"
 #include "ksort.h"
 #include "Hash_Table.h"
+#include "khashl.h"
 
 #define HA_KMER_GOOD_RATIO 0.333
 
@@ -21,6 +22,12 @@ KSORT_INIT(or_xs, overlap_region, oreg_xs_lt)
 
 #define oreg_ss_lt(a, b) ((a).shared_seed > (b).shared_seed) // in the decending order
 KSORT_INIT(or_ss, overlap_region, oreg_ss_lt)
+
+// hamt mitigation of lost containment 
+// #define hamt_ov_eq(a, b) ((a) == (b))
+// #define hamt_ov_hash(a) ((a))
+// KHASHL_SET_INIT(static klib_unused, hamt_ov_t, hamt_ov, uint64_t, hamt_ov_hash, hamt_ov_eq)
+
 
 typedef struct {
 	int n, good;
@@ -135,11 +142,17 @@ void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs, int sor
 
 
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain, kvec_t_u8_warp* k_flag,
-kvec_t_u64_warp* chain_idx, void *ha_flt_tab, ha_pt_t *ha_idx, overlap_region* f_cigar, kvec_t_u64_warp* dbg_ct)
+kvec_t_u64_warp* chain_idx, void *ha_flt_tab, ha_pt_t *ha_idx, overlap_region* f_cigar, kvec_t_u64_warp* dbg_ct,
+int thread_id)
 {
 	uint32_t i, rlen;
 	uint64_t k, l;
 	double low_occ, high_occ;
+	// hamt_ov_t **hs = (hamt_ov_t**)R_INF.hamt_existed_ov;
+	// hamt_ov_t *hamt_existed_ov=NULL; 
+	// if (asm_opt.is_final_round)
+	// 	hamt_existed_ov= hs[thread_id];  // need per thread hashtable, otherwise expanding the hashtable will be race
+
 	if (asm_opt.is_use_exp_graph_cleaning){
 		// might have bugs / TODO
 		low_occ = 5;  // hamt, this is and have been arbitrary from the beginning (Dec 25,2020). What's the better way or value?
@@ -201,8 +214,21 @@ kvec_t_u64_warp* chain_idx, void *ha_flt_tab, ha_pt_t *ha_idx, overlap_region* f
 		}
 	}
 
+	// (store the info of "an overlap has existed" before anything)
+	// if (asm_opt.is_final_round){
+	// 	int absent = 0;
+	// 	uint64_t key=0, key_new, xid=rid, yid, yid_old=0;
+	// 	for (int i_ov=0; i_ov<ab->n_a; i_ov++){
+	// 		overlap_region *handle = &overlap_list->list[i_ov];
+	// 		yid = ab->a[i_ov].srt>>33;
+	// 		key = xid<<(32+3) | (yid<<3);  // read id is actually at most 28bits. Here using last 6 bits for counting
+	// 		yid_old = yid;
+	// 		hamt_ov_put(hamt_existed_ov, key, &absent);
+	// 	}
+	// }
 
-	// copy over to _cl_
+
+	// copy over to cl
 	// (cl for Candidate List)
 	if (ab->m_a >= (uint64_t)cl->size) {
 		cl->size = ab->m_a;
@@ -231,6 +257,24 @@ kvec_t_u64_warp* chain_idx, void *ha_flt_tab, ha_pt_t *ha_idx, overlap_region* f
 	}
 	#endif
 
+	// If number of overlapping reads is more than the buffer length,
+	//   remove overlaps from the shortest ones.
+	// NOTE hamt r27 bug
+	//     For meta, up to around 200x coverage is ok, but higher than that, 
+	//       short containments might be dropped and cause the read graph
+	//       to be falsely complex - this has led to the problems
+	//       seen in zymo-std prevotella.
+	// // (store the info of "an overlap has existed" before anything)
+	// if (asm_opt.is_final_round){
+	// 	int absent = 0;
+	// 	uint64_t key;
+	// 	for (int i_ov=0; i_ov<overlap_list->length; i_ov++){
+	// 		overlap_region *handle = &overlap_list->list[i_ov];
+	// 		key = ((uint64_t)handle->x_id)<<32 | ((uint64_t)handle->y_id);
+	// 		hamt_ov_put(hamt_existed_ov, key, &absent);
+	// 	}
+	// }
+	// (drop shorter ones if have to)
 	if ((int)overlap_list->length > max_n_chain) {
 		int32_t w, n[4], s[4];
 		n[0] = n[1] = n[2] = n[3] = 0, s[0] = s[1] = s[2] = s[3] = 0;
@@ -290,17 +334,21 @@ void lable_matched_ovlp(overlap_region_alloc* overlap_list, ma_hit_t_alloc* paf)
 
 
 void ha_get_candidates_interface(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, overlap_region_alloc *overlap_list_hp, Candidates_list *cl, double bw_thres, 
-int max_n_chain, int keep_whole_chain, kvec_t_u8_warp* k_flag, kvec_t_u64_warp* chain_idx, ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, overlap_region* f_cigar, kvec_t_u64_warp* dbg_ct)
+int max_n_chain, int keep_whole_chain, kvec_t_u8_warp* k_flag, kvec_t_u64_warp* chain_idx, ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, overlap_region* f_cigar, kvec_t_u64_warp* dbg_ct,
+int thread_id)
 {
 	extern void *ha_flt_tab;
 	extern ha_pt_t *ha_idx;
 	extern void *ha_flt_tab_hp;
 	extern ha_pt_t *ha_idx_hp;
 
-	ha_get_new_candidates(ab, rid, ucr, overlap_list, cl, bw_thres, max_n_chain, keep_whole_chain, k_flag, chain_idx, ha_flt_tab, ha_idx, f_cigar, dbg_ct);
+	ha_get_new_candidates(ab, rid, ucr, overlap_list, cl, bw_thres, max_n_chain, keep_whole_chain, k_flag, chain_idx, ha_flt_tab, ha_idx, f_cigar, dbg_ct,
+						  thread_id);
 
 	if(ha_idx_hp)
 	{
+		// hamt note: is this block never envoked? ha_idx_hp is only calculated by rescue_hp_reads,
+		//            and rescue_hp_reads isn't called anywhere.
 		uint32_t i, k, y_id, overlapLen, max_i;
 		int shared_seed;
 		overlap_region t;
@@ -327,7 +375,8 @@ int max_n_chain, int keep_whole_chain, kvec_t_u8_warp* k_flag, kvec_t_u64_warp* 
 		overlap_list->length = k;
 
 
-		ha_get_new_candidates(ab, rid, ucr, overlap_list_hp, cl, bw_thres, max_n_chain, keep_whole_chain, k_flag, chain_idx, ha_flt_tab_hp, ha_idx_hp, f_cigar, dbg_ct);	
+		ha_get_new_candidates(ab, rid, ucr, overlap_list_hp, cl, bw_thres, max_n_chain, keep_whole_chain, k_flag, chain_idx, ha_flt_tab_hp, ha_idx_hp, f_cigar, dbg_ct,
+								thread_id);	
 		
 		if(overlap_list->length + overlap_list_hp->length > overlap_list->size)
 		{

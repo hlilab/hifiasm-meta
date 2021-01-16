@@ -91,10 +91,12 @@ typedef struct {
     int is_dump_read_names;
     int is_use_exp_graph_cleaning;
     int is_dump_ovec_error_count;
-
     int lowq_thre_10;
-
     int write_debug_gfa;
+    int write_new_graph_bins;
+
+    int is_final_round, is_reverse_source;
+    int is_mode_low_cov;
     // end of hamt
     
 } hifiasm_opt_t;

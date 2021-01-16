@@ -975,7 +975,7 @@ void *ha_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, int *hom_cov, int i
 	if(is_hp_mode) ex_flag = HAF_RS_READ|HAF_SKIP_READ;
 	ha_ct_t *h;
 	h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN|ex_flag, NULL, NULL, rs);
-	if((asm_opt->flag & HA_F_VERBOSE_GFA))
+	if((asm_opt->flag & HA_F_VERBOSE_GFA) || asm_opt->write_new_graph_bins)
 	{
 		write_ct_index((void*)h, asm_opt->output_file_name);
 		// load_ct_index(&ha_ct_table, asm_opt->output_file_name);
@@ -1058,6 +1058,14 @@ ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_f
 	//ha_pt_sort(pt, asm_opt->thread_num);
 	fprintf(stderr, "[M::%s::%.3f*%.2f] ==> indexed %ld positions\n", __func__,
 			yak_realtime(), yak_cpu_usage(), (long)pt->tot_pos);
+
+	if (rs->is_has_nothing){
+		rs->is_has_nothing = 0;
+		rs->is_has_lengths = 1;
+	}else if (rs->is_has_lengths && (!rs->is_all_in_mem)){
+		rs->is_all_in_mem = 1;
+	}
+	
 	return pt;
 }
 

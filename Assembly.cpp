@@ -15,14 +15,21 @@
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>  // debug, for printing uint64
 #include "meta_util_debug.h"
+#include "khashl.h"
 
 void hamt_count_new_candidates(int64_t rid, UC_Read *ucr, All_reads *rs, int sort_mode);
 void ha_get_new_candidates(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, Candidates_list *cl, double bw_thres, int max_n_chain, int keep_whole_chain);
 void ha_get_candidates_interface(ha_abuf_t *ab, int64_t rid, UC_Read *ucr, overlap_region_alloc *overlap_list, overlap_region_alloc *overlap_list_hp, Candidates_list *cl, double bw_thres, 
-int max_n_chain, int keep_whole_chain, kvec_t_u8_warp* k_flag, kvec_t_u64_warp* chain_idx, ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, overlap_region* f_cigar, kvec_t_u64_warp* dbg_ct);
+    int max_n_chain, int keep_whole_chain, kvec_t_u8_warp* k_flag, kvec_t_u64_warp* chain_idx, ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, overlap_region* f_cigar, kvec_t_u64_warp* dbg_ct,
+    int tid);
 void ha_sort_list_by_anchor(overlap_region_alloc *overlap_list);
 
 KRADIX_SORT_INIT(radix64, uint64_t, uint64_t, sizeof(uint64_t))
+
+// #define hamt_ov_eq(a, b) ((a) == (b))
+// #define hamt_ov_hash(a) ((a))
+// KHASHL_SET_INIT(static klib_unused, hamt_ov_t, hamt_ov, uint64_t, hamt_ov_hash, hamt_ov_eq)
+
 
 All_reads R_INF;
 Debug_reads R_INF_FLAG;
@@ -617,7 +624,8 @@ static void worker_ovec(void *data, long i, int tid)
     int e1, e2;
 
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 
-    0.02, asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL);
+    0.02, asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,
+    tid);
 
 	clear_Cigar_record(&b->cigar1);
 	clear_Round2_alignment(&b->round2);
@@ -686,7 +694,8 @@ static void worker_ovec_related_reads(void *data, long i, int tid)
         int fully_cov, abnormal, q_idx = k;
 
         ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 
-        0.02, asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), &(R_INF_FLAG.candidate_count[q_idx]));
+        0.02, asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), &(R_INF_FLAG.candidate_count[q_idx]),
+        tid);
 
         clear_Cigar_record(&b->cigar1);
         clear_Round2_alignment(&b->round2);
@@ -1486,7 +1495,8 @@ static void worker_ov_final(void *data, long i, int tid)
 
 	//get_new_candidates(i, &g_read, &overlap_list, &array_list, &l, 0.001, 0);
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 0.001, 
-    asm_opt.max_n_chain, 0, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL);
+    asm_opt.max_n_chain, 0, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,
+    tid);
 
 	overlap_region_sort_y_id(b->olist.list, b->olist.length);
 
@@ -1560,7 +1570,8 @@ static void worker_ov_final_high_het(void *data, long i, int tid)
     ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, HIGH_HET_ERROR_RATE, 
-    asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL);
+    asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,
+    tid);
 
     overlap_region_sort_y_id(b->olist.list, b->olist.length);
     ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
@@ -1854,6 +1865,83 @@ void ha_overlap_final(void)
     asm_opt.het_cov = het_cov;
 }
 
+// // NOTE: deprecated; also did not work properly in the full dataset, if reuse please checkup
+// static void hamt_migrate_existed_ov_worker(void *data, long i, int tid){
+//     hamt_ov_t **hs = (hamt_ov_t **)data;
+//     hamt_ov_t *h;
+//     uint64_t xid, yid, key1, key2;
+//     int absent;
+//     khint_t k1, k2;
+
+//     ma_hit_t_alloc *paf_handle = &R_INF.paf[i];
+//     for (int i_h=0; i_h<asm_opt.thread_num; i_h++){  // iterate over thread hashtables
+//         h = hs[i_h];
+//         // note that the hashtables do not discriminate between hom and het
+
+//         for (int i_ov=0; i_ov<paf_handle->length; i_ov++){
+//             xid = paf_handle->buffer[i_ov].qns>>32;
+//             yid = (uint64_t)paf_handle->buffer[i_ov].tn;
+//             key1 = (yid<<32) | xid;
+//             // key2 = (xid<<32) | yid;
+//             k1 = hamt_ov_get(h, key1);
+//             // k2 = hamt_ov_get(h, key2);
+//             if (k1==kh_end(h) /*|| k2==kh_end(h)*/){
+//                 continue;
+//             }else{
+//                 paf_handle->was_symm[i_ov] = 1;
+//             }
+//         }
+
+//         paf_handle = &R_INF.reverse_paf[i];
+//         for (int i_ov=0; i_ov<paf_handle->length; i_ov++){
+//             xid = paf_handle->buffer[i_ov].qns>>32;
+//             yid = (uint64_t)paf_handle->buffer[i_ov].tn;
+//             key1 = (yid<<32) | xid;
+//             // key2 = (xid<<32) | yid;
+//             k1 = hamt_ov_get(h, key1);
+//             // k2 = hamt_ov_get(h, key2);
+//             if (k1==kh_end(h)/* || k2==kh_end(h)*/){
+//                 continue;
+//             }else{
+//                 paf_handle->was_symm[i_ov] = 1;
+//             }
+//         }
+//     }
+// }
+// void hamt_migrate_existed_ov(){  // an array of hashtables
+//     // (from hashtables to linear buffers; use after final ov)
+//     hamt_ov_t **hs = (hamt_ov_t**)R_INF.hamt_existed_ov;
+//     int n_h = asm_opt.thread_num;
+//     assert(hs);
+//     hamt_ov_t *h;
+//     fprintf(stderr, "[debug::%s] to migrate\n", __func__);
+
+//     // sancheck
+//     int nb = 0;
+//     for (int i=0; i<n_h; i++){
+//         h = hs[i];
+//         for (khint_t x=0; x<kh_end(h); x++){
+//             if (kh_exist(h, x)) nb++;
+//         }
+//     }
+//     fprintf(stderr, "[debug::%s] hashtable logged %d entires\n", __func__, nb);
+
+//     for (int i=0; i<R_INF.total_reads; i++){
+//         // fprintf(stderr, "read %d, paf length %d, reverse paf length %d\n", i, (int)R_INF.paf[i].length, (int)R_INF.reverse_paf[i].length);
+//         R_INF.paf[i].was_symm = (uint8_t*)calloc(R_INF.paf[i].length, 1);
+//         R_INF.reverse_paf[i].was_symm = (uint8_t*)calloc(R_INF.reverse_paf[i].length, 1);
+//     }
+    
+//     kt_for(asm_opt.thread_num, hamt_migrate_existed_ov_worker, hs, R_INF.total_reads);
+
+//     // cleanup
+//     for (int i=0; i<n_h; i++){
+//         h = hs[i];
+//         hamt_ov_destroy(h);
+//     }
+//     free(hs);
+// }
+
 int ha_assemble(void)
 {
 	extern void ha_extract_print_list(const All_reads *rs, int n_rounds, const char *o);
@@ -1917,6 +2005,11 @@ int hamt_assemble(void)
 {
 	extern void ha_extract_print_list(const All_reads *rs, int n_rounds, const char *o);
 	int r,/* hom_cov = -1*/ ovlp_loaded = 0;
+
+    asm_opt.hom_cov = 200;
+    asm_opt.het_cov = 200;
+    // hamt_ov_t **hamt_existed_ov = NULL;
+
 	if (asm_opt.load_index_from_disk && load_all_data_from_disk(&R_INF.paf, &R_INF.reverse_paf, asm_opt.bin_base_name)) {
 		ovlp_loaded = 1;
 		fprintf(stderr, "[M::%s::%.3f*%.2f] ==> loaded corrected reads and overlaps from disk\n", __func__, yak_realtime(), yak_cpu_usage());
@@ -1978,6 +2071,7 @@ int hamt_assemble(void)
 		// error correction
 		assert(asm_opt.number_of_round > 0);
         R_INF.nb_error_corrected = (uint16_t*)calloc(R_INF.total_reads, sizeof(uint16_t));
+        double t = Get_T();
 		for (r = 0; r < asm_opt.number_of_round; ++r) {
             fprintf(stderr, "\n\n[M::%s] entered read correction round %d\n", __func__, r+1);
 
@@ -1989,17 +2083,31 @@ int hamt_assemble(void)
 			fprintf(stderr, "[M::%s] # bases: %lld; # corrected bases: %lld; # recorrected bases: %lld\n", __func__,
 					asm_opt.num_bases, asm_opt.num_corrected_bases, asm_opt.num_recorrected_bases);
 			fprintf(stderr, "[M::%s] size of buffer: %.3fGB\n", __func__, asm_opt.mem_buf / 1073741824.0);
+            fprintf(stderr, "[probe::%s] used %.2f s\n", __func__, Get_T()-t);
+            t = Get_T();
 		}
 		if (asm_opt.flag & HA_F_WRITE_EC) Output_corrected_reads();
 
-		// overlap between corrected reads
+		// // overlap between corrected reads
+        // fprintf(stderr, "\n\n[M::%s] final overlap\n", __func__);
+        // hamt_existed_ov = (hamt_ov_t**)calloc(asm_opt.thread_num, sizeof(hamt_ov_t*));
+        // for (int i=0; i<asm_opt.thread_num; i++){
+        //     hamt_existed_ov[i] = hamt_ov_init();
+        // }
+        // R_INF.hamt_existed_ov = hamt_existed_ov;
+
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
         hamt_ovecinfo_init();
+        asm_opt.is_final_round = 1;
 		ha_overlap_final();
+
+        // hamt_migrate_existed_ov();
+
         // hamt_ovecinfo_debugdump(&asm_opt);  // TODO: bit flag
         hamt_ovecinfo_write_to_disk(&asm_opt);
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());
+        fprintf(stderr, "[probe::%s] used %.2f s\n", __func__, Get_T()-t);
 		ha_print_ovlp_stat(R_INF.paf, R_INF.reverse_paf, R_INF.total_reads);
 
 		ha_ft_destroy(ha_flt_tab);

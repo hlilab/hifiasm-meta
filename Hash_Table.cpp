@@ -729,11 +729,11 @@ void calculate_overlap_region_by_chaining(Candidates_list* candidates, overlap_r
     while (i < candidates->length)
     {
         chain_idx->a.n = 0;
-        current_ID = candidates->list[i].readID;
+        current_ID = candidates->list[i].readID;  // the target ID
         current_stand = candidates->list[i].strand;
 
         ///reference read
-        (*f_cigar).x_id = readID;
+        (*f_cigar).x_id = readID;  // the query ID (no strand bit)
         (*f_cigar).x_pos_strand = current_stand;
         ///query read
         (*f_cigar).y_id = current_ID;

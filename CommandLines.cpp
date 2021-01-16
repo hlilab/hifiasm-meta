@@ -38,6 +38,8 @@ static ko_longopt_t long_options[] = {
     { "lowq-10", ko_required_argument, 409}, // lower 10% quantile threshold
     { "inter-gfa", ko_no_argument, 413},  // write intermediate gfa files
     { "ban-meta", ko_no_argument, 414},  // use stable hifiasm route
+    { "lowcov", ko_no_argument, 415},  // input has very low coverage, copy het overlaps to hom (experimental)
+    { "refresh-dbg-gfa", ko_no_argument, 416},
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -492,6 +494,8 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         }
         else if (c == 413) {asm_opt->write_debug_gfa = 1;}
         else if (c == 414) {asm_opt->is_use_exp_graph_cleaning = 0;}
+        else if (c == 415) {asm_opt->is_mode_low_cov = 1;}
+        else if (c == 416) {asm_opt->write_new_graph_bins = 1;}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

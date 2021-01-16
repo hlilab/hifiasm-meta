@@ -67,6 +67,7 @@ typedef struct {
     uint32_t length;  // buffer's actual length
 	uint8_t is_fully_corrected;
 	uint8_t is_abnormal;
+	// uint8_t *was_symm;
 } ma_hit_t_alloc;
 
 

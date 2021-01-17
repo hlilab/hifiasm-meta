@@ -1614,7 +1614,7 @@ int hamt_asgarc_util_checkSimpleInvertBubble(asg_t *sg, uint32_t v0, uint32_t *w
 
 }
 
-int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buffer, int base_label){
+int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, uint32_t *buffer, int base_label){
     // FUNC
     //    pops the following structure:
     /*       v2---v5.
@@ -1632,6 +1632,8 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
    //    buffer is at least length 3.
    //    doesn't tolerate tips.
    //    also assumes only arc can be marked as del, not sequences (like most other funcs in hamt graph cleaning)
+   // NOTE2
+   //    if ug is not NULL, will assume g is auxsg and check contig length.
    // RETURN
    //    1 if found
    //    0 if none
@@ -1641,6 +1643,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
     uint32_t nv;
     asg_arc_t *av;
     int idx;
+    int max_contig_length = 100000;
 
     if (hamt_asgarc_util_countSuc(g, v0, 0, 0, base_label)!=2){
         if (verbose){fprintf(stderr, "    v0 failed\n");}
@@ -1724,6 +1727,19 @@ int hamt_asgarc_util_checkSimplePentaBubble(asg_t *g, uint32_t v0, uint32_t *buf
     buffer[0] = v2;
     buffer[1] = v4;
     buffer[2] = v6;
+
+    if (ug){  // restrict contig length
+        if (ug->u.a[v0>>1].len>max_contig_length ||
+            ug->u.a[v2>>1].len>max_contig_length ||
+            ug->u.a[v3>>1].len>max_contig_length ||
+            ug->u.a[v4>>1].len>max_contig_length ||
+            ug->u.a[v5>>1].len>max_contig_length ||
+            ug->u.a[v6>>1].len>max_contig_length){
+            if (verbose){fprintf(stderr, "    bubble contig length failed\n");}
+            return 0;
+        }
+    }
+
     return 1;
 }
 
@@ -1944,6 +1960,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
     asg_arc_t *av;
     int idx, color[2], n_suc, n_pre, linked;
     int nb_cut = 0;
+    int max_contig_length = 100000;
 
     uint32_t prv_va=0, prv_vb=0;
 
@@ -2019,6 +2036,12 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
         }
         if (verbose){fprintf(stderr, "    checkpoint 1\n");}
 
+        if (ug->u.a[w1[0]>>1].len>max_contig_length ||
+            ug->u.a[w1[1]>>1].len>max_contig_length ||
+            ug->u.a[w_tmp>>1].len>max_contig_length ){
+                return nb_cut;
+        }
+
         // get the two target on the other side, sancheck topo
         nv = asg_arc_n(auxsg, w1[1]);
         av = asg_arc_a(auxsg, w1[1]);
@@ -2030,7 +2053,10 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
             n_suc = hamt_asgarc_util_countSuc(auxsg, av[i].v, 0, 0, base_label);
             n_pre = hamt_asgarc_util_countPre(auxsg, av[i].v, 0, 0, base_label);
             if (n_suc>2){return nb_cut;}
-            if (w_tmp==v0){return nb_cut;}  // prevent circling back to handle
+            if (av[i].v==v0){return nb_cut;}  // prevent circling back to handle
+            if (ug->u.a[av[i].v>>1].len>max_contig_length){
+                return nb_cut;
+            }
 
             w2[n_pre-1] = av[i].v;
             color[n_pre-1] = 1;
@@ -2045,6 +2071,12 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
         // check if there's a cross arc
         if (w_tmp!=w2[1]){return nb_cut;}
         if (verbose){fprintf(stderr, "    checkpoint 3\n");}
+
+        // (restrict length)
+        if (ug->u.a[w2[0]>>1].len>max_contig_length ||
+            ug->u.a[w2[1]>>1].len>max_contig_length){
+                return nb_cut;
+        }
 
         // check w2's targets
         if (hamt_asgarc_util_countSuc(auxsg, w2[0], 0, 0, base_label)==1 && hamt_asgarc_util_countSuc(auxsg, w2[1], 0, 0, base_label)==2){
@@ -4611,6 +4643,9 @@ int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int a
     int nb_cut = 0;
 
     for (vu=0; vu<auxsg->n_seq*2; vu++){
+        if (ug->u.a[vu>>1].len>100000){
+            continue;
+        }
         if (verbose){fprintf(stderr, "[debug::%s] at utg%.6d\n", __func__, (int)(vu>>1)+1);}
         if (hamt_asgarc_util_checkSimpleInvertBubble(auxsg, vu, &wu, &uu, base_label)){  // note: uu's direction is adjusted for popping; no need to ^1
             if (ug->u.a[wu>>1].len>100000){
@@ -5276,6 +5311,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg,
     // note: will redo the unitig graph
     // assume graph is clean
     // pop all simple bubbles, apparent bubbles, pentagon bubbles (popping doesn't depend on coverage)
+    //  (length requirement is arbitrary)
     double startTime = Get_T();
     int verbose = 0;
 
@@ -5285,7 +5321,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg,
     asg_arc_t *av;
     int nb_pop = 0, round = 0;
 
-    for (round=0; round<5; round++){
+    for (round=0; round<3; round++){
         if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "prectg-TOPO", round);}
 
         nb_pop = 0;
@@ -5297,7 +5333,8 @@ void hamt_ug_prectgTopoClean(asg_t *sg,
         uint32_t penta_buf[3];
         int nb_penta_pop = 0;
         for (vu=0; vu<auxsg->n_seq*2; vu++){
-            if (hamt_asgarc_util_checkSimplePentaBubble(auxsg, vu, penta_buf, base_label)>0){
+            if (hamt_asgarc_util_checkSimplePentaBubble(ug, auxsg, vu, penta_buf, base_label)>0){
+
                 if (verbose){
                     fprintf(stderr, "[debug::%s] penta bubble pop: from utg%.6d , route utg%.6d utg%.6d utg%.6d\n", __func__,
                             (int)(vu>>1)+1, (int)(penta_buf[0]>>1)+1, (int)(penta_buf[1]>>1)+1, (int)(penta_buf[2]>>1)+1);
@@ -5633,7 +5670,7 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
     asg_t *auxsg = ug->g;
     uint32_t vu, nv, end, wu;
     asg_arc_t *av;
-    int nb_cut = 0, nb_tangles = 0;
+    int nb_cut = 0, nb_bubbles = 0;
 
     vecu64_t vec, vec_seen;
     vecu64_init(&vec);
@@ -5644,12 +5681,12 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
         // (expects vu to be the start of a complex bubble)
         if (hamt_ug_check_complexBubble(sg, ug, 500, vu, &end, base_label)>0){
             vecu64_push(&vec, ( ((uint64_t)vu)<<32 )|( (uint64_t)end ) );
-            nb_tangles++;
+            nb_bubbles++;
         }
     }
 
     uint64_t key, key_rev;
-    if (nb_tangles){
+    if (nb_bubbles){
         for (int i=0; i<vec.n; i++){  // TODO: this is ugly
             key = vec.a[i];
             vu = (uint32_t) (key>>32);
@@ -5703,7 +5740,7 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
     }
 
     if (VERBOSE){
-        fprintf(stderr, "[M::%s] dropped %d arcs for %d complex bubbles\n", __func__, nb_cut, nb_tangles);
+        fprintf(stderr, "[M::%s] dropped %d arcs for %d complex bubbles\n", __func__, nb_cut, nb_bubbles);
     }
     return nb_cut;
 }
@@ -6473,7 +6510,7 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
     int subgraph_size, non_tip_tigs;
     asg_t *auxsg = ug->g;
     uint32_t source, sink;  // source->...<-sink
-    int max_length, max_coverage;
+    int max_length, max_coverage, has_long_tig;
 
     vecu32_t buf;
     vecu32_init(&buf);
@@ -6486,10 +6523,12 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
     for (int idx_subgraph=0; idx_subgraph<max_label; idx_subgraph++){
         vecu32_reset(&buf);
 
-        // if the subgraph has only a few tigs, skip it
+        // if the subgraph has only a few tigs, or non of the tigs were long, skip it
+        has_long_tig = 0;
         subgraph_size = non_tip_tigs = 0;
         for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
             if (vu&1){continue;}  // only need to check  for one direction
+            if (ug->u.a[vu>>1].len>500000) {has_long_tig = 1;}
             if (ug->u.a[vu>>1].subg_label==idx_subgraph){
                 subgraph_size++;
                 vecu32_push(&buf, vu);
@@ -6500,7 +6539,7 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                     non_tip_tigs++;
             }
         }
-        if (subgraph_size<2 || non_tip_tigs<2){
+        if (subgraph_size<2 || non_tip_tigs<2 || !has_long_tig){
             continue;
         }
 
@@ -6525,8 +6564,8 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
 
                 if (source==sink) {continue;} // for hinted circular, it's source==(sink^1)
                 if (hamt_ug_check_localSourceSinkPair(ug, source, sink, &max_length, &max_coverage, base_label, 200)){
-                    if ( ((max_length>100000) && (ug->u.a[source>>1].len<300000) && (ug->u.a[sink>>1].len<300000)) ||   // note/TODO/bug: this is an arbitrary waterproof, trying to prevent weird cases (since we searched both directions during traversal to tolerate inversions/loops)
-                         (max_length>500000) ||  // e.g. mock1's large-inversion-risk subgraph
+                    if ( ((ug->u.a[source>>1].len<500000) && (ug->u.a[sink>>1].len<500000)) ||   // note/TODO/bug: this is an arbitrary waterproof, trying to prevent weird cases (since we searched both directions during traversal to tolerate inversions/loops)
+                         (max_length>500000) ||
                          (max_coverage > (ug->utg_coverage[source>>1]*2)) ||   // note/TODO/bug: also arbitrary, better safe than sorry for repeat elements
                          (max_coverage > (ug->utg_coverage[sink>>1]  *2)) ){
                         if (verbose){

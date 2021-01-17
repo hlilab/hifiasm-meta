@@ -28429,8 +28429,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // more topo cleaning
             hamt_ug_prectgTopoClean(sg, coverage_cut, sources, ruIndex, 0, 1, 0);
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2_and_prectg", 0);}
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2_and_prectg", 0);}
             hamt_ug_oneutgCircleCut(sg, hamt_ug, 0);
 
             // one more round of basic topo cleaning

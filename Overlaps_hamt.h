@@ -78,7 +78,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
                                     ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, R_to_U* ruIndex,
                                     const ma_sub_t* coverage_cut);
 
-int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
+int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop, int max_length);
 int hamt_ug_resolve_oneMultiLeafSoapBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 
 // exp
@@ -101,4 +101,18 @@ int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug
 void hamt_debug_get_diploid_info_about_all_branchings(ma_ug_t *ug, ma_hit_t_alloc *reverse_sources);
 
 
+
+
+
+
+
+
+
+
+// tmp
+int hamt_ug_pop_bubble(asg_t *sg,ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
+int hamt_ug_pop_miscbubble(asg_t *sg, ma_ug_t *ug, int base_label);
+int hamt_ug_pop_miscbubble_aggressive(asg_t *sg, ma_ug_t *ug, int base_label);
+int hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
+int hamt_ug_pop_tinyUnevenCircle(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 #endif // __OVERLAPS_HAMT__

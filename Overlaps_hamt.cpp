@@ -596,6 +596,7 @@ int hamt_ug_arc_flip_between(asg_t *sg, ma_ug_t *ug, uint32_t start, uint32_t en
             // mark
             if ((av[i].v>>1)!=(end>>1) && (av[i].v>>1)!=(start>>1)){
                 hamt_ug_utg_softdel(sg, ug, av[i].v, new_label);
+                fprintf(stderr, "[debug::%s] removed %.6d dir %d\n", __func__, (int)(av[i].v>>1)+1, (int)(av[i].v&1));
             }
             nb_cut++;
         }
@@ -2701,7 +2702,46 @@ void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int ma
 //                  higher-level routines (unitig graph)                             //
 ///////////////////////////////////////////////////////////////////////////////////////
 
-// TODO proper bi-directional SCC
+int hamt_asgarc_count_leads_to_howmany(asg_t *sg, uint32_t vu0){
+    // Given an edge v, count how many edges an be reached in this 
+    //   direction (without passing v in either direction)
+    int ret = 0;
+    queue32_t q;
+    queue32_init(&q);
+    uint32_t vu=vu0, nv;
+    asg_arc_t *av;
+    uint8_t *color = (uint8_t*)calloc(sg->n_seq, 1);
+    int is_initial = 1;
+
+    queue32_enqueue(&q, vu0);
+    color[vu>>1] = 1;
+
+    while (queue32_dequeue(&q, &vu)){
+        if (((vu>>1) == (vu0>>1)) ){  // 1st round special case
+            if (is_initial) {is_initial = 0;}
+            else continue;
+        }
+
+        nv = asg_arc_n(sg, vu);
+        av = asg_arc_a(sg, vu);
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            if (color[av[i].v>>1]==0){
+                queue32_enqueue(&q, av[i].v);
+                queue32_enqueue(&q, av[i].v^1);
+                color[av[i].v>>1] = 1;
+            }
+        }
+
+        color[vu>>1] = 2;
+    }
+    for (int i=0; i<sg->n_seq; i++){
+        if (color[i]) ret++;
+    }
+    free(color);
+    queue32_destroy(&q);
+    return ret;
+}
 
 
 int hamt_asgarc_detect_circleDFS(asg_t *sg, uint32_t v0, uint32_t w0, int allow_v0, int base_label){ // vu0 has direction; v2vu has directions
@@ -2939,6 +2979,9 @@ int hamt_asgarc_detect_circleDFS2(asg_t *sg, uint32_t v0, uint32_t w0, uint32_t 
 
 void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
 {
+    // NOTE
+    //     Do not cut if the non-circular part only as one or a few unitigs
+
     int verbose = 0;  // debug
     double startTime = Get_T();
 
@@ -2985,10 +3028,15 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
 
         // detect circles and cut
         if (hamt_asgarc_detect_circleDFS(auxsg, v, w, 0, base_label)){  // note: v and w is ug with direction
-            hamt_ug_arc_del(sg, ug, v, w, 1);
-            nb_cut++;
-            if (verbose){
-                fprintf(stderr, "[debug::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
+            // check the non-circular part, if it has only a few edges, do not cut
+            if (hamt_asgarc_count_leads_to_howmany(auxsg, v^1)<10){
+                ;
+            }else{  // cut
+                hamt_ug_arc_del(sg, ug, v, w, 1);
+                nb_cut++;
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
+                }
             }
         }
     }
@@ -3932,17 +3980,21 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
 //////////////////////////////////////////////////////////////
 //               resolve tangles etc                        //
 //////////////////////////////////////////////////////////////
-int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v0, uint32_t *end0, int base_label){
+int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v0, uint32_t *end0, int base_label,
+                                int max_length){
     // FUNC
     //    use a BFS variant to test if v0 is the start of a complex bubble (of size less than `max_size`)
     //    (complex bubble means: no inversion aka all vertices shall be discovered in only 1 direction,
     //                          no loop/circle)
     //    if so, arbitrarily chose a path from it and drop all the other arcs.
+    //    If max_length>0, this function returns 0 if any of the bubble edge is long than max_length
+    //    Another hidden criteria is any bubble edge shall not be significantly longer than the handle.
     // RETURN
     //    1 if yes (side effect: store the end vertex in *end0)
     //    0 if no
-    // NOTE
-    //    not sure if this is always correct. Haven't seen it break in practice, but have no proof.
+    // NOTE / TODO
+    //    This implementation misses a few cases (can be easily handled by other routines), 
+    //     but it can tolerates tips. 
 
     int verbose = 0;
 
@@ -3985,18 +4037,6 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
             }
         }
     }
-    // // (backward direction)
-    // if (hamt_asgarc_util_countPre(auxsg, vu^1, 0, 0)>0){
-    //     nv = asg_arc_n(auxsg, vu^1);
-    //     av = asg_arc_a(auxsg, vu^1);
-    //     for (uint32_t i=0; i<nv; i++){
-    //         if (av[i].del){continue;}
-    //         v_tmp = av[i].v^1;
-    //         if (hamt_asgarc_util_countSuc(auxsg, v_tmp, 0, 0)!=1){
-    //             return 0;
-    //         }
-    //     }
-    // }
 
     // BFS variant init
     queue32_t q[2];
@@ -4012,12 +4052,12 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     stacku32_t stack;
     stacku32_init(&stack);
 
-    int is_abnormal = 0, is_tangle = 0, nb_rounds = 0;
+    int is_abnormal = 0, is_complex_bubble = 0, nb_rounds = 0;
     int has_anything_happend = 1;
     int v0_special_flag = 1;
     
 
-    // test if we have a very simple tangle here
+    // test if we have a complex bubble here
     // a BFS variant:
     //     We have 2 queues. For each turn, check every element in queue a,
     //     for each white child node, if all of the child node's parents is seen *before the current round*,
@@ -4045,7 +4085,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
             if (nb_nodes_visited>1){
                 /////// update end0 ///////
                 queue32_dequeue(&q[iq], end0);
-                is_tangle = 1;
+                is_complex_bubble = 1;
                 if (verbose) {fprintf(stderr, "[debug::%s]     found end vertex utg%.6d\n", __func__, (int)((*end0)>>1)+1);}
                 break;
             }
@@ -4171,20 +4211,21 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     }
 
     // check length 
-    if (is_tangle && (v0==(*end0))){
+    if (is_complex_bubble && (v0==(*end0))){
         if (ug->u.a[v0>>1].len<(longest_length_in_bubble*2)){
-            is_tangle = 0;
+            is_complex_bubble = 0;
             if (verbose){
                 fprintf(stderr, "[debug::%s] detected complex bubble for handle utg%.6d but discarded bc length (v0 %d, longest %d)\n", __func__, (int)(v0>>1)+1, (int)ug->u.a[v0>>1].len, longest_length_in_bubble);
             }
         }
     }
+    if (max_length>0 && longest_length_in_bubble>max_length){is_complex_bubble = 0;}
 
     ////////// debug sanchecks /////////////
     for (uint32_t i=0; i<auxsg->n_seq*2; i++){  // color shouldn't be larger than 2
         if (color[i]>2){
             fprintf(stderr, "[debugERROR::%s] color can't be larger than 2 (utg%.6d)\n", __func__, (int)(i>>1)+1);fflush(stderr);
-            exit(1);
+            return 0;// exit(1);
         }
     }
     ////////////////////////////////////////
@@ -4194,7 +4235,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     stacku32_destroy(&stack);
     free(color);
 
-    return is_tangle;
+    return is_complex_bubble;
 }
 
 int hamt_ug_pop_complexBubble(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t end0, 
@@ -5663,7 +5704,8 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
 
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, 
-                                          int base_label, int alt_label, int is_hard_drop){
+                                          int base_label, int alt_label, int is_hard_drop,
+                                          int max_length){
     int verbose = 0;
 
     // ma_ug_t *ug = ma_ug_gen(sg);
@@ -5679,7 +5721,7 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
     for (vu=0; vu<auxsg->n_seq*2; vu++){
         if (base_label>=0 && auxsg->seq_vis[vu>>1]!=base_label) {continue;}
         // (expects vu to be the start of a complex bubble)
-        if (hamt_ug_check_complexBubble(sg, ug, 500, vu, &end, base_label)>0){
+        if (hamt_ug_check_complexBubble(sg, ug, 500, vu, &end, base_label, max_length)>0){
             vecu64_push(&vec, ( ((uint64_t)vu)<<32 )|( (uint64_t)end ) );
             nb_bubbles++;
         }
@@ -5722,7 +5764,7 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug,
         hamt_ug_cleanup_arc_by_labels(sg, ug);
     }
 
-    if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "resolveTangle_middle", 0);}
+    if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "resolveCompBubble_middle", 0);}
 
     // cut tips
     int nb_cut_tip = 1, nb_cut_tiny_circle = 1;
@@ -5938,7 +5980,7 @@ int hamt_ug_rescueLowCovHapGap_simple(asg_t *sg, ma_ug_t *ug,
                               const ma_sub_t* coverage_cut, uint64_t *readLen){
     // Join two low coverage unitigs if a het arc is available
     // WILL modify sources.
-    int verbose = 1;
+    int verbose = 0;
 
     int nb_treated = 0;
     asg_t *auxsg = ug->g;
@@ -6125,7 +6167,7 @@ int hamt_ughit_rescueLowCovHapGap_core(asg_t *sg, ma_ug_t *ug,
     //     Currently when looking for bridge read, this function only pick the 1st
     //       qualified candidate and doesn't check if there's more. This shouldn't
     //       matter too much?
-    int verbose = 1;
+    int verbose = 0;
     asg_t *auxsg = ug->g;
 
     if (hamt_ovlp_read_coverage_nbreads(sources, i_v, 0, readLen[i_v])>read_cov_threshold) {return 0;}  // coverage not low enough
@@ -6246,7 +6288,7 @@ void hamt_ughit_rescueLowCovHapGap(asg_t *sg, ma_ug_t *ug,
     // TODO
     //     Log ^this info. Might be useful for users.
     double startTime = Get_T();
-    int verbose = 1;
+    int verbose = 0;
 
     int nb_treated = 0;
     asg_t *auxsg = ug->g;
@@ -6408,20 +6450,39 @@ int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink,
                        int base_label, int alt_label){
     // NOTE
     //     direction is source->...<-sink
+    // RETURN
+    //     1 if popped something
+    //     0 otherwise
     int verbose = 0;
+    uint32_t vu, nv, wu;
+    asg_arc_t *av;
     asg_t *auxsg = ug->g;
+
+    // special case: self circle (shortcut or 1 unitig circle)
+    nv = asg_arc_n(auxsg, source);
+    av = asg_arc_a(auxsg, source);
+    for (int i=0; i<nv; i++){
+        if (av[i].del) continue;
+        if (av[i].v==source){
+            if (verbose) {fprintf(stderr, "[debug::%s] special case failure\n", __func__);}
+            return 0;
+        }
+    }
+
     stacku32_t s, visited;
     stacku32_init(&s);
     stacku32_init(&visited);  // directed IDs; linear search
-    uint32_t vu, nv, wu;
-    asg_arc_t *av;
     int is_exhausted, is_loop, ret=0, san=0;
     int is_hinted_circular = ((sink>>1) == (source>>1));
+    int is_reached_sink = 0;
 
     stacku32_push(&s, source);
+    stacku32_push(&visited, source);
+    stacku32_push(&visited, source^1);
+    stacku32_push(&visited, sink);
+    stacku32_push(&visited, sink^1);
     while (stacku32_pop(&s, &vu)){
-        is_loop = 0;
-        if (verbose) {fprintf(stderr, "[debug::%s]  at utg%.6d\n", __func__, (int)(vu>>1)+1);}
+        if (verbose) {fprintf(stderr, "[debug::%s]  at utg%.6d dir %d\n", __func__, (int)(vu>>1)+1, (int)(vu&1));}
         if (vu==(sink^1)){
             if (is_hinted_circular && (s.n==0)){  // special case: 1st pop of a hinted-circular subgraph, proceed to check child nodes
                 ;
@@ -6434,26 +6495,64 @@ int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink,
         nv = asg_arc_n(auxsg, vu);
         av = asg_arc_a(auxsg, vu);
         is_exhausted = 1;
-        for (int i=0; i<nv; i++){ // TODO: less arbitrary
+        is_loop = 0;
+        for (int i=nv-1; i>=0; i--){ // TODO: less arbitrary
             if (av[i].del) {continue;}
             if (auxsg->seq_vis[av[i].v>>1]!=base_label){continue;}
             wu = av[i].v;
-            if (stack32_is_in_stack(&visited, wu)) {continue;}
-            if (stack32_is_in_stack(&visited, wu^1)) {
-                is_loop = 1;
-                break;
+            if (stack32_is_in_stack(&visited, wu)) {
+                if (wu==(sink^1)){
+                    if (verbose) {fprintf(stderr, "[debug::%s]  reached sink(a)\n", __func__);}
+                    stacku32_push(&s, vu);  // put back current round's handle
+                    stacku32_push(&s, wu);
+                    is_reached_sink = 1;
+                    break;
+                }
+                if (verbose) fprintf(stderr, "[debug::%s    (utg%.6d already visited)\n", __func__, (int)(wu>>1)+1);
+                continue;
             }
+            if (stack32_is_in_stack(&visited, wu^1)) {
+                if (wu!=(sink^1)){
+                    is_loop = 1;
+                }else{
+                    if (verbose) {fprintf(stderr, "[debug::%s]  reached sink(b)\n", __func__);}
+                    is_reached_sink = 1;
+                    stacku32_push(&s, vu);  // put back current round's handle
+                    stacku32_push(&s, wu);
+                    break;
+                }
+            }
+            if (verbose) fprintf(stderr, "[debug::%s]     not exhausted: %.6d dir %d\n", __func__, 
+                                (int)(wu>>1)+1, (int)(wu&1));
             is_exhausted = 0;
+            break;
         }
-        if (is_loop){  // remove current node
-            if (verbose) {fprintf(stderr, "[debug::%s]     found looping at utg%.6d\n", __func__, (int)(wu>>1)+1);}
+
+        if (is_reached_sink){break;}
+        if (is_exhausted && is_loop){  // remove current node
+            if (verbose) {fprintf(stderr, "[debug::%s]     found looping(a) at utg%.6d, remove %.6d\n", 
+                                    __func__, (int)(wu>>1)+1, (int)(vu>>1)+1);}
                 continue;
         }
         if (!is_exhausted){  // step
-            if (verbose) {fprintf(stderr, "[debug::%s]      push %.6d\n", __func__, (int)(wu>>1)+1);}
-            stacku32_push(&s, vu);
-            stacku32_push(&s, wu);
-            stacku32_push(&visited, wu);
+            if (stack32_is_in_stack(&visited, wu^1)) {  // check if it's a loop
+                if (wu!=(sink^1)){
+                    if (verbose) {fprintf(stderr, "[debug::%s]     found looping(b) at utg%.6d, remove %.6d\n", 
+                                    __func__, (int)(wu>>1)+1, (int)(vu>>1)+1);}
+                    continue;
+                }else{
+                    if (verbose) {fprintf(stderr, "[debug::%s]  reached sink(c)\n", __func__);}
+                    is_reached_sink = 1;
+                    stacku32_push(&s, vu);  // put back current round's handle
+                    stacku32_push(&s, wu);
+                    break;
+                }
+            }else{
+                if (verbose) {fprintf(stderr, "[debug::%s]      push %.6d dir %d\n", __func__, (int)(wu>>1)+1, (int)(wu&1));}
+                stacku32_push(&s, vu);  // put back
+                stacku32_push(&s, wu);
+                stacku32_push(&visited, wu);
+            }
         }else{  // remove current node
             if (verbose) {fprintf(stderr, "[debug::%s]      removed %.6d\n", __func__, (int)(vu>>1)+1);}
             ;
@@ -6501,6 +6600,9 @@ finish:
     stacku32_destroy(&visited);
     return ret;
 }
+
+
+
 int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, 
                            int base_label, int alt_label){
     // FUNC
@@ -6527,12 +6629,11 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
         has_long_tig = 0;
         subgraph_size = non_tip_tigs = 0;
         for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
-            if (vu&1){continue;}  // only need to check  for one direction
+            // if (vu&1){continue;}  // only need to check  for one direction
             if (ug->u.a[vu>>1].len>500000) {has_long_tig = 1;}
             if (ug->u.a[vu>>1].subg_label==idx_subgraph){
                 subgraph_size++;
                 vecu32_push(&buf, vu);
-                vecu32_push(&buf, vu^1);
             }
             if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 &&
                 hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=0){
@@ -6554,6 +6655,11 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                     continue;
                 }
 
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] source %.6d sink %.6d \n", __func__, 
+                                            (int)(source>>1)+1, (int)(sink>>1)+1);
+                }
+
                 // // debug
                 // if (((source>>1)+1)!=1374) {continue;}
                 // if (((sink>>1)+1)!=2694) {continue;}
@@ -6562,10 +6668,13 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                 if (base_label>=0 && auxsg->seq_vis[source>>1]!=base_label) {continue;}
                 if (base_label>=0 && auxsg->seq_vis[sink>>1]!=base_label) {continue;}
 
-                if (source==sink) {continue;} // for hinted circular, it's source==(sink^1)
+                if (source==sink) {  // for hinted circular, it's source==(sink^1)
+                    if (verbose) fprintf(stderr, "[deubg::%s] skip becuase sink==source\n", __func__);
+                    continue;
+                } 
                 if (hamt_ug_check_localSourceSinkPair(ug, source, sink, &max_length, &max_coverage, base_label, 200)){
                     if ( ((ug->u.a[source>>1].len<500000) && (ug->u.a[sink>>1].len<500000)) ||   // note/TODO/bug: this is an arbitrary waterproof, trying to prevent weird cases (since we searched both directions during traversal to tolerate inversions/loops)
-                         (max_length>500000) ||
+                         ( (max_length>500000) && !(ug->u.a[sink>>1].len>max_length*2 || ug->u.a[source>>1].len>max_length*2)) ||
                          (max_coverage > (ug->utg_coverage[source>>1]*2)) ||   // note/TODO/bug: also arbitrary, better safe than sorry for repeat elements
                          (max_coverage > (ug->utg_coverage[sink>>1]  *2)) ){
                         if (verbose){

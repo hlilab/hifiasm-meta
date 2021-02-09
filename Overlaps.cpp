@@ -28509,7 +28509,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
-            if (asm_opt.write_debug_gfa) {hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);}
+            // if (asm_opt.write_debug_gfa) {hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);}
+
+            hamt_ug_pop_tinyFlatCircles(sg, hamt_ug, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterflatcircle", cleanID); cleanID++;}
+
             hamt_ug_destroy(hamt_ug);
         }  
 

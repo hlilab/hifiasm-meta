@@ -565,6 +565,8 @@ int hamt_ug_arc_flip_between(asg_t *sg, ma_ug_t *ug, uint32_t start, uint32_t en
     // mark every vertex between start and end with new_label
     // NOTE
     //     set label to -1 to ignore sequence label
+    int verbose = 0;
+
     uint8_t *color = (uint8_t*)calloc(ug->g->n_seq*2, 1);
     uint32_t vu, nv;
     asg_arc_t *av;
@@ -596,7 +598,9 @@ int hamt_ug_arc_flip_between(asg_t *sg, ma_ug_t *ug, uint32_t start, uint32_t en
             // mark
             if ((av[i].v>>1)!=(end>>1) && (av[i].v>>1)!=(start>>1)){
                 hamt_ug_utg_softdel(sg, ug, av[i].v, new_label);
-                fprintf(stderr, "[debug::%s] removed %.6d dir %d\n", __func__, (int)(av[i].v>>1)+1, (int)(av[i].v&1));
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] removed %.6d dir %d\n", __func__, (int)(av[i].v>>1)+1, (int)(av[i].v&1));
+                }
             }
             nb_cut++;
         }
@@ -615,7 +619,7 @@ void hamt_collect_utg_coverage(asg_t *sg, ma_ug_t *ug,
                                 ma_hit_t_alloc* sources, R_to_U* ruIndex){
     // FUNC
     //     collect unitig coverages and store in ug->utg_coverage
-    double startTime = Get_T();
+    // double startTime = Get_T();
 
     if (ug->utg_coverage){
         free(ug->utg_coverage);
@@ -626,10 +630,10 @@ void hamt_collect_utg_coverage(asg_t *sg, ma_ug_t *ug,
         ug->utg_coverage[i] = get_ug_coverage(&ug->u.a[i], sg, coverage_cut, sources, ruIndex, primary_flag);
     }
     free(primary_flag);
-    if (VERBOSE){
-        fprintf(stderr, "[M::%s] collected ug coverages.\n", __func__);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    // if (VERBOSE>1){
+    //     fprintf(stderr, "[M::%s] collected ug coverages.\n", __func__);
+    //     fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
+    // }
 }
 void hamt_destroy_utg_coverage(ma_ug_t *ug){
     if (ug->utg_coverage){
@@ -639,6 +643,7 @@ void hamt_destroy_utg_coverage(ma_ug_t *ug){
 }
 
 void hamt_ug_cleanup_arc_by_labels(asg_t *sg, ma_ug_t *ug){
+    // (legacy)
     // NOTE
     //     ma_ug_gen_primary only looks at the label when seeding unitig,
     //     so for soft cut we still need to drop some arcs.
@@ -1069,15 +1074,9 @@ int hamt_ug_arc_del_selfcircle(asg_t *sg, ma_ug_t *ug, uint32_t vu, int base_lab
     // }
     uint32_t nv;
     asg_arc_t *av;
-    nv = asg_arc_n(auxsg, vu);
-    av = asg_arc_a(auxsg, vu);
-    for (int i=0; i<nv; i++){
-        if (av[i].v==vu){
-            av[i].del = 1;
-            return 1;
-        }
-    }
-    return 0;
+
+    hamt_ug_arc_del(sg, ug, vu, vu, 1);
+    return 1;
 }
 
 
@@ -4855,6 +4854,93 @@ int hamt_ug_pop_tinyUnevenCircle(asg_t *sg, ma_ug_t *ug, int base_label, int alt
 
 }
 
+int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label){
+    /*
+    ------v0   v2-------
+           \  /
+            v1(a self circle unitig)
+     (v0 could equals v2)
+     (v0 and v2 can have other linkage)
+     If v1's coverage is similar to v0 and v2, then drop the 
+       self-circle arc for v1.
+    */
+   // RETURN
+   //     count of arcs dropped.
+    int verbose = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t v0, v1, v2, vtmp[2], w1, w2;
+    int cov0, cov1, cov2, diffa, diffb;
+    int total = 0;
+
+    for (v1=0; v1<auxsg->n_seq; v1++){
+        if (hamt_asgarc_util_countSuc(auxsg, v1, 0, 0, base_label)!=2 || 
+            hamt_asgarc_util_countPre(auxsg, v1, 0, 0, base_label)!=2
+            ){
+                continue;
+            }
+        hamt_asgarc_util_get_the_two_targets(auxsg, v1, &vtmp[0], &vtmp[1], 0, 0, base_label);
+        if (vtmp[0]!=v1 && vtmp[1]!=v1){continue;}  // v1 is not a self circle
+        if (vtmp[0]==v1 and vtmp[1]==v1){  // sancheck, should not happen
+            fprintf(stderr, "[E::%s] double arc at %.6d ? continue anyway\n", __func__, (int)(v1>>1));
+            continue;
+        }
+        v0 = vtmp[0]==v1? vtmp[1] : vtmp[0];
+
+        hamt_asgarc_util_get_the_two_targets(auxsg, v1^1, &vtmp[0], &vtmp[1], 0, 0, base_label);
+        if (vtmp[0]!=(v1^1) && vtmp[1]!=(v1^1)){ // should not happen, v1 is not a normal self circle
+            fprintf(stderr, "[E::%s] asym arc? %.6d\n", __func__, (int)(v1>>1));
+            continue;
+        }  
+        if (vtmp[0]==(v1^1) and vtmp[1]==(v1^1)){  // sancheck, should not happen
+            fprintf(stderr, "[E::%s] double arc at %.6d ? continue anyway\n", __func__, (int)(v1>>1));
+            continue;
+        }
+        v2 = vtmp[0]==(v1^1)? vtmp[1] : vtmp[0];
+
+        // collect coverage
+        cov0 = ug->utg_coverage[v0>>1];
+        cov1 = ug->utg_coverage[v1>>1];
+        cov2 = ug->utg_coverage[v2>>1];
+        diffa = cov1>cov0? cov1-cov0 : cov0-cov1;
+        w1 = cov1>cov0? cov1 : cov0;
+        diffb = cov2>cov0? cov2-cov0 : cov0-cov2;
+        w2 = cov2>cov0? cov2 : cov0;
+
+        // check coverage diff
+        if ((float)diffa/w1 > 0.3 || (float)diffb/w2 > 0.3){
+            continue;
+        }
+
+        // cut
+        total++;
+        if (verbose>1){
+            fprintf(stderr, "[debug::%s] v0 %.6d (%d)  v1 %.6d (%d)  v2 %.6d (%d)\n", __func__,
+                                (int)(v0>>1)+1, cov0,
+                                (int)(v1>>1)+1, cov1,
+                                (int)(v2>>1)+1, cov2);
+        }
+        assert(hamt_ug_arc_del_selfcircle(sg, ug, v1, base_label));
+        if ((v1>>1)==16){  // debug
+            uint32_t nv;
+            asg_arc_t *av;
+            nv = asg_arc_n(auxsg, v1);
+            av = asg_arc_a(auxsg, v1);
+            for (int i=0; i<nv; i++){
+                fprintf(stderr, "    (1) target %.6d del %d\n", (int)(av[i].v>>1)+1, (int)av[i].del);
+            }
+        }
+    }
+
+    if (verbose){
+        fprintf(stderr, "[debug::%s] treated %d spots\n", __func__, total);
+    }
+    if (total){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    return total;
+}
+
 
 
 int hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
@@ -6686,7 +6772,9 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                         if (hamt_ug_popTangles(sg, ug, source, sink, treated, base_label, alt_label)){
                             nb_treated++;
                         }else{
-                            fprintf(stderr, "[E::%s] failed to pop for: utg%.6d - utg%.6d\n", __func__, (int)(source>>1)+1, (int)(sink>>1)+1);
+                            if ((source>>1)!=(sink>>1)){
+                                fprintf(stderr, "[W::%s] did not pop: utg%.6d - utg%.6d\n", __func__, (int)(source>>1)+1, (int)(sink>>1)+1);
+                            }
                         }
                     }
                 }

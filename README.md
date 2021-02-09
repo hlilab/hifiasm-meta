@@ -31,7 +31,7 @@ Unitig/Contig naming: `^s[0-9]+\.[uc]tg[0-9]{6}[lc]` where the `s[0-9]+` is a su
 
 Based on the limited available test data, real datasets are unlikely to require read selection; mock datasets, however, might need it.
 
-Non-release commits, especially before r22, may produce extra debug outputs for dev purposes.
+Some old commits before r22 may produce extra debug outputs for dev purposes.
 
 Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm can use hifiasm\_meta's bin file, but not vice versa. Meta needs to store extra info from overlap & error correction step.
 
@@ -40,7 +40,7 @@ Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm c
 See also README\_ha.md, the stable hifiasm doc.
 
 ```
-#Interface
+# Interface
 -B		Name of bin files. Allows to use bin files from other 
        		directories.
 
@@ -51,11 +51,19 @@ See also README\_ha.md, the stable hifiasm doc.
                  look realistic, won't do selection.)
 --lowq-10       Lower 10% quantile kmer frequency threshold, runtime. Lower value means less reads kept, if read selection is triggered. [150]
 
+# Assembly
+--lowcov        (Experimental) Ignore almost all phasing info. Try this if input has very low coverage (e.g. <10).
+
+# Auxillary
+--write-paf     Dump overlaps, produces 2 files, one contains the intra-haplotype or unphased overlaps, the other contains inter-haplotype overlaps. If coverage is very high, this might not be the full set of overlaps.
+--dump-all-ovlp Dump all overlaps ever calculated during the final overlaping. 
+--write-ec      Dump error corrected reads.
+-e              Ban assembly, i.e. terminate before generating string graph. 
+
 ```
 
 ## Known issues
 
-Read selection needs to speed up. Currently there's a blocking sequential step.
 
 ## Preliminary results
 

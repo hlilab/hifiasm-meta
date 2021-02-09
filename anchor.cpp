@@ -256,6 +256,37 @@ int thread_id)
 		}
 	}
 	#endif
+	if (overlap_list->length > 0) {
+		if (asm_opt.is_dump_relevant_reads && asm_opt.is_final_round){
+			char *str_buf = (char*)malloc(1<<10);
+			char *str_line_buf = (char*)malloc(1<<9);  // BUG: bug if read name is super long.
+			int str_buf_l = 1<<10, str_buf_cnt = 0, tmp;
+			sprintf(str_buf, "R\t%.*s\t%d\t%d\n", 
+							(int)Get_NAME_LENGTH(R_INF, rid), Get_NAME(R_INF, rid),
+							rlen,
+							(int)overlap_list->length);
+			str_buf_cnt = strlen(str_buf);
+			for (int i = 0; i < (int)overlap_list->length; ++i) {
+				overlap_region *r = &overlap_list->list[i];
+				sprintf(str_line_buf, "C\t%.*s\t%ld\t%d\t%d\t%c\t%.*s\t%ld\t%d\t%d\t%c\t%d\t%d\n", 
+								(int)Get_NAME_LENGTH(R_INF, r->x_id), Get_NAME(R_INF, r->x_id), // (int)r->x_id, 
+								(long)Get_READ_LENGTH(R_INF, r->x_id), (int)r->x_pos_s, (int)r->x_pos_e, "+-"[r->x_pos_strand],
+								(int)Get_NAME_LENGTH(R_INF, r->y_id), Get_NAME(R_INF, r->y_id), // (int)r->y_id, 
+								(long)Get_READ_LENGTH(R_INF, r->y_id), (int)r->y_pos_s, (int)r->y_pos_e, "+-"[r->y_pos_strand], 
+								(int)r->shared_seed, ha_ov_type(r, rlen));
+				tmp = strlen(str_line_buf);
+				if (str_buf_cnt+tmp>=str_buf_l){
+					str_buf_l = str_buf_l + (str_buf_l<<1);
+					str_buf = (char*)realloc(str_buf, str_buf_l);
+				}
+				sprintf(str_buf+str_buf_cnt, "%s", str_line_buf);
+				str_buf_cnt += tmp;
+			}
+			fprintf(asm_opt.fp_relevant_reads, "%s", str_buf);
+			free(str_buf);
+			free(str_line_buf);
+		}
+	}
 
 	// If number of overlapping reads is more than the buffer length,
 	//   remove overlaps from the shortest ones.

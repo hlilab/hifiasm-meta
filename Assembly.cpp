@@ -1983,7 +1983,20 @@ int ha_assemble(void)
 		if (asm_opt.flag & HA_F_WRITE_EC) Output_corrected_reads();
 		// overlap between corrected reads
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
+        asm_opt.is_final_round = 1;  // for hamt compat
+
+        if (asm_opt.is_dump_relevant_reads){
+            char *fname = (char*)malloc(strlen(asm_opt.output_file_name)+50);
+            sprintf(fname, "%s.all_ovlp_pairs", asm_opt.output_file_name);
+            asm_opt.fp_relevant_reads = fopen(fname, "w");
+            free(fname);
+        }
 		ha_overlap_final();
+        if (asm_opt.is_dump_relevant_reads){
+            fflush(asm_opt.fp_relevant_reads);
+            fclose(asm_opt.fp_relevant_reads);
+        }
+
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());
 		ha_print_ovlp_stat(R_INF.paf, R_INF.reverse_paf, R_INF.total_reads);
@@ -2099,7 +2112,18 @@ int hamt_assemble(void)
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
         hamt_ovecinfo_init();
         asm_opt.is_final_round = 1;
+        
+        if (asm_opt.is_dump_relevant_reads){
+            char *fname = (char*)malloc(strlen(asm_opt.output_file_name)+50);
+            sprintf(fname, "%s.all_ovlp_pairs", asm_opt.output_file_name);
+            asm_opt.fp_relevant_reads = fopen(fname, "w");
+            free(fname);
+        }
 		ha_overlap_final();
+        if (asm_opt.is_dump_relevant_reads){
+            fflush(asm_opt.fp_relevant_reads);
+            fclose(asm_opt.fp_relevant_reads);
+        }
 
         // hamt_migrate_existed_ov();
 

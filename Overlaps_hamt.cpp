@@ -1550,7 +1550,8 @@ int hamt_asgarc_util_checkSimpleInvertBubble(asg_t *sg, uint32_t v0, uint32_t *w
            -----u0-----...
           we want to drop v0->w1 and w1->u1^1
     */
-   //     only treat the most simple case, any branching and it'll be ignored
+   //     only checkout the most simple case, any branching and it'll be ignored
+   //     u0's target can be v0.
    // RETURN
    //     1 if v0 is the startpoint of such structure
    //     0 otherwise
@@ -2644,6 +2645,51 @@ int hamt_sg_pop_simpleInvertBubble(asg_t *sg){
     }
     if (nb_cut){
         asg_cleanup(sg);
+    }
+    return nb_cut;
+}
+
+int hamt_ug_pop_unevenInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label){
+    // Like uneven circle, the invert edge of the invert bubble is short and has coverage diff
+    //   with the other edges. Check these two aspects and drop if both checks.
+    // NOTE
+    //     Assumes coverage has been collected.
+    // SPECIAL NOTE
+    //     This was not a prominent observation (at least in the sheep) before the 
+    //        asg-way-too-complex containment read fix; after that, a bunch of them appeared.
+    asg_t *auxsg = ug->g;
+    int verbose = 0;
+
+    uint32_t vu, wu, uu;
+    float vuc, wuc, uuc;  // coverage
+    int nb_cut = 0;
+
+    for (vu=0; vu<auxsg->n_seq*2; vu++){
+        if (hamt_asgarc_util_checkSimpleInvertBubble(auxsg, vu, &wu, &uu, base_label)){
+            if (ug->u.a[wu>>1].len>100000) continue;
+            if ( (ug->u.a[uu>>1].len<ug->u.a[wu>>1].len) ||
+                  ug->u.a[vu>>1].len<ug->u.a[wu>>1].len) continue;  // wu shall be the shortest one
+
+            vuc = ug->utg_coverage[vu>>1];
+            wuc = ug->utg_coverage[wu>>1];
+            uuc = ug->utg_coverage[uu>>1];
+            if( (wuc/vuc)>0.5 || (wuc/uuc)>0.5) continue; 
+            
+            // cut
+            hamt_ug_arc_del(sg, ug, vu, wu, 1);
+            hamt_ug_arc_del(sg, ug, wu, uu^1, 1);
+            if (base_label>=0) hamt_ug_utg_softdel(sg, ug, wu, alt_label);
+            nb_cut++;
+            if (verbose){
+                fprintf(stderr, "[debug::%s] pop: utg%.6d - utg%.6d - utg%.6d\n", __func__,
+                                    (int)(vu>>1)+1, (int)(wu>>1)+1, (int)(uu>>1)+1);
+            }
+        }
+    }
+
+    if (nb_cut){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
     }
     return nb_cut;
 }
@@ -5529,10 +5575,8 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
     // FUNC
     //    recover some arc
     // NOTE
-    //    use after basic topo clean has been done
-    //        this function will only check very simple circles
-    //    will regenerate the unitig graph, maybe several times
-    //    hopefully this doesn't mess up with other stuffs?
+    //    Only use after basic topo clean has been done, this function will only check very simple cases.
+    //    Does several rounds of ug destroy-regen, also writes inter gfa if specified.
     int verbose = 0;
     int nb_modified = 0;
     uint32_t start, end, start_v, end_v;  // start and end are meant to be unitig IDs (with dir); start_v and end_v are vertex IDs
@@ -7062,4 +7106,54 @@ void hamt_debug_get_diploid_info_about_all_branchings(ma_ug_t *ug, ma_hit_t_allo
         }
     }
     vecu32_destroy(&v);
+}
+
+int hamt_ug_cleanup_almost_circular(asg_t *sg, ma_ug_t *ug, int base_label){
+    // FUNC
+    //     If a long contig forms a circle, drop tips if the tip is relatively short (abs length can be huge)
+    //     (This is seen in moderate coverage cases (~x30), the tip might be a broken haplotype?)
+    int verbose = 0;
+    int ret = 0, checksout=0;
+    int contig_length_threshold=3000000;
+    float ratio = 0.3;
+
+    asg_t *auxsg = ug->g;
+    uint32_t vu, nv;
+    asg_arc_t *av;
+
+    // drop tips only
+    for (vu=0; vu<auxsg->n_seq; vu++){
+        checksout = 0;
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            if (av[i].v==vu){
+                checksout = 1;
+                break;
+            }
+        }
+        if (!checksout) continue;
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)==1) continue;
+        if (ug->u.a[vu>>1].len<contig_length_threshold) continue;
+
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            if (av[i].v==vu) continue;
+            if (hamt_asgarc_util_isTip(auxsg, av[i].v, 0, 0, base_label)){
+                hamt_ug_arc_del(sg, ug, vu, av[i].v, 1);
+                ret+=1;
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] base utg%.6d, dropped tip utg%.6d\n", __func__, 
+                                        (int)(vu>>1)+1, (int)(av[i].v>>1)+1);
+                }
+            }
+        }
+    }
+
+    if (ret){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    return ret;
 }

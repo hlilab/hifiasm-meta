@@ -84,6 +84,7 @@ int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label);
 
 // exp
 int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
+int hamt_ug_pop_unevenInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
 
 // (hap)
 int hamt_ug_rescueLowCovHapGap_simple(asg_t *sg, ma_ug_t *ug, 
@@ -101,6 +102,8 @@ int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug
                                                ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources);
 void hamt_debug_get_diploid_info_about_all_branchings(ma_ug_t *ug, ma_hit_t_alloc *reverse_sources);
 
+// misc
+int hamt_ug_cleanup_almost_circular(asg_t *sg, ma_ug_t *ug, int base_label);
 
 
 

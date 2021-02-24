@@ -168,6 +168,8 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->write_debug_gfa = 0;  // disable
     asm_opt->is_dump_relevant_reads = 0;
     asm_opt->fp_relevant_reads = NULL;
+    asm_opt->is_mode_low_cov = 0;
+    asm_opt->write_new_graph_bins = 0;
     // end of hamt
     asm_opt->bed_inconsist_rate = 70;
 }
@@ -438,7 +440,8 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         } 
         else if (c == 'v' || c == 300)
         {
-			puts(HA_VERSION);
+            fprintf(stderr, "ha base version: %s\n", HA_VERSION);
+            fprintf(stderr, "hamt version: %s\n", HAMT_VERSION);
             return 0;
         }
         // vanilla: abcdef hi klmnopqrstuvwxyz

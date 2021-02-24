@@ -626,6 +626,7 @@ static void worker_ovec(void *data, long i, int tid)
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 
     0.02, asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,
     tid);
+    // ha_get_new_candidates_11(b->ab, i, &b->self_read, &b->olist, &b->clist, 0.02, asm_opt.max_n_chain, 1);
 
 	clear_Cigar_record(&b->cigar1);
 	clear_Round2_alignment(&b->round2);
@@ -696,6 +697,7 @@ static void worker_ovec_related_reads(void *data, long i, int tid)
         ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 
         0.02, asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), &(R_INF_FLAG.candidate_count[q_idx]),
         tid);
+        // ha_get_new_candidates_11(b->ab, i, &b->self_read, &b->olist, &b->clist, 0.02, asm_opt.max_n_chain, 1);
 
         clear_Cigar_record(&b->cigar1);
         clear_Round2_alignment(&b->round2);
@@ -1493,10 +1495,10 @@ static void worker_ov_final(void *data, long i, int tid)
     if (R_INF.mask_readnorm[i] & 1) return;  // meta hamt
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
-	//get_new_candidates(i, &g_read, &overlap_list, &array_list, &l, 0.001, 0);
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 0.001, 
     asm_opt.max_n_chain, 0, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,
     tid);
+    // ha_get_new_candidates_11(b->ab, i, &b->self_read, &b->olist, &b->clist, 0.001, asm_opt.max_n_chain, 0);
 
 	overlap_region_sort_y_id(b->olist.list, b->olist.length);
 
@@ -1572,6 +1574,7 @@ static void worker_ov_final_high_het(void *data, long i, int tid)
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, HIGH_HET_ERROR_RATE, 
     asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,
     tid);
+    // ha_get_new_candidates_11(b->ab, i, &b->self_read, &b->olist, &b->clist, HIGH_HET_ERROR_RATE, asm_opt.max_n_chain, 1);
 
     overlap_region_sort_y_id(b->olist.list, b->olist.length);
     ma_hit_sort_tn(R_INF.paf[i].buffer, R_INF.paf[i].length);
@@ -2019,8 +2022,8 @@ int hamt_assemble(void)
 	extern void ha_extract_print_list(const All_reads *rs, int n_rounds, const char *o);
 	int r,/* hom_cov = -1*/ ovlp_loaded = 0;
 
-    asm_opt.hom_cov = 200;
-    asm_opt.het_cov = 200;
+    // asm_opt.hom_cov = 200;
+    // asm_opt.het_cov = 200;
     // hamt_ov_t **hamt_existed_ov = NULL;
 
 	if (asm_opt.load_index_from_disk && load_all_data_from_disk(&R_INF.paf, &R_INF.reverse_paf, asm_opt.bin_base_name)) {

@@ -28166,11 +28166,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     if (asm_opt.is_mode_low_cov){
         hamt_smash_haplotype(sources, reverse_sources, n_read);
     }
-    hamt_try_rescue_containment(sources, n_read);
+    // hamt_try_rescue_containment(sources, n_read);  // v0.13 mitigation
 
 
-
-    if(debug_g) goto debug_gfa;
+    if(debug_g and !asm_opt.write_new_graph_bins) goto debug_gfa;
 
     ///just for debug
     // (destroies sg and reset it (no extra malloc))
@@ -28332,15 +28331,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
 
 
-    if (asm_opt.flag & HA_F_VERBOSE_GFA)
+    if ((asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.write_new_graph_bins)
     {
         /*******************************for debug***************************************/
         write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
         debug_gfa:;
         /*******************************for debug***************************************/
     }
-    if (asm_opt.write_new_graph_bins)
-        write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
+    
     /**
     debug_ma_hit_t(sources, coverage_cut, n_read, max_hang_length, 
     mini_overlap_length);
@@ -28514,6 +28512,19 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_pop_tinyFlatCircles(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterflatcircle", cleanID); cleanID++;}
+
+
+            hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, ruIndex, coverage_cut, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterShortCircuit", cleanID); cleanID++;}
+
+            hamt_ug_pop_unevenInvertBubble(sg, hamt_ug, 0, 1);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterunevenInv", cleanID); cleanID++;}
+
+            // final cleanup
+            hamt_ug_cleanup_almost_circular(sg, hamt_ug, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             hamt_ug_destroy(hamt_ug);
         }  

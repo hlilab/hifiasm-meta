@@ -165,6 +165,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_use_exp_graph_cleaning = 1;
     asm_opt->is_dump_ovec_error_count = 0;
     asm_opt->lowq_thre_10 = 150;
+    asm_opt->lowq_thre_5 = 50;
     asm_opt->write_debug_gfa = 0;  // disable
     asm_opt->is_dump_relevant_reads = 0;
     asm_opt->fp_relevant_reads = NULL;
@@ -392,6 +393,9 @@ int check_option(hifiasm_opt_t* asm_opt)
     // fprintf(stderr, "purge_level_trio: %d\n", asm_opt->purge_level_trio);
     // fprintf(stderr, "purge_simi_rate: %f\n", asm_opt->purge_simi_rate);
     // fprintf(stderr, "purge_overlap_len: %d\n", asm_opt->purge_overlap_len);
+
+    ///// hamt /////
+    if (asm_opt->lowq_thre_10<=1) {fprintf(stderr, "[E::%s] lowq-10 threshold too small.\n", __func__); return 0;}
 
     return 1;
 }

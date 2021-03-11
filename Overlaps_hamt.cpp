@@ -4471,6 +4471,7 @@ int hamt_ug_pop_bubble(asg_t *sg,ma_ug_t *ug, int base_label, int alt_label, int
     // NOTE: only drop arcs, not deleting sequences
     int verbose = 0;
     double startTime = Get_T();
+    int max_edge_length = 300000;  // don't touch large bubble-like structure on unitig graph
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu[2], uu, nv;
@@ -4497,8 +4498,12 @@ int hamt_ug_pop_bubble(asg_t *sg,ma_ug_t *ug, int base_label, int alt_label, int
             assert(i_<=2);
         }
         
+        if (ug->u.a[wu[0]>>1].len>max_edge_length || ug->u.a[wu[1]>>1].len>max_edge_length){
+            continue;
+        }
+
         // pop
-        if (ug->u.a[wu[0]>>1].len>100000 || ug->u.a[wu[1]>>1].len>100000){
+        if (ug->u.a[wu[0]>>1].len>50000 || ug->u.a[wu[1]>>1].len>50000){
             // if either side of the bubble is long,
             // pop the shorter side
             idx = ug->u.a[wu[0]>>1].len > ug->u.a[wu[1]>>1].len ? 1 : 0;

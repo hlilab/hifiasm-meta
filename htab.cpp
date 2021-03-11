@@ -975,7 +975,7 @@ void *ha_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, int *hom_cov, int i
 	if(is_hp_mode) ex_flag = HAF_RS_READ|HAF_SKIP_READ;
 	ha_ct_t *h;
 	h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN|ex_flag, NULL, NULL, rs);
-	if((asm_opt->flag & HA_F_VERBOSE_GFA) || asm_opt->write_new_graph_bins)
+	if((asm_opt->flag & HA_F_VERBOSE_GFA) && asm_opt->write_new_graph_bins)
 	{
 		write_ct_index((void*)h, asm_opt->output_file_name);
 		// load_ct_index(&ha_ct_table, asm_opt->output_file_name);
@@ -1439,7 +1439,7 @@ void worker_process_one_read_inclusive(plmt_step_t *s, int idx_seq, int round, i
 		radix_sort_hamt16(buf_norm, buf_norm+idx);
 		// if (buf_norm[idx/2]<=s->p->runtime_median_threshold || buf_norm[idx/10]<=150 || buf_norm[idx/20]<=80){
 		if (// buf_norm[idx/2]<=s->p->runtime_median_threshold || 
-			buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10){
+			buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10 /*|| buf_norm[idx/20]<=s->p->asm_opt->lowq_thre_5*/){
 			flag_is_keep_read = 1;
 		}
 		// else{
@@ -1551,7 +1551,7 @@ void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, 
 	if (round==0) {flag_is_keep_read = 1;}  // median has been checked upfront
 	else if (round==1){
 		radix_sort_hamt16(buf_norm, buf_norm+idx);
-		if (buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10){
+		if (buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10 /*|| buf_norm[idx/20]<=s->p->asm_opt->lowq_thre_5*/){
 			flag_is_keep_read = 1;
 		}
 	}
@@ -2282,7 +2282,10 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
 }
 
 static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // callback of kt_pipeline
-	// mark all reads with a low enough lower quantile value to be included 
+	// FUNC
+	//     This the preovec read selection's worker function.
+	//     Any read that has many rare kmers will be retained.
+	//      (measurement: lower quantile of global kmer frequency)
 	plmt_data_t *p = (plmt_data_t*)data;
 	double t_profiling = Get_T();
 	if (step==0){ // collect reads
@@ -2336,6 +2339,9 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		}
 		else {return s;}
 	} else if (step==1){  // process reads
+		// what does this block do:
+		//     - retain reads based on runtime kmer frequency
+		//     - put kmers into per-thread linear buffers (does not update hastable yet)
 		plmt_step_t *s = (plmt_step_t*)in;
 		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
 
@@ -2349,6 +2355,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 				s->threaded_lnbuf[i_cpu][i].m = 16;
 			}
 		}
+		// process reads
 		kt_for(nb_cpu, callback_worker_process_one_read_inclusive2, s, s->n_seq);
 		int san = 0;
 		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
@@ -2397,7 +2404,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		}else{
 			return s;
 		}
-	} else if (step==2){  // insert the linear buffer
+	} else if (step==2){  // update the hashtable
 		plmt_step_t *s = (plmt_step_t*)in;
 		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
 		int n_pre = (1<<s->p->hd->pre);

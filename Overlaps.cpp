@@ -28166,7 +28166,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     if (asm_opt.is_mode_low_cov){
         hamt_smash_haplotype(sources, reverse_sources, n_read);
     }
-    // hamt_try_rescue_containment(sources, n_read);  // v0.13 mitigation
+    // hamt_try_rescue_containment(sources, n_read);  // containment mitigation
 
 
     if(debug_g and !asm_opt.write_new_graph_bins) goto debug_gfa;
@@ -28488,9 +28488,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // hap cov cut
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", cleanID);cleanID++;}
             hamt_ug_treatBifurcation_hapCovCut(sg, hamt_ug, 0.7, 0.5, reverse_sources, 0, 1);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "midHapCovCut", cleanID);cleanID++;}
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
+            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);

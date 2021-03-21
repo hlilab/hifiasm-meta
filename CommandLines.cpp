@@ -157,7 +157,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_disable_read_selection = 1;
     asm_opt->mode_read_kmer_profile = 0;
     asm_opt->readselection_sort_order = 1;  // smallest first
-    asm_opt->bin_base_name = 0;
+    asm_opt->bin_base_name = (char*)(DEFAULT_OUTPUT);
     asm_opt->preovec_coverage = 150;
     asm_opt->is_ignore_ovlp_cnt = 0;
     asm_opt->is_dump_read_mask = 0;
@@ -456,7 +456,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
         else if (c == 'o') {
             asm_opt->output_file_name = opt.arg;
-            if (asm_opt->bin_base_name==0) asm_opt->bin_base_name = opt.arg;
+            if (strcmp(asm_opt->bin_base_name, DEFAULT_OUTPUT)==0) asm_opt->bin_base_name = opt.arg;
         }
         else if (c == 'r') asm_opt->number_of_round = atoi(opt.arg);
         else if (c == 'k') asm_opt->k_mer_length = atoi(opt.arg);

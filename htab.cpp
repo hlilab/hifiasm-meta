@@ -1344,7 +1344,8 @@ static void callback_worker_process_one_read_either(void *data, long i, int tid)
 }
 
 
-// single thread version
+// single thread version (deprecated)
+#if 0
 void worker_process_one_read_inclusive(plmt_step_t *s, int idx_seq, int round, int use_HPC){
 	// note: this function is not called by kt_for, it's linear
 	uint64_t rid = s->RIDs[idx_seq];
@@ -1387,15 +1388,6 @@ void worker_process_one_read_inclusive(plmt_step_t *s, int idx_seq, int round, i
 		fprintf(stderr, "ERROR: %s invalid round.\n", __func__);
 		exit(1);
 	}
-
-	// NOTE / BUG / TODO
-	//   (Oct 6 2020) ASan thought there's a heap-use-after-free error right here 
-	//		(or a few lines below at the yak_ct_get part), but I don't see why, 
-	//       and it never segfault without ASan, not sure if it's ASan false positive
-	//       or an obscure bug. With ASan it happens during the 2nd run of this step in kt_pipeline, 
-	//       but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
-	//   (Jan 7 2021) This happend again with r024-test. It was runing on a 5% subsampled
-	//       readset of the mock dataset. Only ASan complains, no segfaults.
 
 	// collect kmers 
 	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
@@ -1464,6 +1456,7 @@ void worker_process_one_read_inclusive(plmt_step_t *s, int idx_seq, int round, i
 	free(buf);
 	free(buf_norm);
 }
+#endif
 
 // threaded version of worker_process_one_read_inclusive
 void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, int use_HPC, int idx_cpu){
@@ -1502,14 +1495,15 @@ void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, 
 		exit(1);
 	}
 
-	// NOTE / BUG / TODO (as-is note from single threaded version)
+	// NOTE
 	//   (Oct 6 2020) ASan thought there's a heap-use-after-free error right here 
-	//		(or a few lines below at the yak_ct_get part), but I don't see why, 
-	//       and it never segfault without ASan, not sure if it's ASan false positive
-	//       or an obscure bug. With ASan it happens during the 2nd run of this step in kt_pipeline, 
-	//       but not guaranteed (input file-dependent). Here's a false positive case report: https://hackerone.com/reports/481532
+	//		(or a few lines below at the yak_ct_get part).
 	//   (Jan 7 2021) This happend again with r024-test. It was runing on a 5% subsampled
 	//       readset of the mock dataset. Only ASan complains, no segfaults.
+	//   (Mar 21 2021) Maybe not a false positive; the pipeline used to seperate hashtable insertion
+	//       into a 3rd step, which races with 2nd step's hashtable querying. It probably didn't
+	//       segfault or cause instable results because 2nd step used to be single threaded.
+	//       Fixed.
 
 	// collect kmers 
 	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
@@ -2287,8 +2281,9 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 	//     Any read that has many rare kmers will be retained.
 	//      (measurement: lower quantile of global kmer frequency)
 	plmt_data_t *p = (plmt_data_t*)data;
-	double t_profiling = Get_T();
+	double t_profiling;
 	if (step==0){ // collect reads
+		t_profiling = Get_T();
 		plmt_step_t *s;
 		// prepare s
 		CALLOC(s, 1);
@@ -2342,6 +2337,12 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		// what does this block do:
 		//     - retain reads based on runtime kmer frequency
 		//     - put kmers into per-thread linear buffers (does not update hastable yet)
+		// r032 bug fix note:
+		//     Must insert linear buffers to the runtime hashtable within this step,
+		//       otherwise the process is not stable (hashtable gets updated while we check lowq values).
+		//     This effect was not prominent if we process read with a single thread (before r024),
+		//       however it is visible when threaded. 
+		t_profiling = Get_T();
 		plmt_step_t *s = (plmt_step_t*)in;
 		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
 
@@ -2379,42 +2380,19 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 			san+=s->lnbuf[i].n;
 		}
 		#endif
-		
 
 		p->accumulated_time_step2 += Get_T() - t_profiling;
-		if (san==0){  // linear buffer is empty, terminate
-			for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
-			free(s->len); s->len = 0;
-			free(s->seq); s->seq = 0; 
-			for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
-				for (int i=0; i<n_pre; i++){
-					free(s->threaded_lnbuf[i_cpu][i].a);
-				}
-				free(s->threaded_lnbuf[i_cpu]);
-			}
-			free(s->threaded_lnbuf);
-			#if 0
-			for (int i=0; i<1<<p->hd->pre; i++){
-				free(s->lnbuf[i].a);
-				}				
-			free(s->lnbuf);
-			#endif
-			free(s->RIDs);
-			free(s);
-		}else{
-			return s;
-		}
-	} else if (step==2){  // update the hashtable
-		plmt_step_t *s = (plmt_step_t*)in;
-		int nb_cpu = s->p->opt->n_thread<=1 ? 1 : (s->p->opt->n_thread>KTPIPE_NB_CPU? KTPIPE_NB_CPU : s->p->opt->n_thread);
-		int n_pre = (1<<s->p->hd->pre);
 
-		// update runtime hashtable
-		for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
-			s->lnbuf = s->threaded_lnbuf[i_cpu];
-			kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->hd->pre);
+		if (san>0){
+			// insert linear buffer into the runtime hashtable
+			for (int i_cpu=0; i_cpu<nb_cpu; i_cpu++){
+				s->lnbuf = s->threaded_lnbuf[i_cpu];
+				kt_for(s->p->opt->n_thread, worker_insert_lnbuf, s, 1<<p->hd->pre);
+			}
+			p->accumulated_time_step3 += Get_T() - t_profiling;
 		}
-		// clean up
+
+		// clean up 
 		for (int i=0; i<s->n_seq; i++){free(s->seq[i]);}
 		free(s->len); s->len = 0;
 		free(s->seq); s->seq = 0; 
@@ -2433,8 +2411,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 		#endif
 		free(s->RIDs);
 		free(s);
-		p->accumulated_time_step3 += Get_T() - t_profiling;
-	} 
+	}
 	return 0;
 }
 
@@ -2490,19 +2467,20 @@ void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs
 	plmt.nb_reads_limit = nb_to_keep;
 	init_UC_Read(&plmt.ucr);
 
-	// 1st pass: keep all reads with infrequent kmers and median less than 100
-	plmt.round = 0;
-	plmt.nb_reads_kept = 0;
-	fprintf(stderr, "[M::%s] entering round#1...\n", __func__);
-	kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 3);
-	fprintf(stderr, "[M::%s] finished round#1, retaining %d reads.\n",__func__, plmt.nb_reads_kept);
-	fprintf(stderr, "[prof::%s] used %.2f s\n", __func__, Get_T() - t_profiling);
-	t_profiling = Get_T();
+	// // 1st pass: keep all reads with infrequent kmers and median less than 100
+	// plmt.round = 0;
+	// plmt.nb_reads_kept = 0;
+	// fprintf(stderr, "[M::%s] entering round#1...\n", __func__);
+	// kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 2);
+	// fprintf(stderr, "[M::%s] finished round#1, retaining %d reads.\n",__func__, plmt.nb_reads_kept);
+	// fprintf(stderr, "[prof::%s] used %.2f s\n", __func__, Get_T() - t_profiling);
+	// t_profiling = Get_T();
+	plmt.nb_reads_kept = 0;  // just go for runtime lowq selection.
 
 	// 2nd pass: include reads until reaching the limit
 	// repack the stat
 	if (plmt.nb_reads_kept<plmt.nb_reads_limit){
-		plmt.runtime_median_threshold = 50; /////////////////// 50
+		plmt.runtime_median_threshold = 50; //  deprecated
 		for (uint64_t i=0; i<rs->total_reads; i++){
 			rs->statpack[i] = ((uint64_t) rs->median[i]<<48) | (((uint64_t) (YAK_MAX_COUNT -1 -rs->std[i] + .499))<<32) | i;  // std won't exceed 14 bits, therefore safe to cast
 		}
@@ -2510,31 +2488,21 @@ void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs
 		plmt.round = 1;
 		int rounds_of_dropping = 0, grace=0;
 		int prv_nb_reads = plmt.nb_reads_kept;
-		while (1){		
+		{
 			fprintf(stderr, "[M::%s] entering round#2, pass#%d...\n", __func__, rounds_of_dropping);
 			n_seq = 0;  // reset!
-			kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 3);
+			kt_pipeline(asm_opt->thread_num, worker_markinclude_lowq_reads, &plmt, 2);
 			fprintf(stderr, "[prof::%s] step1 %.2f s, step2 %.2f s, step3 %.2f s\n", __func__, 
 									plmt.accumulated_time_step1, plmt.accumulated_time_step2, plmt.accumulated_time_step3);
 			fprintf(stderr, "[prof::%s] used %.2f s\n", __func__, Get_T() - t_profiling);
 			t_profiling = Get_T();
 
-			plmt.runtime_median_threshold +=50;  ///////////////50
+			plmt.runtime_median_threshold +=50;  // deprecated
 			rounds_of_dropping++;
-			fprintf(stderr, "[D::%s] runtime_median_threshold has been increased to %d.\n", __func__, plmt.runtime_median_threshold);
-			
-			if (plmt.nb_reads_kept==prv_nb_reads){
-				fprintf(stderr, "[M::%s] no more read has been kept during this round, grace==%d\n", __func__, grace);
-				grace++;
-			}else{
-				grace = 0;
-			}
-			if (plmt.nb_reads_kept>=plmt.nb_reads_limit || grace>=1){
-				fprintf(stderr, "[M::%s] finished selection, retained %d reads (out of %d).\n", __func__, plmt.nb_reads_kept, plmt.nb_reads_limit);
-				break;
-			}
+		
+			fprintf(stderr, "[M::%s] finished selection, retained %d reads (out of %d).\n", __func__, plmt.nb_reads_kept, plmt.nb_reads_limit);	
 			prv_nb_reads = plmt.nb_reads_kept;
-			fprintf(stderr, "[M::%s] finished round#2, pass#%d, retaining %d reads.\n", __func__, rounds_of_dropping, prv_nb_reads);
+		
 		}
 	}else{
 		fprintf(stderr, "[M/W::%s] round#1 has collected enough reads, ignoreing lower quantile criteria.\n", __func__);

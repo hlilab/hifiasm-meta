@@ -960,7 +960,7 @@ int hamt_pre_ovec_v2(int threshold){
     // overide status if switch is present
     if (asm_opt.is_ignore_ovlp_cnt){
         is_do_preovec_selection = 1;
-        fprintf(stderr, "[M::%s] Ignore extimated total number of overlaps and proceed to read selection.\n", __func__);
+        fprintf(stderr, "[M::%s] Ignore estimated total number of overlaps and proceed to read selection.\n", __func__);
     }
 
     if (is_do_preovec_selection){
@@ -1056,8 +1056,6 @@ void ha_overlap_and_correct(int round)
 	if(ha_idx) hom_cov = asm_opt.hom_cov;
 	if(ha_idx == NULL) ha_idx = ha_pt_gen(&asm_opt, ha_flt_tab, has_read, 0, &R_INF, &hom_cov, &het_cov);
 
-	if (round == 0 && ha_flt_tab == 0) // then asm_opt.hom_cov hasn't been updated
-		ha_opt_update_cov(&asm_opt, hom_cov);
 	if (asm_opt.required_read_name)
 		kt_for(asm_opt.thread_num, worker_ovec_related_reads, b, R_INF.total_reads);
 	else
@@ -1820,7 +1818,7 @@ void hap_recalculate_peaks(char* output_file_name)
     // construct hash table for high occurrence k-mers
     if (!(asm_opt.flag & HA_F_NO_KMER_FLT)) {
         ha_flt_tab = ha_ft_gen(&asm_opt, &R_INF, &hom_cov, 0);
-        ha_opt_update_cov(&asm_opt, hom_cov);
+        if (!asm_opt.is_use_exp_graph_cleaning) ha_opt_update_cov(&asm_opt, hom_cov);
     }
     free(R_INF.read_length);
     free(R_INF.name_index);
@@ -1970,7 +1968,7 @@ int ha_assemble(void)
 		if (!(asm_opt.flag & HA_F_NO_KMER_FLT) && ha_flt_tab == NULL) 
         {
 			ha_flt_tab = ha_ft_gen(&asm_opt, &R_INF, &hom_cov, 0);
-			ha_opt_update_cov(&asm_opt, hom_cov);
+			if (!asm_opt.is_use_exp_graph_cleaning) ha_opt_update_cov(&asm_opt, hom_cov);
 		}
 		// error correction
 		assert(asm_opt.number_of_round > 0);

@@ -118,6 +118,17 @@ typedef struct {
 // #define hamt_ov_hash(a) ((a))
 // KHASHL_SET_INIT(static klib_unused, hamt_ov_t, hamt_ov, uint64_t, hamt_ov_hash, hamt_ov_eq)
 
+// a trail of subgraph IDs for unitigs
+typedef struct {
+	int n, m;
+    // uint32_t readID1;  // without the direction bit
+    // uint32_t readID2;
+	int *a;
+}ma_utg_subglabels_t;
+typedef struct {
+	int n, m;
+	ma_utg_subglabels_t *a;
+} ma_utg_subg_labels_v;
 
 typedef struct
 {
@@ -162,8 +173,9 @@ typedef struct
     
     uint16_t *nb_error_corrected;  // collect number of error corrected during ovec
     ovecinfo_v OVEC_INF;
-    // void *hamt_existed_ov;  // containtment mitigation
 
+    int *read2ugID;  // an array of length total_reads (not 2*total_reads); -1 means the read is not start/end of a unitig; otherwise the value is unitig's stable ID
+    ma_utg_subg_labels_v *subg_label_trail;  // size of nb_unitig
     ///kvec_t_u64_warp* pb_regions;
 } All_reads;
 

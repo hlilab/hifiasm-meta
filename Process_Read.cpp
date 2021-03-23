@@ -92,6 +92,7 @@ void hamt_ovecinfo_write_to_disk(hifiasm_opt_t *opt){
             fwrite(&is_match, sizeof(is_match), 1, fp);
         }
     }
+	free(outname);
     fclose(fp);
 }
 void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
@@ -129,6 +130,8 @@ void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
         }
     }
     fclose(fp);
+	free(outname);
+	free(b);
     fprintf(stderr, "[M::%s] loaded; used %.1f s\n\n", __func__, Get_T()-time);
 }
 
@@ -221,7 +224,13 @@ void destory_All_reads(All_reads* r)
 	if (r->mask_readtype)
 		free(r->mask_readtype);
 	if (r->statpack)
-		free(r->statpack);
+		free(r->statpack);	
+	if (r->subg_label_trail){
+		for (int i_read=0; i_read<r->total_reads; i_read++){
+			free(r->subg_label_trail->a[i_read].a);
+		}
+		free(r->subg_label_trail->a);
+	}
 	///if (r->pb_regions) free(r->pb_regions);
 }
 

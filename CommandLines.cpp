@@ -36,6 +36,7 @@ static ko_longopt_t long_options[] = {
     { "force-preovec", ko_no_argument, 408}, // ignore 1st heuristic (which could've kept all reads), do preovec read selection based on lowq given
 	
     { "lowq-10", ko_required_argument, 409}, // lower 10% quantile threshold
+    { "lowq-5", ko_required_argument, 410}, // lower 6% quantile threshold
     { "inter-gfa", ko_no_argument, 413},  // write intermediate gfa files
     { "ban-meta", ko_no_argument, 414},  // use stable hifiasm route
     { "lowcov", ko_no_argument, 415},  // input has very low coverage, copy het overlaps to hom (experimental)
@@ -164,8 +165,8 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_dump_read_names = 0;
     asm_opt->is_use_exp_graph_cleaning = 1;
     asm_opt->is_dump_ovec_error_count = 0;
-    asm_opt->lowq_thre_10 = 150;
-    asm_opt->lowq_thre_5 = 50;
+    asm_opt->lowq_thre_10 = 50;  // lower 10% quantile runtime kmer frequency
+    asm_opt->lowq_thre_5 = 50;  // lower 5% quantile runtime kmer frequency
     asm_opt->write_debug_gfa = 0;  // disable
     asm_opt->is_dump_relevant_reads = 0;
     asm_opt->fp_relevant_reads = NULL;
@@ -435,6 +436,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
 
     asm_argcv.ha_argc = argc;
     asm_argcv.ha_argv = argv;    
+    // asm_opt->argcv = &asm_argcv;
 
     while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:VSB:", long_options)) >= 0) {
         if (c == 'h')
@@ -498,8 +500,13 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->is_disable_read_selection = 0;
         }
         else if (c == 409) {
-            fprintf(stderr, "[M::%s] Set lowq; note that without --force-preovec, this threshold have no effect if total number of overlaps is considered to be acceptable.\n", __func__);
+            fprintf(stderr, "[M::%s] Set lowq(10%%); note that without --force-preovec, this threshold have no effect if total number of overlaps is considered to be acceptable.\n", __func__);
             asm_opt->lowq_thre_10 = atoi(opt.arg);
+            asm_opt->is_disable_read_selection = 0;
+        }
+        else if (c == 410) {
+            fprintf(stderr, "[M::%s] Set lowq(5%%); note that without --force-preovec, this threshold have no effect if total number of overlaps is considered to be acceptable.\n", __func__);
+            asm_opt->lowq_thre_5 = atoi(opt.arg);
             asm_opt->is_disable_read_selection = 0;
         }
         else if (c == 413) {asm_opt->write_debug_gfa = 1;}

@@ -491,7 +491,7 @@ void hamt_smash_haplotype(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sourc
 void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long num_sources)
 {
     double startTime = Get_T();
-    int verbose = 1;
+    int verbose = 0;
 
     long long i, j, index;
     uint32_t qn, tn, is_del = 0;
@@ -3861,7 +3861,7 @@ uint32_t startNode, uint32_t endNode, int max_dist, buf_t* bub)
         }
 
         uint32_t convex1, convex2, f1, f2;
-        long long l1, l2;
+        long long l1=-1, l2=-1;  // suppress compiler warning; l1 and l2 are always inited when used (by checking f1 and f2).
         todel = 0;
 
         if((Nodes1[0]^1) == (startNode^1) || (Nodes1[0]^1) == endNode)
@@ -10453,21 +10453,102 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, const char* prefix, FILE *fp)
 	ma_ug_print2(ug, RNF, read_g, coverage_cut, sources, ruIndex, 1, prefix, fp);
 }
 
-void hama_ug_print(const ma_ug_t *ug, All_reads *RNF, asg_t* read_g, const ma_sub_t *coverage_cut, 
+void hamt_ug_get_subgaware_name(char *name, int name_l, uint32_t i, const ma_ug_t *ug, const char* prefix){
+    // (deprecated)
+    // FUNC
+    //     Incorporate trailing subgraph IDs into utg/ctg name.
+    // NOTE
+    //     i is the unitig index (without the direction bit)
+    int verbose = 0;
+    
+    uint32_t readID = ug->u.a[i].a[0]>>33;
+    ma_utg_subglabels_t *subgp = &R_INF.subg_label_trail->a[readID];
+    ma_utg_t *p = &ug->u.a[i];
+    int truncated = 0;
+    
+    int sancheck_label=-1, sancheck_label_length=subgp->n;
+
+    // sancheck: all reads of a unitig should have the same subgraph label
+    for (int i_read=0; i_read<ug->u.a[i].n; i_read++){
+        assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].n==sancheck_label_length);  // same buffer length
+        for (int i_label=0; i_label<sancheck_label_length; i_label++){
+            assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].a[i_label] == subgp->a[i_label]);  // same array of labels
+        }
+    }
+
+    // check if name looks too long
+    if (subgp->n*3+14>name_l){
+        fprintf(stderr, "[W::%s] got an extremely long trailing subg ID? will truncate", __func__);
+        subgp->n = 16;
+        truncated = 1;
+    }
+    sprintf(name, "s%d.", (int)p->subg_label);
+    if (verbose) fprintf(stderr, "[debug::%s] utg %.6d, subgp n is %d\n", __func__, (int)(i)+1, (int)subgp->n);
+    for (int i_sub=0; i_sub<subgp->n; i_sub++){
+        sprintf(name+strlen(name), "%d", subgp->a[i_sub]);
+        if (i_sub!=(subgp->n-1)) sprintf(name+strlen(name), ",");  // NOTE: name regex in gfa1.0 spec: [!-)+-<>-~][!-~]*
+    }
+    if (truncated){
+        sprintf(name+strlen(name), "trunc");
+    }
+    sprintf(name+strlen(name), ".%s%.6d%c", prefix, i + 1, "lc"[p->circ]);
+}
+
+void hamt_ug_print(const ma_ug_t *ug, All_reads *RNF, asg_t* read_g, const ma_sub_t *coverage_cut, 
 ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FILE *fp)
 {
     // with hamt extra bits
     uint8_t* primary_flag = (uint8_t*)calloc(read_g->n_seq, sizeof(uint8_t));
 	uint32_t i, j, l;
 	char name[32];
+
+    // GFA comment lines
+    fprintf(fp, "#");
+    for (int i=0; i<asm_argcv.ha_argc; i++){
+        fprintf(fp, " %s", asm_argcv.ha_argv[i]);
+    }
+    fprintf(fp, "\n");
+    fprintf(fp, "# Hifiasm code base version: %s\n",  HA_VERSION);
+    fprintf(fp, "# Hifiasm_meta version: %s\n", HAMT_VERSION);
+
+
 	for (i = 0; i < ug->u.n; ++i) { // the Segment lines in GFA
 		ma_utg_t *p = &ug->u.a[i];
         if(p->m == 0) continue;
-        sprintf(name, "s%d.%s%.6d%c", (int)p->subg_label, prefix, i + 1, "lc"[p->circ]);
-		if (print_seq) fprintf(fp, "S\t%s\t%s\tLN:i:%d\tdp:f:%u\n", name, p->s? p->s : "*", p->len,  // note: vanilla hifiasm uses rd:i instead of dp:f. The dp:f was modified for bandage.
-                                get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
-		else fprintf(fp, "S\t%s\t*\tLN:i:%d\tdp:f:%u\n", name, p->len, 
-                                get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
+        
+        if (!asm_opt.is_use_exp_graph_cleaning){
+            sprintf(name, "%s%.6d%c", prefix, i + 1, "lc"[p->circ]);
+        }else{
+            sprintf(name, "s%d.%s%.6d%c", (int)p->subg_label, prefix, i + 1, "lc"[p->circ]);
+        }
+
+
+        fprintf(fp, "S\t%s\t%s\tLN:i:%d\tdp:f:%u", name, (p->s&&print_seq)? p->s : "*", p->len,  // note: vanilla hifiasm uses rd:i instead of dp:f. The dp:f was modified for bandage.
+                            get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
+        if (!asm_opt.is_use_exp_graph_cleaning){
+            fprintf(fp, "\n");
+        }else{
+            // hamt, append trailing subgraph IDs
+
+            // sancheck: all reads of a unitig should have the same subgraph label
+            uint32_t readID = ug->u.a[i].a[0]>>33;
+            ma_utg_subglabels_t *subgp = &R_INF.subg_label_trail->a[readID];
+            int sancheck_label=-1, sancheck_label_length=subgp->n;
+            for (int i_read=0; i_read<ug->u.a[i].n; i_read++){
+                assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].n==sancheck_label_length);  // same buffer length
+                for (int i_label=0; i_label<sancheck_label_length; i_label++){
+                    assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].a[i_label] == subgp->a[i_label]);  // same array of labels
+                }
+            }
+            
+            // write
+            fprintf(fp, "\tts:B:I");  // GFA1: array of uint32_t integers.
+            for (int i_sub=0; i_sub<subgp->n; i_sub++){
+                fprintf(fp, ",%d", (int)subgp->a[i_sub]);
+            }
+            fprintf(fp, "\n");
+        }
+
         
 		for (j = l = 0; j < p->n; l += (uint32_t)p->a[j++]) {
 			uint32_t x = p->a[j]>>33;
@@ -10488,9 +10569,15 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
 	}
 	for (i = 0; i < ug->g->n_arc; ++i) { // the Link lines in GFA
 		uint32_t u = ug->g->arc[i].ul>>32, v = ug->g->arc[i].v;
-		fprintf(fp, "L\ts%d.%s%.6d%c\t%c\ts%d.%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
-        (int)ug->u.a[u>>1].subg_label, prefix, (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
-		(int)ug->u.a[v>>1].subg_label, prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
+        if (!asm_opt.is_use_exp_graph_cleaning){
+            fprintf(fp, "L\t%s%.6d%c\t%c\t%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
+            prefix, (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
+            prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
+        }else{  // hamt
+            fprintf(fp, "L\ts%d.%s%.6d%c\t%c\ts%d.%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
+            (int)ug->u.a[u>>1].subg_label, prefix, (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
+            (int)ug->u.a[v>>1].subg_label, prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
+        }
 	}
     free(primary_flag);    
 }
@@ -12295,12 +12382,12 @@ void hamt_output_unitig_graph_advance(asg_t *sg, ma_sub_t* coverage_cut, char* o
     char* gfa_name = (char*)malloc(strlen(output_file_name)+100);
     sprintf(gfa_name, "%s.%s.gfa", output_file_name, suffix);
     FILE* output_file = fopen(gfa_name, "w");
-    hama_ug_print(ug, &R_INF, sg, coverage_cut, sources, ruIndex, 1, seq_prefix, output_file);
+    hamt_ug_print(ug, &R_INF, sg, coverage_cut, sources, ruIndex, 1, seq_prefix, output_file);
     fclose(output_file);
 
     sprintf(gfa_name, "%s.%s.noseq.gfa", output_file_name, suffix);
     output_file = fopen(gfa_name, "w");
-    hama_ug_print(ug, &R_INF, sg, coverage_cut, sources, ruIndex, 0, seq_prefix, output_file);
+    hamt_ug_print(ug, &R_INF, sg, coverage_cut, sources, ruIndex, 0, seq_prefix, output_file);
     fclose(output_file);
 
     free(gfa_name);
@@ -28388,6 +28475,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             int cleanID = 0;
 
             ma_ug_t *hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
 
             // topo pre clean
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
@@ -28526,6 +28614,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // final cleanup
             hamt_ug_cleanup_almost_circular(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
+            // // (debug)
+            // while (hamt_debug_ug_random_cut_arcs(sg, hamt_ug, 1)){
+            //     fprintf(stderr, "[debug::%s] random cut\n", __func__);
+            //     hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // }
 
             hamt_ug_destroy(hamt_ug);
         }  

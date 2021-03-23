@@ -16,6 +16,7 @@ KRADIX_SORT_INIT(ovhamt32, uint32_t, uint32_t, 4)
 
 #define HAMT_PRIMARY_LABEL 0
 #define HAMT_ALTER_LABEL 1
+void hamt_ug_util_BFS_markSubgraph_trailing(ma_ug_t *ug_old, ma_ug_t *ug_new, int base_label);
 
 //////////////////////////////////////////////////////////////////////
 //                        debug functions                           //
@@ -154,6 +155,7 @@ void hamt_ug_print_simple(const ma_ug_t *ug, All_reads *RNF, FILE *fp)
     // simplified `ma_ug_print2`
     // NOTE
     //    Assume coverage has been collected
+    //    Does not include subgraph info.
 	uint32_t i, j, l;
 	char name[32];
 	for (i = 0; i < ug->u.n; ++i) { // the Segment lines in GFA
@@ -405,6 +407,19 @@ int stack32_is_in_stack(stacku32_t *stack, uint32_t d){
         }
     }
     return 0;
+}
+
+int stacku32_index_value(stacku32_t *stack, uint32_t d){
+    // FUNC
+    //    if a given value is in the buffer, return the index
+    //    return -1 otherwise
+    if (stack->n==0){return -1;}
+    for (int i=0; i<stack->n; i++){
+        if (stack->a[i]==d){
+            return i;
+        }
+    }
+    return -1;
 }
 
 
@@ -688,6 +703,7 @@ ma_ug_t *hamt_ug_gen(asg_t *sg,
     }
     hamt_ug_init_seq_vis(ug, flag);
     hamt_collect_utg_coverage(sg, ug, coverage_cut, sources, ruIndex);
+    hamt_ug_util_BFS_markSubgraph(ug, flag);  // get subgraph IDs
     return ug;
 }
 void hamt_ug_destroy(ma_ug_t *ug){
@@ -698,8 +714,12 @@ void hamt_ug_regen(asg_t *sg, ma_ug_t **ug,
                     const ma_sub_t* coverage_cut,
                     ma_hit_t_alloc* sources, R_to_U* ruIndex, int flag){
     hamt_ug_cleanup_arc_by_labels(sg, *ug);
+
+    ma_ug_t *ug_new = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, flag);
+    hamt_ug_util_BFS_markSubgraph_trailing(*ug, ug_new, flag);
+
     hamt_ug_destroy(*ug);
-    *ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, flag);
+    *ug = ug_new;
 }
 void hamt_asg_reset_seq_label(asg_t *sg, uint8_t flag){
     int primary=0, alter=0;
@@ -2530,6 +2550,11 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
 }
 
 int hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label){
+    // FUNC
+    //     Traverse the ug and give each unitig a subgraph ID (arbitrary; 
+    //       stable in terms of assembly runs, NOT stable between ug generations).
+    // RET
+    //     The largest subgraph ID.
     asg_t *auxsg = ug->g;
     uint8_t *color_sg = (uint8_t*)calloc(auxsg->n_seq*2, 1);
     int *subg_labels = (int*)calloc(auxsg->n_seq*2, sizeof(int));
@@ -2543,6 +2568,195 @@ int hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label){
     free(subg_labels);
     queue32_destroy(&q);
     return max_label;
+}
+
+void hamt_ug_util_BFS_markSubgraph_trailing(ma_ug_t *ug_old, ma_ug_t *ug_new, int base_label){
+    // FUNC
+    //     Init/update a list of subgraphs IDs for each unitig.
+    //     Intention: it might be interesting to know if a few seperated circular contigs/subgraphs
+    //                were initially linked together by just looking at the contig names.
+    //     For the primary graph, do nothing if the connectivity of a subgraph did not change,
+    //                            push a new subID otherwise 
+    //     For example, if subgraph #4 is splited into two, then #4's unitigs will be updated with
+    //       an additional ID of #1 or #2; the final subgraph ID will be #4.1 or #4.2.
+    // self NOTE
+    //     ug->u.n == ug->g->n_seq == number of unitigs
+    int verbose = 0;
+    int *old_labels = 0;
+    int *new_labels = 0;
+    int old_max_label = 0;
+    int is_first_time = 0;
+    asg_t *auxsg_old = ug_old->g;
+    asg_t *auxsg_new = ug_new->g;
+
+    if (!R_INF.subg_label_trail){  // first time
+        is_first_time = 1;
+        if (verbose) fprintf(stderr, "[debug::%s] init subg_label_trail\n", __func__);
+        R_INF.subg_label_trail = (ma_utg_subg_labels_v*)calloc(1, sizeof(ma_utg_subg_labels_v));
+        assert(R_INF.subg_label_trail);
+        // note: start/end read of a circular unitig might not be stable, so here we have to have a buffer of length nb_reads,
+        //       instead of length nb_unitig. 
+        //       Not the best way i suppose. // TODO
+        R_INF.subg_label_trail->m = R_INF.total_reads; 
+        R_INF.subg_label_trail->n = R_INF.total_reads;
+        R_INF.subg_label_trail->a = (ma_utg_subglabels_t*)calloc(R_INF.subg_label_trail->m, sizeof(ma_utg_subglabels_t));
+        for (int i=0; i<R_INF.total_reads; i++){
+            R_INF.subg_label_trail->a[i].m = 16;
+            R_INF.subg_label_trail->a[i].a = (int*)malloc(sizeof(int) * 16);
+            for (int j=0; j<16; j++){
+                R_INF.subg_label_trail->a[i].a[j] = -1;
+            }
+        }
+    }
+
+    // store old subg labels (to be referred by 1st read's ID)
+    if (verbose) fprintf(stderr, "[debug::%s] backup previous subg labels\n", __func__);
+    old_labels = (int*)calloc(R_INF.total_reads, sizeof(int));  // use seqID as stable unitig ID; note: this works because we only merge unitigs and never break them up
+    new_labels = (int*)calloc(R_INF.total_reads, sizeof(int)); 
+    for (int i=0; i<R_INF.total_reads; i++){old_labels[i] = -1;}
+    for (int i=0; i<R_INF.total_reads; i++){new_labels[i] = -1;}
+
+    for (uint32_t i=0; i<ug_old->u.n; i++){  // note: number of unitig, not 2*nb_unitig
+        if (verbose>1) {
+            fprintf(stderr, "[debug::%s]     utg%.6d, subg label was %d\n", __func__, (int)(i)+1, (int)ug_old->u.a[i].subg_label);
+            fprintf(stderr, "[debug::%s]        (read ID: %d and %d)\n", __func__, (int)(ug_old->u.a[i].a[0]>>33),
+                                                                (int)(ug_old->u.a[i].a[ug_old->u.a[i].n-1]>>33));
+            // fprintf(stderr, "[debug::%s]         - %.*s\n", __func__, (int)Get_NAME_LENGTH((R_INF), (ug_old->u.a[i].a[0]>>33)),
+            //                                                 Get_NAME((R_INF), (ug_old->u.a[i].a[0]>>33)));
+            // fprintf(stderr, "[debug::%s]         - %.*s\n", __func__, (int)Get_NAME_LENGTH((R_INF), (ug_old->u.a[i].a[ug_old->u.a[i].n-1]>>33)),
+            //                                                 Get_NAME((R_INF), (ug_old->u.a[i].a[ug_old->u.a[i].n-1]>>33)));
+            
+        }
+        // old_labels[ug_old->u.a[i].a[0]>>33] = ug_old->u.a[i].subg_label;
+        // old_labels[ug_old->u.a[i].a[ug_old->u.a[i].n-1]>>33] = ug_old->u.a[i].subg_label;
+        for (int j=0; j<ug_old->u.a[i].n; j++){
+            old_labels[ug_old->u.a[i].a[j]>>33] = ug_old->u.a[i].subg_label;
+        }
+        
+        if (ug_old->u.a[i].subg_label>old_max_label) old_max_label = ug_old->u.a[i].subg_label;
+    }
+    for (uint32_t i=0; i<ug_new->u.n; i++){
+        if (verbose>1) {
+            fprintf(stderr, "[debug::%s]     utg%.6d, subg label is %d\n", __func__, (int)(i)+1, (int)ug_new->u.a[i].subg_label);
+            fprintf(stderr, "[debug::%s]        (read ID: %d and %d)\n", __func__, (int)(ug_new->u.a[i].a[0]>>33),
+                                                                (int)(ug_new->u.a[i].a[ug_new->u.a[i].n-1]>>33));
+            // fprintf(stderr, "[debug::%s]         - %.*s\n", __func__, (int)Get_NAME_LENGTH((R_INF), (ug_new->u.a[i].a[0]>>33)),
+            //                                                 Get_NAME((R_INF), (ug_new->u.a[i].a[0]>>33)));
+            // fprintf(stderr, "[debug::%s]         - %.*s\n", __func__, (int)Get_NAME_LENGTH((R_INF), (ug_new->u.a[i].a[ug_new->u.a[i].n-1]>>33)),
+            //                                                 Get_NAME((R_INF), (ug_new->u.a[i].a[ug_new->u.a[i].n-1]>>33)));
+        }
+        // new_labels[ug_new->u.a[i].a[0]>>33] = ug_new->u.a[i].subg_label;
+        // new_labels[ug_new->u.a[i].a[ug_new->u.a[i].n-1]>>33] = ug_new->u.a[i].subg_label;
+        for (int j=0; j<ug_new->u.a[i].n; j++){
+            new_labels[ug_new->u.a[i].a[j]>>33] = ug_new->u.a[i].subg_label;
+        }
+    }
+
+    // (note: assuming ug_new's subg labels are already collected)
+    int unchanged, base_subgID, subgID;
+    stacku32_t *IDs = (stacku32_t*)malloc(sizeof(stacku32_t));
+    stacku32_init(IDs);
+
+    // init trailing IDs if 1st time
+    if (is_first_time){
+        if (verbose) fprintf(stderr, "[debug::%s] init trailing subg IDs\n", __func__);
+        for (int i_utg=0; i_utg<ug_old->u.n; i_utg++){
+            subgID = ug_old->u.a[i_utg].subg_label;
+            if (verbose>1) fprintf(stderr, "[debug::%s]     unitig %.6d\n", __func__, (int)(i_utg)+1);
+
+            ma_utg_subglabels_t *p;
+            for (int i_read=0; i_read<ug_old->u.a[i_utg].n; i_read++){
+                p = &R_INF.subg_label_trail->a[ug_old->u.a[i_utg].a[i_read]>>33];
+                p->a[0] = subgID;
+                p->n++;
+            }
+
+            if (verbose) fprintf(stderr, "[debug::%s]       (ok, subg ID %d)\n", __func__, (int)subgID);
+        }
+    }
+
+    // check each old subgraph and see if every unitig still share a same ID
+    {
+        if (verbose) fprintf(stderr, "[debug::%s] check each (previous) subgraphs...\n", __func__);
+        for (int i_subg=0; i_subg<old_max_label+1; i_subg++){
+            if (verbose>1) fprintf(stderr, "[debug::%s]   > subg %d\n", __func__, i_subg);
+            unchanged = 1;
+            base_subgID = -1;
+            stacku32_reset(IDs);
+            for (int i_utg=0; i_utg<ug_old->u.n; i_utg++){
+                // if (verbose>1) fprintf(stderr, "[debug::%s]    at utg%.6d , read ID %d\n", __func__, (int)i_utg+1, (int)(ug_old->u.a[i_utg].a[0]>>33));
+                if (ug_old->u.a[i_utg].subg_label!=i_subg) continue;
+
+                // checking a giving subgraph (old)
+                for (int i_read=0; i_read<ug_old->u.a[i_utg].n; i_read++){
+                    subgID = new_labels[ug_old->u.a[i_utg].a[i_read]>>33];  // new subg ID
+                    // if (verbose>1) fprintf(stderr, "[debug::%s]     utg %.6d, a new subg ID is %d\n", __func__, i_utg+1, subgID);
+                    if (base_subgID==-1) base_subgID = subgID;
+                    else{
+                        if (base_subgID!=subgID){
+                            unchanged = 0;
+                            if (!stack32_is_in_stack(IDs, (uint32_t)subgID)){
+                                stacku32_push(IDs, (uint32_t)subgID);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!unchanged){  // an old subgraph has been splited, push new trailing IDs for the reads
+                if (verbose) {fprintf(stderr, "[debug::%s] subgraph %d has been splitted; going to udpate trailing IDs\n", __func__, i_subg);}
+                stacku32_push(IDs, (uint32_t)base_subgID);
+                int newID;
+                for (int i_utg=0; i_utg<ug_old->u.n; i_utg++){
+                    if (i_subg!=ug_old->u.a[i_utg].subg_label) continue;
+
+                    // push to the trail of subgIDs for all reads
+                    for (int i_read=0; i_read<ug_old->u.a[i_utg].n; i_read++){
+                        subgID = new_labels[ug_old->u.a[i_utg].a[i_read]>>33];  // new subg ID
+                        newID = stacku32_index_value(IDs, subgID);  // the index after subgraph split
+                        ma_utg_subglabels_t *p = &R_INF.subg_label_trail->a[ug_old->u.a[i_utg].a[i_read]>>33];
+                        if (p->n==p->m){  // (expand buffer)
+                            p->m = p->m + (p->m>>1);
+                            p->a = (int*)realloc(p->a, sizeof(int)*p->m);
+                        }
+                        p->a[p->n] = newID;
+                        p->n++;
+                    }
+                }
+            }else{
+                if (verbose) {fprintf(stderr, "[debug::%s] subgraph %d unchanged\n", __func__, i_subg);}
+            }
+        }
+    }
+    
+    free(old_labels);
+    free(new_labels);
+    stacku32_destroy(IDs);
+    free(IDs);
+}
+
+int hamt_debug_ug_random_cut_arcs(asg_t *sg, ma_ug_t *ug, int nb_cut){
+    // FUNC
+    //     Arbitrarily cut nb_cut arcs. For debugging the subgraph trailing ID implementation.
+    // RET
+    //     1 if ok
+    //     0 if no more arcs remain
+    asg_t *auxsg = ug->g;
+    int cnt = 0;
+    uint32_t vu, wu;
+    for (uint32_t i=0; i<auxsg->n_arc; i++){
+        if (auxsg->arc[i].del) {continue;}
+        vu = (uint32_t) (auxsg->arc[i].ul>>32);
+        wu = auxsg->arc[i].v;
+        if (auxsg->seq_vis[vu>>1]!=auxsg->seq_vis[wu>>1]){
+            hamt_ug_arc_del(sg, ug, vu, wu, 1);
+            cnt++;
+            if (cnt==nb_cut) break;
+        }
+    }
+    if (cnt<nb_cut) return 0;
+    else return 1;
+
 }
 
 int hamt_asgutil_calc_singlepath_cov(asg_t *g, uint32_t v, int base_label){

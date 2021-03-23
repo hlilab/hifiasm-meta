@@ -4,7 +4,7 @@
 #include <pthread.h>
 
 #define HA_VERSION "0.13-r308"
-#define HAMT_VERSION "0.1-r031"
+#define HAMT_VERSION "0.1-r033"
 
 
 // #define VERBOSE 1
@@ -99,6 +99,7 @@ typedef struct {
     int is_final_round, is_reverse_source;
     int is_mode_low_cov;
     int is_dump_relevant_reads; FILE *fp_relevant_reads;
+    // hifiasm_argcv_t *argcv;
     // end of hamt
     
 } hifiasm_opt_t;
@@ -109,6 +110,7 @@ typedef struct {
 } hifiasm_argcv_t;  // hamt
 
 extern hifiasm_opt_t asm_opt;
+extern hifiasm_argcv_t asm_argcv;
 
 void init_opt(hifiasm_opt_t* asm_opt);
 void destory_opt(hifiasm_opt_t* asm_opt);

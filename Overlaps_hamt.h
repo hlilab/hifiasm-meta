@@ -36,6 +36,8 @@ void hamt_asg_reset_seq_label(asg_t *sg, uint8_t flag);
 void hamt_asg_reset_seq_vis(asg_t *sg, uint8_t flag);
 void hamt_debug_dump(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources);
 
+int hamt_debug_ug_random_cut_arcs(asg_t *sg, ma_ug_t *ug, int nb_cut);
+
 // file output helper routines
 int hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label);
 

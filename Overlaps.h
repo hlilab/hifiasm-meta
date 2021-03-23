@@ -116,7 +116,7 @@ typedef struct {
 	uint64_t *a; // list of reads; upper 32 bits represent readID (with direction); lower 32 is arc length not overlap length
 	char *s; // unitig sequence is not null
 	uint8_t c;  // hamt: like seq's .c
-	int subg_label;  // hamt: subgraph ID
+	int subg_label;  // hamt: subgraph ID (current)
 } ma_utg_t;
 
 
@@ -1141,6 +1141,8 @@ uint32_t get_ug_coverage(ma_utg_t* u, asg_t* read_g, const ma_sub_t* coverage_cu
 int get_arc(asg_t *g, uint32_t src, uint32_t dest, asg_arc_t* result);
 ma_hit_t *get_specific_overlap_handle(ma_hit_t_alloc *sources, uint32_t qn, uint32_t tn);
 int asg_arc_del_multi(asg_t *g);
+
+void hamt_ug_get_subgaware_name(char *name, int name_l, uint32_t i, const ma_ug_t *ug, const char* prefix);
 ///////////////////////////////////////////////////////
 
 #endif

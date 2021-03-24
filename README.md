@@ -35,8 +35,6 @@ Contig naming and subgraph info:
 
 Based on the limited available test data, real datasets are unlikely to require read selection; mock datasets, however, might need it.
 
-Some old commits before r22 may produce extra debug outputs for dev purposes.
-
 Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm can use hifiasm\_meta's bin file, but not vice versa. Meta needs to store extra info from overlap & error correction step.
 
 ## Switches

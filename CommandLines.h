@@ -101,6 +101,10 @@ typedef struct {
     int is_mode_low_cov;
     int is_dump_relevant_reads; FILE *fp_relevant_reads;
     // hifiasm_argcv_t *argcv;
+
+    // hamt, graph cleaning control
+    int gc_superbubble_tig_max_length;
+
     // end of hamt
     
 } hifiasm_opt_t;

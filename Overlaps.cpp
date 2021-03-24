@@ -28469,7 +28469,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         }
 
         // clean up ug
-        if (asm_opt.is_use_exp_graph_cleaning){
+        {
             hamt_asg_reset_seq_label(sg, 0);
 
             int cleanID = 0;
@@ -28493,6 +28493,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 }   
             }
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;}
+
+            hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_utg", "utg",
+                                     sources, ruIndex, max_hang_length, mini_overlap_length, -1);
 
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug, 0);
@@ -28536,7 +28539,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             for (int round_resolve=0; round_resolve<5; round_resolve++){
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveCmplx_before", cleanID); cleanID++;}
                 
-                nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug, 0, 1, 0, -1);
+                nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug, 0, 1, 0, asm_opt.gc_superbubble_tig_max_length);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips(sg, hamt_ug, 5, 0);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips_aggressive(sg, hamt_ug, 0.7, 0);
                 nb_complex_bubble_cut += hamt_ug_resolve_oneMultiLeafSoapBubble(sg, hamt_ug, 0, 1, 0);
@@ -28624,7 +28627,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_destroy(hamt_ug);
         }  
 
-
+        #if 0
         // (hifiasm's p_utg graph cleaning + generation checkpoint)
         if (asm_opt.is_use_exp_graph_cleaning){
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_utg", "utg",
@@ -28633,7 +28636,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             output_contig_graph_primary_pre(sg, coverage_cut, output_file_name, sources, reverse_sources, 
                 asm_opt.small_pop_bubble_size, asm_opt.max_short_tip, ruIndex, max_hang_length, mini_overlap_length);
         }
-
+        #endif
 
         // p_ctg and a_ctg
         if (!asm_opt.is_use_exp_graph_cleaning){

@@ -10502,14 +10502,14 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
 	uint32_t i, j, l;
 	char name[32];
 
-    // GFA comment lines
-    fprintf(fp, "#");
-    for (int i=0; i<asm_argcv.ha_argc; i++){
-        fprintf(fp, " %s", asm_argcv.ha_argv[i]);
-    }
-    fprintf(fp, "\n");
-    fprintf(fp, "# Hifiasm code base version: %s\n",  HA_VERSION);
-    fprintf(fp, "# Hifiasm_meta version: %s\n", HAMT_VERSION);
+    // // GFA comment lines
+    // fprintf(fp, "#");
+    // for (int i=0; i<asm_argcv.ha_argc; i++){
+    //     fprintf(fp, " %s", asm_argcv.ha_argv[i]);
+    // }
+    // fprintf(fp, "\n");
+    // fprintf(fp, "# Hifiasm code base version: %s\n",  HA_VERSION);
+    // fprintf(fp, "# Hifiasm_meta version: %s\n", HAMT_VERSION);
 
 
 	for (i = 0; i < ug->u.n; ++i) { // the Segment lines in GFA

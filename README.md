@@ -25,7 +25,11 @@ Cleaned unitig graph: asm.p\_utg\*.gfa
 
 Contig graph: asm.p\_ctg\*.gfa and asm.a\_ctg\*.gfa
 
-Unitig/Contig naming: `^s[0-9]+\.[uc]tg[0-9]{6}[lc]` where the `s[0-9]+` is a subgraph label.
+Contig naming and subgraph info: 
+
+- contig names are `^s[0-9]+\.[uc]tg[0-9]{6}[lc]` where the `s[0-9]+` is a disconnected subgraph label of the contig. It might be useful to be able to quickly checking whether two contigs are in the same disconnected subgraph (i.e. haplotype that wasn't assembled in to a single contig, tangled haplotypes).
+
+- a trail of subgraph labels is stored in a custom gfa tag ts:B:I (uint32\_t array, comma seperated). This can be used to quickly check if two unconnected contigs or subgraphs were once connected during graph cleaning. For example, say we have 3 graphs, A, B and C. A is splitted into two graphs, A1 and A2; A2 is further splicted into A2a, A2b and A2c. Then A1 may be labelled as 0.0, A2a as 0.1.0, A2b as 0.1.1, A2c as 0.1.2, B as 1, and C as 2 (integers are arbitrary but unique). 
 
 ## Special Notes
 

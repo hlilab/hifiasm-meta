@@ -56,7 +56,7 @@ See also README\_ha.md, the stable hifiasm doc.
 # Assembly
 --lowcov        (Experimental) Ignore almost all phasing info. Try this if input has very low coverage (e.g. <10).
 
-# Auxillary
+# Auxiliary 
 --write-paf     Dump overlaps, produces 2 files, one contains the intra-haplotype or unphased overlaps, the other contains inter-haplotype overlaps. If coverage is very high, this might not be the full set of overlaps.
 --dump-all-ovlp Dump all overlaps ever calculated during the final overlaping. 
 --write-ec      Dump error corrected reads.

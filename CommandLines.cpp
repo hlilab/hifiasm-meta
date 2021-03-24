@@ -8,7 +8,7 @@
 #include "ketopt.h"
 #include "gitcommit.h"  // if gone, use stamp
 
-#define DEFAULT_OUTPUT "hifiasm.asm"
+#define DEFAULT_OUTPUT "hifiasm_meta.asm"
 
 hifiasm_opt_t asm_opt;
 hifiasm_argcv_t asm_argcv;  // hamt
@@ -94,7 +94,6 @@ void Print_H(hifiasm_opt_t* asm_opt)
     fprintf(stderr, "    -n INT      remove tip unitigs composed of <=INT reads [%d]\n", asm_opt->max_short_tip);
     fprintf(stderr, "    -x FLOAT    max overlap drop ratio [%.2g]\n", asm_opt->max_drop_rate);
     fprintf(stderr, "    -y FLOAT    min overlap drop ratio [%.2g]\n", asm_opt->min_drop_rate);
-    fprintf(stderr, "    --lowq-5                 lower 5%% runtime kmer frequency threshold. [%d]\n", asm_opt->lowq_thre_5);
     fprintf(stderr, "  Auxiliary:\n");
     fprintf(stderr, "    -e          ban assembly, i.e. terminate before generating string graph\n");
     fprintf(stderr, "    --write-paf dump overlaps (paf).\n");

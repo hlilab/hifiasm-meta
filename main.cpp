@@ -43,8 +43,23 @@ int main(int argc, char *argv[])
 		ret = ha_assemble();
 		fprintf(stderr, "[M::%s] Hifiasm %s\n", __func__, HA_VERSION);
 	}
-    destory_opt(&asm_opt);
+    // (an alternative to gfa comment lines)
+	char* logname = (char*)malloc(strlen(asm_opt.output_file_name)+100);
+    sprintf(logname, "%s.cmd", asm_opt.output_file_name);
+	FILE *fp = fopen(logname, "w");
+	fprintf(fp, "#");
+    for (int i=0; i<argc; i++){
+        fprintf(fp, " %s", argv[i]);
+    }
+    fprintf(fp, "\n");
+    fprintf(fp, "# Hifiasm code base version: %s\n",  HA_VERSION);
+    fprintf(fp, "# Hifiasm_meta version: %s\n", HAMT_VERSION);
+	fprintf(fp, "# Real time: %.3f sec; CPU: %.3f sec; Peak RSS: %.3f GB\n", yak_realtime(), yak_cputime(), yak_peakrss_in_gb());
+	fclose(fp);
 	
+	
+	destory_opt(&asm_opt);
+
 	fprintf(stderr, "[M::%s] CMD:", __func__);
 	for (i = 0; i < argc; ++i)
 		fprintf(stderr, " %s", argv[i]);

@@ -93,6 +93,7 @@ typedef struct {
     int is_dump_ovec_error_count;
     int lowq_thre_10;
     int lowq_thre_5;
+    int lowq_thre_3;
     int write_debug_gfa;
     int write_new_graph_bins;
 

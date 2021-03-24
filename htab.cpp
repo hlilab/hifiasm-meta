@@ -1545,7 +1545,8 @@ void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, 
 	if (round==0) {flag_is_keep_read = 1;}  // median has been checked upfront
 	else if (round==1){
 		radix_sort_hamt16(buf_norm, buf_norm+idx);
-		if (buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10 || buf_norm[idx/20]<=s->p->asm_opt->lowq_thre_5){
+		if (buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10 || buf_norm[idx/20]<=s->p->asm_opt->lowq_thre_5||
+		    ((s->p->asm_opt->lowq_thre_3>0) && (buf_norm[idx/33]<=s->p->asm_opt->lowq_thre_3)) ){
 			flag_is_keep_read = 1;
 		}
 	}

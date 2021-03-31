@@ -103,6 +103,9 @@ int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_
 int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug, int base_label,
                                                ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources);
 void hamt_debug_get_diploid_info_about_all_branchings(ma_ug_t *ug, ma_hit_t_alloc *reverse_sources);
+int hamt_ug_rescue_bifurTip(asg_t *sg, ma_ug_t *ug,int base_label,
+                           ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, 
+                           const ma_sub_t* coverage_cut);
 
 // misc
 int hamt_ug_cleanup_almost_circular(asg_t *sg, ma_ug_t *ug, int base_label);

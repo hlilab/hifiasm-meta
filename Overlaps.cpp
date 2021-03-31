@@ -28338,7 +28338,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             ///just topological clean
             // pre_clean(sources, coverage_cut, sg, bubble_dist);
-            hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // TESTING
+            hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);
             
             ///asg_arc_del_orthology(sg, reverse_sources, drop_ratio, asm_opt.max_short_tip);
             // asg_arc_del_orthology_multiple_way(sg, reverse_sources, drop_ratio, asm_opt.max_short_tip);
@@ -28362,16 +28362,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             /****************************may have bugs********************************/
 
             asg_arc_identify_simple_bubbles_multi(sg, 1);
-            if (ha_opt_triobin(&asm_opt))
-            {
-                asg_arc_del_short_diploid_by_length_trio(sg, drop_ratio, asm_opt.max_short_tip, reverse_sources, 
-                asm_opt.max_short_tip, 1, 1, 0, 0, ruIndex);
-            }
-            else
-            {
-                asg_arc_del_short_diploid_by_length(sg, drop_ratio, asm_opt.max_short_tip, reverse_sources, 
-                asm_opt.max_short_tip, 1, 1, 0, 0, ruIndex);
-            }
+            asg_arc_del_short_diploid_by_length(sg, drop_ratio, asm_opt.max_short_tip, reverse_sources, 
+            asm_opt.max_short_tip, 1, 1, 0, 0, ruIndex);
+
             asg_cut_tip(sg, asm_opt.max_short_tip);
 
             asg_arc_identify_simple_bubbles_multi(sg, 1);
@@ -28383,13 +28376,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             asg_cut_tip(sg, asm_opt.max_short_tip);
 
-            // if(VERBOSE >= 1){  // debug: write temp graph
-            //     char* unlean_name = (char*)malloc(strlen(output_file_name)+25);
-            //     sprintf(unlean_name, "%s.afterRound%d", output_file_name, i);
-            //     output_read_graph(sg, coverage_cut, unlean_name, n_read);
-            //     output_unitig_graph(sg, coverage_cut, unlean_name, sources, ruIndex, max_hang_length, mini_overlap_length);
-            //     free(unlean_name);
-            // }
         }
     }
 
@@ -28519,6 +28505,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;}
 
+            // hap resuce
+            hamt_ug_rescue_bifurTip(sg, hamt_ug, 0, sources, reverse_sources, coverage_cut);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_rescueBifurTip", cleanID); cleanID++;}
 
             // more topo cleaning
             hamt_ug_prectgTopoClean(sg, coverage_cut, sources, ruIndex, 0, 1, 0);

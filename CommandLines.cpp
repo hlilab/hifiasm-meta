@@ -514,7 +514,11 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->lowq_thre_3 = atoi(opt.arg);
             asm_opt->is_disable_read_selection = 0;
         }
-        else if (c == 413) {asm_opt->write_debug_gfa = 1;}
+        else if (c == 413) {
+            fprintf(stderr, "[M::%s] will write intermediate gfa files; also set VERBOSE to 1\n", __func__);
+            asm_opt->write_debug_gfa = 1;
+            VERBOSE = 1;
+        }
         else if (c == 414) {asm_opt->is_use_exp_graph_cleaning = 0;}
         else if (c == 415) {asm_opt->is_mode_low_cov = 1;}
         else if (c == 416) {asm_opt->write_new_graph_bins = 1;}

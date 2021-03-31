@@ -1665,6 +1665,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
     asg_arc_t *av;
     int idx;
     int max_contig_length = 100000;
+    if (verbose){fprintf(stderr, "[debug::%s] at %.6d\n", __func__, (int)(v0>>1)+1);}
 
     if (hamt_asgarc_util_countSuc(g, v0, 0, 0, base_label)!=2){
         if (verbose){fprintf(stderr, "    v0 failed\n");}
@@ -1718,7 +1719,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
         hamt_asgarc_util_get_the_one_target(g, w2[0], &w_tmp, 0, 0, base_label);
         if (w_tmp==v6){
             passed = 1;
-            v4 = w_tmp;
+            v4 = w2[0];
             v5 = w2[1];
         }
     }
@@ -1731,7 +1732,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
                 return 0;
             }
             passed = 1;
-            v4 = w_tmp;
+            v4 = w2[1];
             v5 = w2[0];
         }
     }
@@ -3821,6 +3822,7 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
             continue;
         }
 
+        #if 0
         // sancheck + cut: don't drop tip if ALL of its sucessors has no target other than the tip
         //                 i.e. only drop an arc if the target vertex still have other predecessors
         // (note) this intentionally spares all multi-leaf tips; let other rountines try them.
@@ -3839,7 +3841,7 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
                 hamt_ug_arc_del(sg, ug, vu, wu, 1);
                 nb_cut++;
                 need_to_spare = 1;
-                if (verbose>1){
+                if (verbose){
                     fprintf(stderr, "[debug::%s] cut tip: utg%.6d \n", __func__, (int)(vu>>1)+1);
                 }
             }
@@ -3847,6 +3849,16 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
         // if (!is_hard_drop && !need_to_spare){
         //     hamt_ug_utg_softdel(sg, ug, vu, alt_label);
         // }
+        #endif
+        
+        // sancheck+cut: don't touch the tip if it has more than one outgoing arc,
+        //               regardless of what the targets look like.
+        //               We might want to check up on these tips later or something.
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)>1) continue;
+        hamt_asgarc_util_get_the_one_target(auxsg, vu, &wu, 0, 0, base_label);
+        hamt_ug_arc_del(sg, ug, vu, wu, 1);
+
+
     }
 
     if (nb_cut){
@@ -3862,7 +3874,7 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
 
 int hamt_ug_cut_shortTips_arbitrary(asg_t *sg, ma_ug_t *ug, int max_length, int base_label){
     // FUNC
-    //     cut simple tips shorter than max_length, regardless of whether their targets have no non-tip linkage
+    //     cut simple tips (1 arc) shorter than max_length, regardless of whether their targets have no non-tip linkage
     // NOTE
     //     this is meant to be a companion of complex bubble resolve function,
     //     some very short tip may remain after cutting and they may not get treatment
@@ -3883,7 +3895,7 @@ int hamt_ug_cut_shortTips_arbitrary(asg_t *sg, ma_ug_t *ug, int max_length, int 
     asg_arc_t *av;
     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
         if (ug->u.a[vu>>1].len>max_length){continue;}
-        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)==0){continue;}
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=1){continue;}
         nv = asg_arc_n(auxsg, vu);
         av = asg_arc_a(auxsg, vu);
         for (uint32_t i=0; i<nv; i++){
@@ -3901,6 +3913,52 @@ int hamt_ug_cut_shortTips_arbitrary(asg_t *sg, ma_ug_t *ug, int max_length, int 
     }
     return nb_cut;
 }
+
+int hamt_ug_check_bifurTip(ma_ug_t *ug, uint32_t vu, int base_label,
+                           ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources){
+    // FUNC
+    //     Given unitig vu, check if 
+    //       1) it's a not-very-long tip that connects to exactly 2 vertices, 
+    //       2) the 2 vertices is not a pair of haplotigs, and
+    //       3) the 2 vertices could've been connected (i.e. the 2 ends connected with the tip overlap with each other)
+    // RETURN
+    //     1 if yes
+    //     0 if no
+    int verbose = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t wu[2];
+
+    // tip direction: has no predecessor and has 2 successors
+    if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)>0 || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=2){
+        if (verbose){
+            fprintf(stderr, "[debug::%s] utg %.6d , failed tip requirements\n", __func__, (int)(vu>>1)+1);
+        }
+        return 0;
+    }
+
+    // check haplotig status
+    hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+    if (hamt_check_diploid(ug, wu[0], wu[1], 0.3, reverse_sources)>0){
+        if (verbose){
+            fprintf(stderr, "[debug::%s] utg %.6d , failed haplotig requirement\n", __func__, (int)(vu>>1)+1);
+        }
+        return 0;
+    }
+
+    // check overlap
+    if (hamt_check_diploid(ug, wu[0], wu[1], 0, sources)>0){  // abuse the function: check homo paf with ratio threshold set to 0
+        if (verbose){
+            fprintf(stderr, "[debug::%s] utg %.6d , pass\n", __func__, (int)(vu>>1)+1);
+        }
+        return 1;
+    }else{
+        if (verbose){
+            fprintf(stderr, "[debug::%s] utg %.6d , failed ovlp check\n", __func__, (int)(vu>>1)+1);
+        }
+        return 0;
+    }
+}
+
 
 
 void hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t v, uint32_t v_parent, int *DFStime, uint8_t *visited, int *tin, int *low, int base_label){
@@ -4951,7 +5009,7 @@ int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int a
         if (ug->u.a[vu>>1].len>100000){
             continue;
         }
-        if (verbose){fprintf(stderr, "[debug::%s] at utg%.6d\n", __func__, (int)(vu>>1)+1);}
+        if (verbose>1){fprintf(stderr, "[debug::%s] at utg%.6d\n", __func__, (int)(vu>>1)+1);}
         if (hamt_asgarc_util_checkSimpleInvertBubble(auxsg, vu, &wu, &uu, base_label)){  // note: uu's direction is adjusted for popping; no need to ^1
             if (ug->u.a[wu>>1].len>100000){
                 continue;
@@ -5371,12 +5429,10 @@ int hamt_ug_oneutgCircleCut(asg_t *sg, ma_ug_t *ug, int base_label){
             // cut
             hamt_ug_arc_del(sg, ug, vu^1, wu, 1);  // compile note: safe by assertion
             nb_cut++;
+            if (verbose){fprintf(stderr, "[M::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
+        }
         }
 
-        // topo check passed, cut
-        if (verbose){
-            fprintf(stderr, "[M::%s] cut between utg%.6d and utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
-        }
     }
 
     if (VERBOSE){
@@ -7375,4 +7431,68 @@ int hamt_ug_cleanup_almost_circular(asg_t *sg, ma_ug_t *ug, int base_label){
         asg_cleanup(auxsg);
     }
     return ret;
+}
+
+int hamt_ug_rescue_bifurTip(asg_t *sg, ma_ug_t *ug, int base_label,
+                           ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, const ma_sub_t* coverage_cut){
+    // NOTE/BUG/TODO
+    //     The checking will only check if there is any homo overlaps between
+    //      the two targets; however, recover requires the end reads to 
+    //      overlap with each other.
+    //     This might be problemetic in weird situations.
+    int verbose = 0;
+    asg_t *auxsg = ug->g;
+    int cnt = 0;
+
+    uint32_t wu[2];
+    uint32_t startread, endread;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (ug->u.a[vu>>1].len>50000) continue;  // handle utg shall be short
+
+        if (hamt_ug_check_bifurTip(ug, vu, base_label, sources, reverse_sources)>0){
+            hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+
+            // get reads at the ends of wu0 and wu1
+            if (wu[0]^1){
+                startread = ug->u.a[wu[0]>>1].end^1;
+            }else{
+                startread = ug->u.a[wu[0]>>1].start^1;
+            }
+            if (wu[1]^1){
+                endread = ug->u.a[wu[1]>>1].end;
+            }else{
+                endread = ug->u.a[wu[1]>>1].start;
+            }
+
+            
+            if (hamt_ug_recover_ovlp_if_existed(sg, ug, startread, endread, sources, coverage_cut, 0)>0){
+                hamt_ug_arc_del(sg, ug, vu, wu[0], 1);
+                hamt_ug_arc_del(sg, ug, vu, wu[1], 1);
+                cnt+=1;
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] treated, handle %.6d side1 %.6d side2 %.6d\n", __func__, 
+                                        (int)(vu>>1)+1, (int)(wu[0]>>1)+1, (int)(wu[1]>>1)+1);
+                }
+            }else{
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] did NOT treat bcs can't recover arc, handle %.6d side1 %.6d side2 %.6d\n", __func__, 
+                                        (int)(vu>>1)+1, (int)(wu[0]>>1)+1, (int)(wu[1]>>1)+1);
+                }
+            }
+
+            
+
+        }
+    }
+
+
+    if (cnt){
+        free(sg->idx);
+        sg->idx = 0;
+        sg->is_srt = 0;
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    return cnt;
 }

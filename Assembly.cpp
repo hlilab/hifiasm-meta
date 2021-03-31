@@ -2137,7 +2137,6 @@ int hamt_assemble(void)
 
 		ha_ft_destroy(ha_flt_tab);
 		if (asm_opt.flag & HA_F_WRITE_PAF) {Output_PAF(); Output_reversePAF();}
-		ha_triobin(&asm_opt);
 	}
 
     hist_readlength(&R_INF);

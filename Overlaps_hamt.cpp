@@ -66,46 +66,6 @@ void write_debug_auxsg(asg_t *sg, char *file_base_name){
     free(index_name);
 }
 
-void write_debug_assembly_graph(asg_t *sg, All_reads *rs, char* read_file_name){
-    fprintf(stderr, "Writing debug asg to disk... \n");
-    double startTime = Get_T();
-    char* index_name = (char*)malloc(strlen(read_file_name)+15);
-    sprintf(index_name, "%s.dbg_asg", read_file_name);
-    FILE* fp = fopen(index_name, "w");
-
-    // asg64_v a = {0,0,0};
-	uint32_t n_vtx = sg->n_seq * 2, v, i;
-    
-    uint32_t nv;
-    asg_arc_t* av;
-
-    // basic info of seqs
-    for (i=0; i<rs->total_reads; i++){
-        if (sg->seq[i].del) continue;
-        fprintf(fp, "s\t%" PRIu32 "\t%f\t%" PRIu16 "\t%f\t%" PRIu8 "\t%" PRIu8 "\n",
-                           i, rs->mean[i], rs->median[i], rs->std[i], rs->mask_readtype[i], rs->mask_readnorm[i]);
-    }
-    
-    // the graph
-	for (v = 0; v < n_vtx; ++v) {
-        if (sg->seq[v>>1].del) continue;
-        nv = asg_arc_n(sg, v);
-	    av = asg_arc_a(sg, v);
-        if (nv==0) continue;
-        for (i=0; i<nv; i++){
-            if (av[i].del) continue;
-            if (sg->seq[av[i].v>>1].del) continue;
-            fprintf(fp, "l\t%" PRIu32 "\t%d\t%" PRIu32 "\t%d\t", v>>1, v&1, av[i].v>>1, av[i].v&1);  // vid, v_strand, wid, w_strand
-            fprintf(fp, "%" PRIu8 "\n", sg->seq_vis[i]);
-        }
-    }
-
-    fflush(fp);
-    fclose(fp);
-    fprintf(stderr, "[M::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
-    free(index_name);
-}
-
 
 void ma_ug_print2_lite(const ma_ug_t *ug, All_reads *RNF, asg_t* read_g,
                        int print_seq, const char* prefix, FILE *fp)
@@ -5969,8 +5929,14 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
             }
         }
         // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 210+round);
+        if (nb_modified){
+            free(sg->idx);
+            sg->idx = 0;
+            sg->is_srt = 0;
+            asg_cleanup(sg);
+            asg_cleanup(auxsg);
+        }
         hamt_ug_destroy(ug);
-        asg_cleanup(sg);
     }
 
     if (VERBOSE){
@@ -6043,6 +6009,9 @@ void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug,
 
     if (nb_treat){
         // hamt_ug_cleanup_arc_by_labels(sg, ug);
+        free(sg->idx);
+        sg->idx = 0;
+        sg->is_srt = 0;
         asg_cleanup(sg);
         asg_cleanup(auxsg);
     }

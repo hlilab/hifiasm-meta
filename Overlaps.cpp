@@ -28607,6 +28607,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // final cleanup
             hamt_ug_cleanup_almost_circular(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // // (debug)
             // while (hamt_debug_ug_random_cut_arcs(sg, hamt_ug, 1)){
@@ -28719,9 +28721,7 @@ long long bubble_dist, int read_graph, int write)
             max_hang_length, clean_round, gap_fuzz, min_ovlp_drop_ratio, max_ovlp_drop_ratio, 
             output_file_name, bubble_dist, read_graph, &ruIndex, &sg, &coverage_cut, 0);
         }
-        if (asm_opt.is_use_exp_graph_cleaning){
-            write_debug_assembly_graph(sg, &R_INF, output_file_name);
-        }
+
 
         asg_destroy(sg);
         free(coverage_cut);

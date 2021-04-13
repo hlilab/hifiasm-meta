@@ -28488,13 +28488,20 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
 
-            hamt_clean_shared_seq(sg, hamt_ug, 0, 1, 0);
+            // hap resuce
+            hamt_ug_rescue_bifurTip(sg, hamt_ug, 0, sources, reverse_sources, coverage_cut);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;}
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_rescueBifurTip", cleanID); cleanID++;}
 
-            hamt_circle_cleaning(sg, hamt_ug, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
+            // ////////////////////
+            // hamt_clean_shared_seq(sg, hamt_ug, 0, 1, 0);
+            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;}
+
+            // hamt_circle_cleaning(sg, hamt_ug, 0);
+            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
+            ///////////////
 
             hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
@@ -28505,10 +28512,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;}
 
-            // hap resuce
-            hamt_ug_rescue_bifurTip(sg, hamt_ug, 0, sources, reverse_sources, coverage_cut);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_rescueBifurTip", cleanID); cleanID++;}
+            
 
             // more topo cleaning
             hamt_ug_prectgTopoClean(sg, coverage_cut, sources, ruIndex, 0, 1, 0);
@@ -28528,7 +28532,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             int nb_complex_bubble_cut;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveCmplx_before", cleanID); cleanID++;}
-                
+                if (VERBOSE) fprintf(stderr, "[debug::%s] >>> complex bubble popping %d\n", __func__, round_resolve );
                 nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug, 0, 1, 0, asm_opt.gc_superbubble_tig_max_length);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips(sg, hamt_ug, 5, 0);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips_aggressive(sg, hamt_ug, 0.7, 0);
@@ -28537,7 +28541,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 nb_complex_bubble_cut += hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 if (nb_complex_bubble_cut==0){
-                    // fprintf(stderr, "debug, early termination of complex bubble pop (round %d)\n", round_resolve);
+                    if (VERBOSE) {fprintf(stderr, "debug, early termination of complex bubble pop (round %d)\n", round_resolve);}
                     break;
                 }
             }
@@ -28551,11 +28555,20 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // resolve tangle
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
-            hamt_ug_resolveTangles(sg, hamt_ug, 0, 1);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_after", cleanID);cleanID++;}
-
+            int nb_tangle_cut, nb_tip;
+            for (int round_resolve=0; round_resolve<5; round_resolve++){
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
+                nb_tangle_cut = hamt_ug_resolveTangles(sg, hamt_ug, 0, 1);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                nb_tangle_cut += hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 50000, 0);
+                nb_tangle_cut += hamt_ug_covcut_falseVertexLoop(sg, hamt_ug, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_after", cleanID);cleanID++;}
+                if (nb_tangle_cut==0){
+                    if (VERBOSE) {fprintf(stderr, "debug, early termination of tangle pop (round %d)\n", round_resolve);}
+                    break;
+                }
+            }
             // rescues
             hamt_ug_pop_simpleShortCut(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);

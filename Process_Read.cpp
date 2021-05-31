@@ -159,6 +159,7 @@ void init_All_reads(All_reads* r)
 	r->std = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
 	r->mask_readnorm = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
 	r->mask_readtype = (uint8_t*)calloc(r->hamt_stat_buf_size, sizeof(uint8_t));
+	r->coasm_sampleID = (uint16_t*)calloc(r->hamt_stat_buf_size, sizeof(uint16_t));
 	// meta exp
 	r->statpack = 0;
 	r->is_all_in_mem = 0;
@@ -232,6 +233,9 @@ void destory_All_reads(All_reads* r)
 		free(r->subg_label_trail->a);
 	}
 	///if (r->pb_regions) free(r->pb_regions);
+	if (r->coasm_sampleID){
+		free(r->coasm_sampleID);
+	}
 }
 
 void write_All_reads(All_reads* r, char* read_file_name)

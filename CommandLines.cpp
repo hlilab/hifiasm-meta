@@ -46,6 +46,7 @@ static ko_longopt_t long_options[] = {
     { "dump-all-ovlp", ko_no_argument, 417},
 
     { "gc-sb-max", ko_no_argument, 418},  // graph cleaning, max unitig length in superbubbles
+    { "coasm", ko_no_argument, 419},  // graph cleaning, max unitig length in superbubbles
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -529,6 +530,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->is_dump_relevant_reads = 1;
         }
         else if (c == 418) {asm_opt->gc_superbubble_tig_max_length = atoi(opt.arg);}
+        else if (c == 419) {asm_opt->mode_coasm = 1;}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

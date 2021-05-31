@@ -104,6 +104,7 @@ typedef struct {
 
     // hamt, graph cleaning control
     int gc_superbubble_tig_max_length;
+    int mode_coasm;
 
     // end of hamt
     

@@ -2699,3 +2699,26 @@ int load_pt_index(void **r_flt_tab, ha_pt_t **r_ha_idx, All_reads* r, hifiasm_op
 	free(gfa_name);
 	return 1;
 }
+void hamt_load_coasm_label(){
+	kseq_t *ks;
+	gzFile fp = 0;
+	R_INF.coasm_sampleID = (uint16_t*)realloc(R_INF.coasm_sampleID, sizeof(uint16_t)*R_INF.total_reads);
+	uint32_t i_read = 0;
+	for (uint16_t i=0; i<asm_opt.num_reads; i++){
+		if ((fp = gzopen(asm_opt.read_file_names[i], "r")) == 0) {
+			fprintf(stderr, "[E::%s] coasm label loading, but can't open file %s. Abort.\n", __func__, asm_opt.read_file_names[i]);
+			exit(1);
+		}
+		ks = kseq_init(fp);
+		while (kseq_read(ks) >= 0) {
+			R_INF.coasm_sampleID[i_read] = i;
+			i_read++;
+		}
+
+		kseq_destroy(ks);
+		gzclose(fp);
+
+	}
+	assert(i_read==R_INF.total_reads);
+	fprintf(stderr, "[M::%s] loaded coasm sample IDs.\n", __func__);
+}

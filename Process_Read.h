@@ -176,6 +176,7 @@ typedef struct
 
     int *read2ugID;  // an array of length total_reads (not 2*total_reads); -1 means the read is not start/end of a unitig; otherwise the value is unitig's stable ID
     ma_utg_subg_labels_v *subg_label_trail;  // size of nb_unitig
+    uint16_t *coasm_sampleID;  // an array of length toal_reads
     ///kvec_t_u64_warp* pb_regions;
 } All_reads;
 

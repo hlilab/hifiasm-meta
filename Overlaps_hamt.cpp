@@ -7998,3 +7998,110 @@ int hamt_ug_rescue_bifurTip(asg_t *sg, ma_ug_t *ug, int base_label,
     }
     return cnt;
 }
+
+// DO NOT USE (maybe)
+int hamt_asg_arc_del_intersample_branching(asg_t *sg,
+                    const ma_sub_t* coverage_cut,
+                    ma_hit_t_alloc* sources, R_to_U* ruIndex){
+    // FUNC
+    //     To be called after transitive reduction and basic asg cleaning routines.
+    //     For example, if we see a branching at segment A (sample X) whose child segments are 
+    //       B (sample X) and C (sample Y), we might want to favor B and discard A-C connection.
+    // NOTE
+    //     Will generate a temp ug.
+    // RET
+    //     Number of arcs dropped.
+
+    assert(asm_opt.mode_coasm);
+    if (!R_INF.coasm_sampleID){
+        fprintf(stderr, "[E::%s] co-assembly, sample info hasn't been loaded?\n", __func__);
+        exit(1);
+    }
+
+    int ret = 0;
+    int verbose = 1;
+    double startTime = Get_T();
+    ma_ug_t *ug = ma_ug_gen(sg);
+    asg_t *auxsg = ug->g;
+
+    uint32_t nv, wu; 
+    asg_arc_t *av;
+    uint32_t handle, target[2], target_v[2];
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (hamt_asgarc_util_countNoneTipSuc(auxsg, vu, -1)!=2){continue;}
+        if (ug->utg_coverage[vu>>1]>10) {continue;}
+        handle = ug->u.a[vu>>1].end;  // seqID, with direction bit
+        
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        int san_i = 0;
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].del) {continue;}
+            wu = av[i].v;
+            if (hamt_asgarc_util_isTip(auxsg, wu, 0, 0, -1)) {continue;}
+            target[san_i] = ug->u.a[wu>>1].start;
+            target_v[san_i] = wu;
+            san_i++;
+        }
+        if (san_i!=2){
+            fprintf(stderr, "[E::%s] should not happen, san_i is %d\n", __func__, san_i);
+            exit(1);
+        }
+
+        // check sampleIDs of the segments
+        if (R_INF.coasm_sampleID[target[0]>>1]==R_INF.coasm_sampleID[target[1]>>1]){
+            continue;
+        }
+        if (R_INF.coasm_sampleID[handle>>1]!=R_INF.coasm_sampleID[target[0]>>1] &&
+            R_INF.coasm_sampleID[handle>>1]!=R_INF.coasm_sampleID[target[1]>>1]){
+            continue;
+        }
+        if (R_INF.coasm_sampleID[handle>>1]==R_INF.coasm_sampleID[target[0]>>1]){
+            hamt_ug_arc_del(sg, ug, vu, target_v[1], 1);
+        }else{
+            hamt_ug_arc_del(sg, ug, vu, target_v[0], 1);
+        }
+        ret+=1;
+    }
+    if (ret){
+        asg_cleanup(sg);
+        // asg_cleanup(auxsg);  // no need
+    }
+
+    hamt_ug_destroy(ug);
+    // (clean up sg)
+    if (verbose){
+        fprintf(stderr, "[debug::%s] treated %d spots, used %.2f s.\n", __func__, ret, Get_T()-startTime);
+    }
+    return ret;
+}
+
+int hamt_ug_cut_very_short_multi_tip(asg_t *sg, ma_ug_t *ug, int nb_threshold){
+    // FUNC
+    //     drop multi-tip if it's less than nb_threshold reads
+    // RET
+    //     number of spots treated
+    int ret = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t nv;
+    asg_arc_t *av;
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, -1)!=0) continue;
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, -1)<2) continue;
+        if (ug->u.a[vu>>1].n>nb_threshold) continue;
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (int i=0; i<nv; i++){
+            hamt_ug_arc_del(sg, ug, vu, av[i].v, 1);
+        }
+        ug->u.a[vu>>1].c = 1;
+        ug->g->seq_vis[vu>>1] = 1;
+        ret++;
+    }
+    if (ret){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    return ret;
+}

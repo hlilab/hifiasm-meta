@@ -125,4 +125,11 @@ int hamt_ug_pop_miscbubble(asg_t *sg, ma_ug_t *ug, int base_label);
 int hamt_ug_pop_miscbubble_aggressive(asg_t *sg, ma_ug_t *ug, int base_label);
 int hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 int hamt_ug_pop_tinyUnevenCircle(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
+
+// coasm
+int hamt_asg_arc_del_intersample_branching(asg_t *sg,
+                    const ma_sub_t* coverage_cut,
+                    ma_hit_t_alloc* sources, R_to_U* ruIndex);  // do not use
+int hamt_ug_cut_very_short_multi_tip(asg_t *sg, ma_ug_t *ug, int nb_threshold);
+
 #endif // __OVERLAPS_HAMT__

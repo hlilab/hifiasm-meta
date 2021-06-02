@@ -488,6 +488,52 @@ void hamt_smash_haplotype(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sourc
     }
 }
 
+uint8_t hamt_check_if_reads_overlap(uint32_t v, uint32_t w, ma_hit_t_alloc *paf,
+                                    ma_sub_t *coverage_cut){
+    // FUNC
+    //    Check if v and w overlap with each other in the given overlap collection (paf).
+    // INPUT
+    //    coverage_cut could be NULL; if so, won't check the corresponding .del status.
+    // TODO
+    //    Allow excluding some cases, e.g. containment (based on hit2arc)
+    // RETURN
+    //    0 N0
+    //    1 asymmetric, only v->w (v be the query and w be the target)
+    //    2 asymmetric, only w->v 
+    //    3 symmetric, both v->w and w->v are found
+    uint8_t ret = 0;
+    ma_hit_t_alloc *h = &paf[v];
+    ma_hit_t *hit = NULL;
+    // direction 1
+    for (int i=0; i<h->length; i++){
+        hit = &(h->buffer[i]);
+        if (hit->del) continue;
+        if (coverage_cut){
+            if (coverage_cut[Get_qn(*hit)].del || coverage_cut[Get_tn(*hit)].del) {
+                continue;
+            }
+        }
+        if (hit->tn==w){
+            ret |= 1;
+        }
+    }
+    // direction 2
+    h = &paf[w];
+    for (int i=0; i<h->length; i++){
+        hit = &(h->buffer[i]);
+        if (hit->del) continue;
+        if (coverage_cut){
+            if (coverage_cut[Get_qn(*hit)].del || coverage_cut[Get_tn(*hit)].del) {
+                continue;
+            }
+        }
+        if (hit->tn==v){
+            ret |= 2;
+        }
+    }
+    return ret;
+}
+
 void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long num_sources)
 {
     double startTime = Get_T();
@@ -1072,6 +1118,7 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
 {
     ///uint32_t qn_num = 0, no_fully_qn_num = 0, tn_num = 0, no_fully_tn_num = 0;
     double startTime = Get_T();
+    int verbose = 1;
 	int32_t r;
 	long long i, j, m;
 	asg_arc_t t;
@@ -1098,6 +1145,12 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
             ///r could not be MA_HT_SHORT_OVLP or MA_HT_INT
             if (r == MA_HT_QCONT) 
             {
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] query contained: %.*s - %.*s\n", __func__,
+                            (int)Get_NAME_LENGTH(R_INF, h->qns>>32), Get_NAME(R_INF, h->qns>>32),
+                            (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn));
+                }
+
                 h->del = 1;
                 delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
         
@@ -1114,6 +1167,11 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
             }
 		    else if (r == MA_HT_TCONT) 
             {
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] target contained: %.*s - %.*s\n", __func__,
+                            (int)Get_NAME_LENGTH(R_INF, h->qns>>32), Get_NAME(R_INF, h->qns>>32),
+                            (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn));
+                }
                 h->del = 1;
                 delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
 
@@ -2133,6 +2191,139 @@ typedef struct {
     int counter;  // NOTE this might RACE during update, but it's an output and not used elsewhere
 }hitcontain_aux_t;
 
+static void hamt_hit_contained_drop_singleton_worker(void *data, long i_r, int tid){  // callback for kt_for()
+    // NOTE / might have bugs
+    //     It might be questionable to see a read to be contained by one and only one another read.
+    //     One case is that the other read comes from another haplotype (phasing variant is 
+    //        outside of the exact match region), and that haplotype breaks while
+    //        the haplotype of this contained read has a better continuity.
+    //        We would want to favor the contained reads if so.
+    //     The heuristic is to disallow read containment if the shorter read is not
+    //        contained by at least two haplotypes. 
+    //     By the way, checking whether two reads are from the same haplotype is trivial,
+    //        but getting the exact position of the phasing variants is convoluted and
+    //        must be done during the ovec stage (data discarded immediately, see maybe: `worker_ovec`).
+    // FUNC
+    //     Drop arcs to protect certain shorter reads from being considered as contained.
+    //     This function won't touch the reads. Only arcs.
+
+    int verbose = 1;  // debug
+
+    fprintf(stderr, "[debug::%s] > at read %.*s (%d)\n", __func__,
+                    (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r),
+                     (int)i_r);
+    
+    // input
+    hitcontain_aux_t *d = (hitcontain_aux_t*)data;
+    ma_hit_t_alloc *sources = d->sources;
+    ma_hit_t_alloc *reverse_sources = d->reverse_sources;
+    long long n_read = d->n_read;
+    uint64_t *readLen = d->readLen;
+    ma_sub_t *coverage_cut = d->coverage_cut;
+
+    // early termination
+    if (coverage_cut[i_r].del) {return;}
+    if (R_INF.mask_readnorm[i_r] & 1){return;}
+    
+    // aux
+    ma_hit_t_alloc *h = &sources[i_r];
+    ma_hit_t_alloc *h_rev = &reverse_sources[i_r];
+    ma_hit_t *hit = NULL;
+    ma_sub_t *sq = NULL;
+    ma_sub_t *st = NULL;
+    int32_t r;  // for ma_hit2arc return value
+    asg_arc_t t;  // placeholder
+    int need_to_protect = 0;
+    uint32_t v, w;
+    int i, j;
+
+    // buffer
+    int buf_len=0;
+    int buf_size = 16;
+    uint32_t *buf = (uint32_t*)malloc(sizeof(uint32_t) * buf_size);
+    ma_hit_t **hits = (ma_hit_t**)malloc(sizeof(ma_hit_t*) * buf_size);  // store the handles, in case we want to drop arcs
+
+
+    // check containments
+    for (i=0; i<h->length; i++){
+        hit = &(h->buffer[i]);
+        sq = &(coverage_cut[Get_qn(*hit)]);
+        st = &(coverage_cut[Get_tn(*hit)]);
+        if(sq->del || st->del) continue;
+        if(hit->del) continue;
+        r = ma_hit2arc(hit, sq->e - sq->s, st->e - st->s, 
+                       asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
+        if (r==MA_HT_QCONT){
+            buf[buf_len] = hit->tn;
+            hits[buf_len] = hit;
+            buf_len++;
+            if (buf_len==buf_size){
+                buf_size = buf_size + (buf_size>>1);
+                buf = (uint32_t*)realloc(buf, sizeof(uint32_t)*buf_size);
+                hits = (ma_hit_t**)realloc(hits, sizeof(ma_hit_t*) * buf_size);
+            }
+        }
+    }
+    for (i=0; i<h_rev->length; i++){
+        hit = &(h_rev->buffer[i]);
+        sq = &(coverage_cut[Get_qn(*hit)]);
+        st = &(coverage_cut[Get_tn(*hit)]);
+        if(sq->del || st->del) continue;
+        if(hit->del) continue;
+        r = ma_hit2arc(hit, sq->e - sq->s, st->e - st->s, 
+                       asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
+        if (r==MA_HT_QCONT){
+            buf[buf_len] = hit->tn;
+            hits[buf_len] = hit;
+            buf_len++;
+            if (buf_len==buf_size){
+                buf_size = buf_size + (buf_size>>1);
+                buf = (uint32_t*)realloc(buf, sizeof(uint32_t)*buf_size);
+                hits = (ma_hit_t**)realloc(hits, sizeof(ma_hit_t*) * buf_size);
+            }
+        }
+    }
+
+    // check up on the "parent" reads
+    if (buf_len==0){  // read not contained
+        goto finish;
+    }else{  // check the "parent" reads pairwise-ly
+        need_to_protect = 1;
+        for (i=0; i<buf_len-1; i++){
+            for (j=i+1; j<buf_len; j++){
+                v = buf[i];
+                w = buf[j];
+                if (hamt_check_if_reads_overlap(v, w, reverse_sources, coverage_cut)>0){
+                    need_to_protect = 0;
+                    goto finish;
+                }
+            }
+        }
+    }
+    
+finish:
+    if (need_to_protect){  // drop arcs between the shorter read and its "parent" reads
+        if (verbose){
+            fprintf(stderr, "[debug::%s]     protect %.*s \n", __func__, 
+                            (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
+            fprintf(stderr, "[debug::%s]       traceback - the parent reads:\n", __func__);
+            for (i=0; i<buf_len; i++){
+                fprintf(stderr, "[debug::%s]         %.*s\n", __func__,
+                            (int)Get_NAME_LENGTH(R_INF, hits[i]->tn), Get_NAME(R_INF, hits[i]->tn));
+            }
+        }
+        d->counter++;
+        for (i=0; i<buf_len; i++){
+            hits[i]->del = 1;  // qn->tn
+            delete_single_edge(sources, coverage_cut, hits[i]->tn, (uint32_t)i_r);  // tn->qn
+            delete_single_edge(reverse_sources, coverage_cut, hits[i]->tn, (uint32_t)i_r);  // tn->qn
+        }
+    }
+
+    free(buf);
+    free(hits);
+}
+
 static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callback for kt_for()
     // NOTE / might have bugs
     //    Prevent cases from being identified as containment too aggressively will result
@@ -2312,7 +2503,7 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
         goto finish;
     }
     
-    // if we reach here, it's safe to favore the contained reads over the current longer read
+    // if we reach here, it's safe to favor the contained reads over the current longer read
     delete_all_edges(sources, coverage_cut, (uint32_t)i_r);
     if (verbose){
         sprintf(tmp_msg, "[debug::%s] ditched read %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
@@ -2352,7 +2543,7 @@ void hamt_hit_contained_multi(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
 
     hitcontain_aux_t aux;
     aux.sources = sources;
-    aux.sources = reverse_sources;
+    aux.reverse_sources = reverse_sources;
     aux.n_read = n_read;
     aux.readLen = readLen;
     aux.coverage_cut = coverage_cut;
@@ -2361,8 +2552,28 @@ void hamt_hit_contained_multi(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     kt_for(asm_opt.thread_num, hamt_hit_contained_worker, &aux, (long)n_read);
 
     if (VERBOSE){
-        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \nnext: regular ma_hit_contained_advance\n\n", __func__, Get_T()-startTime, aux.counter);
+        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \n\n", __func__, Get_T()-startTime, aux.counter);
     }
+}
+
+void hamt_hit_contained_drop_singleton_multi(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, long long n_read, uint64_t *readLen,
+                        ma_sub_t *coverage_cut){
+    double startTime = Get_T();
+
+    hitcontain_aux_t aux;
+    aux.sources = sources;
+    aux.reverse_sources = reverse_sources;
+    aux.n_read = n_read;
+    aux.readLen = readLen;
+    aux.coverage_cut = coverage_cut;
+    aux.counter = 0;
+
+    kt_for(asm_opt.thread_num, hamt_hit_contained_drop_singleton_worker, &aux, (long)n_read);
+
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \n\n", __func__, Get_T()-startTime, aux.counter);
+    }
+
 }
 
 
@@ -10628,7 +10839,7 @@ void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_source
             if(sources[i].buffer[j].del) continue;
 
             //if this is a weak overlap
-            if(sources[i].buffer[j].ml == 0)
+            if(sources[i].buffer[j].ml == 0)  // is weak
             {   
                 if(
                 !check_weak_ma_hit(&(sources[qn]), reverse_sources, tn, 
@@ -28283,6 +28494,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
     hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+    hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+    // fprintf(stderr, "==========================\n");
+    // for (int itmp=0; itmp<sources[4356].length; itmp++){
+    //     fprintf(stderr, "%.*s del is %d\n", (int)Get_NAME_LENGTH(R_INF, sources[4356].buffer[itmp].tn),
+    //                                         Get_NAME(R_INF, sources[4356].buffer[itmp].tn), 
+    //                                         (int)sources[4356].buffer[itmp].del);
+    // }
+    // fprintf(stderr, "==========================\n");
     ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // TODO: faster?
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
@@ -28403,6 +28622,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
 
+    // if (asm_opt.mode_coasm){
+    //     hamt_asg_arc_del_intersample_branching(sg, coverage_cut, sources, ruIndex);
+    // }
+
 
     if ((asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.write_new_graph_bins)
     {
@@ -28471,6 +28694,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;}
                 
                 acc = hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
+                acc += hamt_ug_cut_very_short_multi_tip(sg, hamt_ug, 4);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
                 if (acc==0){

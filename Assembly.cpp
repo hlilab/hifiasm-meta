@@ -512,6 +512,8 @@ void ha_ovec_destroy(ha_ovec_buf_t *b)
 	free(b);
 }
 
+char* hamt_debug_get_phasing_variant(ha_ovec_buf_t *b, long i_read);
+
 static int64_t ha_Graph_mem(const Graph *g)
 {
 	int64_t i, mem = 0;
@@ -668,6 +670,9 @@ static void worker_ovec(void *data, long i, int tid)
 		push_overlaps(&(R_INF.paf[i]), &b->olist, 1, &R_INF, is_rev);
 		push_overlaps(&(R_INF.reverse_paf[i]), &b->olist, 2, &R_INF, is_rev);
 	}
+    // char *debug = hamt_debug_get_phasing_variant(b, i);
+    // fprintf(stderr, "%s", debug);
+    // free(debug);
 }
 
 
@@ -1631,6 +1636,7 @@ void Output_PAF()
             fprintf(output_file, "%d\t", Get_ts(sources[i].buffer[j]));
             fprintf(output_file, "%d\t", Get_te(sources[i].buffer[j]));
             fprintf(output_file, "%d\t", sources[i].buffer[j].ml);
+            fprintf(output_file, "%d\t", (int)sources[i].buffer[j].el);
             fprintf(output_file, "%d\t", sources[i].buffer[j].bl);
             fprintf(output_file, "255\n");
 
@@ -1677,6 +1683,7 @@ void Output_reversePAF()
             fprintf(output_file, "%d\t", Get_ts(sources[i].buffer[j]));
             fprintf(output_file, "%d\t", Get_te(sources[i].buffer[j]));
             fprintf(output_file, "%d\t", sources[i].buffer[j].ml);
+            fprintf(output_file, "%d\t", (int)sources[i].buffer[j].el);
             fprintf(output_file, "%d\t", sources[i].buffer[j].bl);
             fprintf(output_file, "255\n");
 
@@ -1942,6 +1949,43 @@ void ha_overlap_final(void)
 //     }
 //     free(hs);
 // }
+
+// ! this block is not right, do not ref or use.
+// char* hamt_debug_get_phasing_variant(ha_ovec_buf_t *b, long i_read){
+//     // FUNC
+//     //    Print variant with phasing info on each read.
+//     //    To be called within `worker_ovec` or the alikes.
+//     // RETURN
+//     //    A formatted debug string.
+//     haplotype_evdience_alloc *h = &b->hap;
+//     haplotype_evdience* hap;
+//     char *ret = (char*)malloc(1024);
+//     int ret_size = 1024;
+//     int ret_filled = 0;
+//     char *tmp = (char*)malloc(500);
+    
+//     sprintf(tmp, "> %.*s\n", (int)Get_NAME_LENGTH(R_INF, i_read), Get_NAME(R_INF, i_read));
+//     if (strlen(tmp)+ret_filled>=ret_size){
+//         ret = (char*)realloc(ret, ret_size+ret_size>>1);
+//         ret_size = ret_size+ret_size>>1;
+//     }
+//     sprintf(ret, "%s", tmp);
+
+//     for (int i=0; i<h->length; i++){
+//         hap = &h->list[i];
+//         sprintf(tmp, "%d\t%d\t%d\t%d\t%c\n", (int)hap->site, (int)hap->overlapID, (int)hap->overlapSite, 
+//                                         (int)hap->type, hap->misBase);
+//     }
+//     sprintf(tmp, "> %.*s\n", (int)Get_NAME_LENGTH(R_INF, i_read), Get_NAME(R_INF, i_read));
+//     if (strlen(tmp)+ret_filled>=ret_size){
+//         ret = (char*)realloc(ret, ret_size+ret_size>>1);
+//         ret_size = ret_size+ret_size>>1;
+//     }
+//     sprintf(ret, "%s", tmp);
+//     free(tmp);
+//     return ret;
+// }
+
 
 int ha_assemble(void)
 {

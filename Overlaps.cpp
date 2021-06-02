@@ -534,6 +534,61 @@ uint8_t hamt_check_if_reads_overlap(uint32_t v, uint32_t w, ma_hit_t_alloc *paf,
     return ret;
 }
 
+int hamt_read_is_contained_by_others(ma_hit_t_alloc* paf, uint32_t v, uint64_t v_len, 
+                                     uint32_t **buf0, int *buf_size0, int *buf_len0){
+    // FUNC
+    //     Check if v is contained by any other reads in `paf`.
+    //     If `buf` is not NULL, store parents in it. 
+    // NOTE
+    //     For simplicity we only check in the directionv->target here.
+    // PAR
+    //     v_len: read v's  length
+    // RETURN
+    //     count of parent reads (0 means not contained)
+    int ret = 0;
+    ma_hit_t *h;
+    uint32_t *buf;
+    int buf_size, buf_len;
+    if (buf0) {
+        buf = *buf0; 
+        buf_size = *buf_size0;
+        buf_len = *buf_len0;
+        assert(buf_size>0);
+        assert(buf_len<=buf_size);
+    }else{
+        buf = 0;
+    }
+    
+
+
+    for (int i=0; i<paf[v].length; i++){
+        h = &paf[v].buffer[i];
+        if (h->del) continue;
+        if ((uint32_t)h->qns==0 && h->qe==v_len){  // query is contained by h->tn
+            if (buf){  // push the parentID
+                if (buf_len==buf_size){
+                    buf_size = buf_size + ((buf_size)>>1);
+                    buf = (uint32_t*)realloc(buf, buf_size * sizeof(uint32_t) );
+                    assert(buf);
+                }
+                // fprintf(stderr, "len %d, size %d\n", buf_len, buf_size);
+                buf[buf_len] = h->tn;
+                buf_len = buf_len + 1;
+            }
+            ret+=1;
+        }
+    }
+
+    if (buf){
+        *buf_size0 = buf_size;
+        *buf_len0 = buf_len;
+        *buf0 = buf;
+    }
+
+    return ret;
+}
+
+
 void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long num_sources)
 {
     double startTime = Get_T();
@@ -2181,6 +2236,109 @@ ma_sub_t* coverage_cut, float shift_rate)
         __func__, Get_T()-startTime, n_simple_remove, n_complex_remove_real, n_complex_remove);
     }
 }
+
+int hamt_hit_contained_nested_containment(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, 
+                                          ma_sub_t *coverage_cut,
+                                          uint64_t *readLen){
+    // FUNC
+    //     Called prior to hamt_hit_contained_drop_singleton_worker.
+    //     When a read is nestedly contained, check up on the parents and ditch the read (shrotest in the nest)
+    //      if it has a parent of the same hap && 
+    //      the parent's parents are also of the same hap as the read's parents.
+    // NOTE
+    //     Serial. 
+    // RETURN
+    //     number of reads treated.
+    int ret = 0;
+    int verbose = 1;
+
+    // read's parents
+    uint32_t *buf = (uint32_t*)malloc(sizeof(uint32_t)*16);
+    int buf_size = 16;
+    int buf_len = 0;
+    // parents of parents
+    uint32_t *buf_pp = (uint32_t*)malloc(sizeof(uint32_t)*16);
+    int buf_pp_size = 16;
+    int buf_pp_len = 0;
+    // for truncating buf
+    int tmp_len = 0;
+
+
+    int cnt_parent = 0;
+    int cnt_parent_rev = 0;
+
+    for (uint32_t i_r=0; i_r<R_INF.total_reads; i_r++){
+        if (verbose>1) fprintf(stderr, "[debug::%s] at read %.*s (%d)\n", __func__,
+                        (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r), (int)i_r);
+        // reset
+        buf_len = 0;
+        buf_pp_len = 0;
+        tmp_len = 0;
+
+        // check if read is contained
+        cnt_parent = hamt_read_is_contained_by_others(sources, i_r, readLen[i_r],
+                                                      &buf, &buf_size, &buf_len);
+        cnt_parent_rev = hamt_read_is_contained_by_others(reverse_sources, i_r, readLen[i_r],
+                                                      &buf, &buf_size, &buf_len);
+        cnt_parent_rev = 0;
+        if (cnt_parent==0) continue;
+        if (cnt_parent_rev>0) continue;  // the read has parents from different haps, don't touch it here.
+        // NOTE/potential bug:
+        //     `ma_hit_contained_advance` only checks on sources, not reverse_sources
+        //      there's 'containment' in the later collection. 
+        //      What to do about them?
+
+        // check if any of the parents are contained
+        if (verbose>1) {fprintf(stderr, "check parent containment, buf len is %d\n", buf_len);}
+        cnt_parent = 0;
+        int tmp_cnt_parent;
+        for (int i=0; i<buf_len; i++){
+            tmp_cnt_parent = hamt_read_is_contained_by_others(sources, buf[i], readLen[buf[i]], 
+                                                            &buf_pp, &buf_pp_size, &buf_pp_len);
+            if (tmp_cnt_parent>0){
+                buf[tmp_len] = buf[i];
+                tmp_len++;
+            }
+            cnt_parent += tmp_cnt_parent;
+        }
+        if (cnt_parent==0) continue;  // not nested containment
+        buf_len = tmp_len;  // now buf only contains parent reads that are also contained by some other reads.
+
+        // check parent reads' parents, pairwise
+        if (verbose>1) {fprintf(stderr, "check parent of parents\n");}
+        uint8_t stat=0;
+        for (int i=0; i<buf_pp_len-1; i++){
+            for (int j=i+1; j<buf_pp_len; j++){
+                stat = hamt_check_if_reads_overlap(buf_pp[i], buf_pp[j], sources, coverage_cut);
+                if (stat!=3){break;}
+            }
+            if (stat!=3){break;}
+        }
+        if (stat!=3) {continue;}
+
+        // if we reach here, 
+        // the current read can be safely removed
+        if (verbose>1) {fprintf(stderr, "drop!\n");}
+        coverage_cut[i_r].del = 1;
+        for (int i=0; i<buf_len; i++){
+            delete_single_edge_both_dir(sources, coverage_cut, buf[i], (uint32_t)i_r); 
+        }
+        ret+=1;
+        if (verbose) {fprintf(stderr, "[debug::%s] removed %.*s (%d)\n", __func__,
+                                    (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r),
+                                    (int)i_r);
+                     }
+    }
+
+    free(buf);
+    free(buf_pp);
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] removed %d reads\n", __func__, ret);
+    }
+
+    return ret;
+}
+
 
 typedef struct {
     ma_hit_t_alloc *sources;

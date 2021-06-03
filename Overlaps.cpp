@@ -1044,6 +1044,12 @@ void delete_single_edge(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, uint32_
     if(tmp != NULL) tmp->del = 1;
 }
 
+void delete_single_edge_both_dir(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, uint32_t qn, uint32_t tn)
+{
+    delete_single_edge(sources, coverage_cut, qn, tn);
+    delete_single_edge(sources, coverage_cut, tn, qn);
+}
+
 void delete_all_edges(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, uint32_t qn)
 {
     ma_hit_t_alloc* x = &(sources[qn]);
@@ -2444,6 +2450,7 @@ static void hamt_hit_contained_drop_singleton_worker(void *data, long i_r, int t
 
     // check up on the "parent" reads
     if (buf_len==0){  // read not contained
+        need_to_protect = -1;
         goto finish;
     }else{  // check the "parent" reads pairwise-ly
         need_to_protect = 1;
@@ -2460,7 +2467,7 @@ static void hamt_hit_contained_drop_singleton_worker(void *data, long i_r, int t
     }
     
 finish:
-    if (need_to_protect){  // drop arcs between the shorter read and its "parent" reads
+    if (need_to_protect>0){  // drop arcs between the shorter read and its "parent" reads
         if (verbose){
             fprintf(stderr, "[debug::%s]     protect %.*s \n", __func__, 
                             (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
@@ -2472,15 +2479,30 @@ finish:
         }
         d->counter++;
         for (i=0; i<buf_len; i++){
-            hits[i]->del = 1;  // qn->tn
-            delete_single_edge(sources, coverage_cut, hits[i]->tn, (uint32_t)i_r);  // tn->qn
-            delete_single_edge(reverse_sources, coverage_cut, hits[i]->tn, (uint32_t)i_r);  // tn->qn
+            delete_single_edge_both_dir(sources, coverage_cut, (uint32_t)i_r, hits[i]->tn);
+            delete_single_edge_both_dir(reverse_sources, coverage_cut, (uint32_t)i_r, hits[i]->tn);
+            
         }
+    }else if (need_to_protect==0){
+        if (verbose){
+            fprintf(stderr, "[debug::%s]     contained but not protecting %.*s \n", __func__, 
+                            (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
+            fprintf(stderr, "[debug::%s]       traceback - the parent reads:\n", __func__);
+            for (i=0; i<buf_len; i++){
+                fprintf(stderr, "[debug::%s]         %.*s\n", __func__,
+                            (int)Get_NAME_LENGTH(R_INF, hits[i]->tn), Get_NAME(R_INF, hits[i]->tn));
+            }
+        }
+    }else{  // read not contained
+        ;
     }
 
     free(buf);
     free(hits);
 }
+
+
+
 
 static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callback for kt_for()
     // NOTE / might have bugs

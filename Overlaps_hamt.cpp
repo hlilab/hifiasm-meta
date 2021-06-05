@@ -1822,7 +1822,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
         idx++;
     }
     if (idx!=2){
-        fprintf(stderr, "[W::%s] abnormal idx (is %d), check soft failed\n", __func__, idx);
+        if (verbose) {fprintf(stderr, "[W::%s] abnormal idx (is %d), check soft failed\n", __func__, idx);}
         return 0;
     }
     // assign v2 and v3
@@ -1839,7 +1839,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
 
     // step the single edge (v3->v6)
     if (hamt_asgarc_util_get_the_one_target(g, v3, &v6, 0, 0, base_label)<0){
-        fprintf(stderr, "[W::%s] failed at v3->v6, continue anyway\n", __func__);
+        if (verbose) {fprintf(stderr, "[W::%s] failed at v3->v6, continue anyway\n", __func__);}
         return 0;
     }
     // if (hamt_asgarc_util_countPre(g, v6, 0, 0, base_label)!=2 || hamt_asgarc_util_countSuc(g, v6, 0, 0, base_label)!=1){
@@ -1864,7 +1864,7 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
         hamt_asgarc_util_get_the_one_target(g, w2[1], &w_tmp, 0, 0, base_label);
         if (w_tmp==v6){
             if (passed){  // they can't be both v4, abort
-                fprintf(stderr, "[W::%s] topo is weird, abort\n", __func__);
+                if (verbose) {fprintf(stderr, "[W::%s] topo is weird, abort\n", __func__);}
                 return 0;
             }
             passed = 1;
@@ -4391,7 +4391,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     if (status<0){
         return -1;
     }else if (status>0){
-        fprintf(stderr, "ideal recovery\n");
+        // fprintf(stderr, "ideal recovery\n");
         return 1;
     }
     if (search_span<0){  // for more generic usage
@@ -4426,8 +4426,8 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
             if (idx==(search_span-1)){fprintf(stderr, "[W::%s] search span not big enough?\n", __func__);}
             status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w_end, sources, coverage_cut, 1);
             assert(status==1);
-            fprintf(stderr, "stepped recovery, read pair: %.*s - %.*s\n", (int)Get_NAME_LENGTH(R_INF, v>>1), Get_NAME(R_INF, v>>1),
-                                                                           (int)Get_NAME_LENGTH(R_INF, w_end>>1), Get_NAME(R_INF, w_end>>1));
+            // fprintf(stderr, "stepped recovery, read pair: %.*s - %.*s\n", (int)Get_NAME_LENGTH(R_INF, v>>1), Get_NAME(R_INF, v>>1),
+            //                                                                (int)Get_NAME_LENGTH(R_INF, w_end>>1), Get_NAME(R_INF, w_end>>1));
             return 1;
         }else if (status<0){  // encounter any non-overlapping pairs and we're done
             break;
@@ -4830,7 +4830,7 @@ int hamt_ug_pop_subgraph(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t end0,
 
         return 0;
     }
-    fprintf(stderr, "%d, %d\n", vertices.n, finishing_times.n); fflush(stderr);
+    // fprintf(stderr, "%d, %d\n", vertices.n, finishing_times.n); fflush(stderr);
     assert(vertices.n==finishing_times.n);
     for (int i=0; i<vertices.n; i++){
         if (verbose>1){fprintf(stderr, "[debug::%s] %.6d finish t: %d\n", __func__, (int)(vertices.a[i]>>1)+1, (int)(finishing_times.a[i]));}
@@ -6328,13 +6328,13 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
             if (hamt_asgarc_util_countSuc(auxsg, end, 0, 0, base_label)==0){continue;}
             if (hamt_asgarc_util_countPre(auxsg, start, 0, 0, base_label)==0){continue;}
             if (hamt_asgarc_util_countSuc(auxsg, end, 0, 0, base_label)!=1){
-                if (l1>0){
+                if (verbose && l1>0){
                     fprintf(stderr, "[W::%s] something wrong 1a, vu is utg%.6d, start utg%.6d, end utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(start>>1)+1, (int)(end>>1)+1);
                 }
                 continue;
             }
             if (hamt_asgarc_util_countPre(auxsg, start, 0, 0, base_label)!=1){
-                if (l2>0){
+                if (verbose && l2>0){
                     fprintf(stderr, "[W::%s] something wrong 1b, vu is utg%.6d, start utg%.6d, end utg%.6d\n", __func__, (int)(vu>>1)+1, (int)(start>>1)+1, (int)(end>>1)+1);
                 }
                 continue;
@@ -6345,7 +6345,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
                 fprintf(stderr, "[debug::%s]     got to check if there was any overlap\n", __func__);
             }
             if (hamt_asgarc_util_get_the_one_target(auxsg, end, &wu, 0, 0, base_label)<0){
-                fprintf(stderr, "something wrong 2%s\n", __func__);
+                if  (verbose) {fprintf(stderr, "something wrong 2%s\n", __func__);}
                 continue;
 
             }
@@ -7437,7 +7437,7 @@ int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink,
         }
     }
     if (s.n==0){
-        fprintf(stderr, "[E::%s] can't find a path\n", __func__);
+        if (verbose) {fprintf(stderr, "[E::%s] can't find a path\n", __func__);}
         ret = 0;
         goto finish;
     }else{
@@ -7594,7 +7594,7 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                             nb_treated++;
                         }else{
                             if ((source>>1)!=(sink>>1)){
-                                fprintf(stderr, "[W::%s] did not pop: utg%.6d - utg%.6d\n", __func__, (int)(source>>1)+1, (int)(sink>>1)+1);
+                                if (verbose) {fprintf(stderr, "[W::%s] did not pop: utg%.6d - utg%.6d\n", __func__, (int)(source>>1)+1, (int)(sink>>1)+1);}
                             }
                         }
                     }
@@ -8019,7 +8019,7 @@ int hamt_asg_arc_del_intersample_branching(asg_t *sg,
     }
 
     int ret = 0;
-    int verbose = 1;
+    int verbose = 0;
     double startTime = Get_T();
     ma_ug_t *ug = ma_ug_gen(sg);
     asg_t *auxsg = ug->g;

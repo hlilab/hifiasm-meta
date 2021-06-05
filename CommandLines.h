@@ -4,7 +4,7 @@
 #include <pthread.h>
 
 #define HA_VERSION "0.13-r308"
-#define HAMT_VERSION "0.2-r040"
+#define HAMT_VERSION "0.2-r041"
 
 
 // #define VERBOSE 1
@@ -97,7 +97,7 @@ typedef struct {
     int write_debug_gfa;
     int write_new_graph_bins;
 
-    int is_final_round, is_reverse_source;
+    int is_final_round;
     int is_mode_low_cov;
     int is_dump_relevant_reads; FILE *fp_relevant_reads;
     // hifiasm_argcv_t *argcv;

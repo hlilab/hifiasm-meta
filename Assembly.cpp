@@ -2100,6 +2100,7 @@ int hamt_assemble(void)
 
             assert((!R_INF.is_has_nothing) && R_INF.is_has_lengths && (!R_INF.is_all_in_mem));
             // at this point we should have seq lengths, but not the reads (will be read by ha_pt_gen)
+            memset(R_INF.mask_readnorm, 0, R_INF.total_reads*1 );
         }else{  // read selection
             hamt_flt_withsorting(&asm_opt, &R_INF);
             fprintf(stderr, "[M::%s] read kmer stats collected.\n", __func__);

@@ -2594,7 +2594,7 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     //     Drop arcs to protect certain shorter reads from being considered as contained.
     //     This function won't touch the reads. Only arcs.
 
-    int verbose = 1;  // debug
+    int verbose = 0;  // debug
 
     if (verbose>1) {fprintf(stderr, "[debug::%s] > at read %.*s (%d)\n", __func__,
                     (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r),
@@ -2624,7 +2624,11 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     int need_to_protect = 0;
     uint32_t v, w;
     int i, j;
-    
+    int homo_strong_cnt = 0;
+
+    // debug aux
+    int nb_total_ovlp = 0;
+    int nb_weak_ovlp = 0;  // for debug; how many weak/total non-containment reads overlap with the query read
 
     // buffer
     int buf_len=0;
@@ -2692,7 +2696,6 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     // check neighbours
     v = (uint32_t)i_r;
     for (i=0; i<h->length; i++){ 
-        
         hit = &(h->buffer[i]);
         w = hit->tn;
         if (verbose>1){
@@ -2708,10 +2711,28 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
                        asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
         // if (r<0) continue;  // ignore if the ovlp is containment(either way), short, or there's large overhang
         if (r==MA_HT_QCONT || r==MA_HT_TCONT) continue;
+        nb_total_ovlp++;
+        if (hit->ml){continue;}  // ignore strong overlap
+        nb_weak_ovlp++;
+
         if (verbose>1) {fprintf(stderr, "[debug::%s]      (checkpoint)\n", __func__);}
 
         // check this neighbour against all parent reads
         if (hamt_read_het_to_all_given_reads(sources, w, buf, buf_len, 1)){
+            // additionally, require this read to have no strong intra-haplotype arc
+            homo_strong_cnt = 0;
+            for (j=0; j<sources[w].length; j++){
+                if (sources[w].buffer[j].ml) homo_strong_cnt++;
+            }
+            if (homo_strong_cnt>3){
+                if (verbose>1){
+                    fprintf(stderr, "[debug::%s]     ~ neighbor %.*s hinted more haps but might has another way out\n",
+                                __func__, (int)Get_NAME_LENGTH(R_INF, w), Get_NAME(R_INF, w));
+                }    
+                need_to_protect = 0;
+                goto finish;
+            }
+
             if (verbose>1){
                 fprintf(stderr, "[debug::%s]     ~ neighbor %.*s hinted more haps\n",
                             __func__, (int)Get_NAME_LENGTH(R_INF, w), Get_NAME(R_INF, w));
@@ -2732,8 +2753,9 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
 finish:
     if (need_to_protect>0){  // drop arcs between the shorter read and its "parent" reads
         if (verbose){
-            fprintf(stderr, "[debug::%s]     protect %.*s \n", __func__, 
-                            (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
+            fprintf(stderr, "[debug::%s]     protect %.*s ; total %d weak %d\n", __func__, 
+                            (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r),
+                            nb_total_ovlp, nb_weak_ovlp);
             fprintf(stderr, "[debug::%s]       traceback - the parent reads:\n", __func__);
             for (i=0; i<buf_len; i++){
                 fprintf(stderr, "[debug::%s]         %.*s\n", __func__,
@@ -2748,8 +2770,9 @@ finish:
         }
     }else if (need_to_protect==0){
         if (verbose){
-            fprintf(stderr, "[debug::%s]     contained but not protecting %.*s \n", __func__, 
-                            (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r));
+            fprintf(stderr, "[debug::%s]     contained but not protecting %.*s ; total %d weak %d\n", __func__, 
+                            (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r),
+                            nb_total_ovlp, nb_weak_ovlp);
             fprintf(stderr, "[debug::%s]       traceback - the parent reads:\n", __func__);
             for (i=0; i<buf_len; i++){
                 fprintf(stderr, "[debug::%s]         %.*s\n", __func__,

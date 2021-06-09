@@ -8105,3 +8105,105 @@ int hamt_ug_cut_very_short_multi_tip(asg_t *sg, ma_ug_t *ug, int nb_threshold){
     }
     return ret;
 }
+
+
+
+int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources){
+    // NOTE
+    //     Assume coverage has been collected.
+    // FUNC
+    //     Drop the shorter ovlp at a birfucation if the length diff between the two 
+    //       is extreme. Additionally, will consider:
+    //       - coverage diff
+    //       // - topo: don't drop if we get a tip or something afterwards
+    // RETURN
+    //     number of ovlps dropped.
+    int verbose = 1;
+    int ret = 0;
+    asg_t *auxsg = ug->g;
+    int buf_l;
+    uint32_t nv, wu, w, v;  // w is the start of wu, v is the end^1 of vu
+    asg_arc_t *av;
+    
+    ma_hit_t *h;
+    ma_hit_t *h_tmp;
+    uint32_t h_vu, h_wu;
+    int worst_cov, cov, max_cov;
+    int worst_ovlp, ovlpl, max_ovlp;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (auxsg->seq_vis[vu>>1]!=0) {continue;}
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)<2){continue;}
+
+        // reset
+        buf_l = 0;
+        worst_cov = 1000;  // a large number
+        worst_ovlp = 100000;  // a large number
+        max_cov = 0;
+        max_ovlp = 0;
+
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].del) continue;
+            if (auxsg->seq_vis[av[i].v>>1]!=0) continue;
+            if (hamt_asgarc_util_countSuc(auxsg, av[i].v, 0, 0, 0)==0) continue;  // target is a tip
+            wu = av[i].v;
+            if ((vu&1)==0){
+                v = ug->u.a[vu>>1].end^1;
+            }else{
+                v = ug->u.a[vu>>1].start^1;
+            }
+            if ((wu&1)==0){
+                w = ug->u.a[wu>>1].start;
+            }else{
+                w = ug->u.a[wu>>1].end;
+            }
+            
+            h_tmp = get_specific_overlap_handle(sources, v>>1, w>>1);
+            if (!h_tmp) {  // can't get the handle for some reason
+                h_tmp = get_specific_overlap_handle(reverse_sources, v>>1, w>>1);
+                if (!h_tmp){
+                    fprintf(stderr, "[E::%s] can't get handle for v %.*s (%d) w %.*s (%d) (no dir bit)\n",
+                                        __func__, 
+                                        (int)Get_NAME_LENGTH(R_INF, v>>1), Get_NAME(R_INF, v>>1), (int)(v>>1), 
+                                        (int)Get_NAME_LENGTH(R_INF, w>>1), Get_NAME(R_INF, w>>1), (int)(w>>1));
+                    continue;
+                }
+            }
+            if (!h_tmp->el) continue;  // skip inexact overlaps
+
+            cov = ug->utg_coverage[wu>>1];
+            ovlpl = h_tmp->te-h_tmp->ts;
+            max_ovlp = ovlpl>max_ovlp? ovlpl : max_ovlp;
+            max_cov = cov>max_cov? cov : max_cov;
+            
+            if ((float)ovlpl/max_ovlp > 0.7) continue;  // diff not significant
+            if ((float)cov/max_cov>0.7) continue;  // diff not significant
+            if (ovlpl<worst_ovlp && cov<(float)worst_cov*1.5){
+                h = h_tmp;
+                worst_ovlp = ovlpl;
+                worst_cov = cov;
+                h_vu = vu;
+                h_wu = wu;
+                buf_l++;
+            }
+        }
+        if (buf_l==0) continue;  // nothing on the radar
+
+        // if we reach here, drop stuff
+        hamt_ug_arc_del(sg, ug, h_vu, h_wu, 1);
+        ret++;
+        if (verbose){
+            fprintf(stderr, "[debug::%s] cut between %.*s and %.*s \n",
+                                __func__, 
+                                (int)Get_NAME_LENGTH(R_INF, h_vu>>1), Get_NAME(R_INF, h_vu>>1),
+                                (int)Get_NAME_LENGTH(R_INF, h_wu>>1), Get_NAME(R_INF, h_wu>>1));
+            fprintf(stderr, "[debug::%s]    max_cov %d worst_cov %d max_ov %d worst_ov %d\n", 
+                                __func__,
+                                max_cov, worst_cov, max_ovlp, worst_ovlp);
+        }
+    }
+    fprintf(stderr, "[M::%s] cut %d\n", __func__, ret);
+    return ret;
+}

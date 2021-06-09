@@ -420,11 +420,82 @@ ma_hit_t *get_specific_overlap_handle(ma_hit_t_alloc *sources, uint32_t qn, uint
 }
 
 
+int hamt_count_mismatches_in_an_exact_overlap(ma_hit_t *h, UC_Read *read1, UC_Read *read2){
+    // FUNC
+    //     Given a handle, get the corrected bases and compare.
+    // NOTE
+    //     Since we can't know indels, this function aborts if there's consecutive mismatches.
+    // RETURN
+    //     -1 if overlap is not exact, or has long indel, or might have any indel (a rough check)
+    //     INT>=0 number of mismatches otherwise
+    if (!h->el) {return -1;}
+    if (!h->no_l_indel) {return -1;}
 
+    int nm = 0;
+    uint32_t v, w, qs;
+    v = (uint32_t) (h->qns>>32);
+    w = h->tn;
+    qs = (uint32_t)h->qns;
+    recover_UC_Read(read1, &R_INF, v);
+    recover_UC_Read(read2, &R_INF, w);
+    uint32_t i1, i2;
+    char a, b;
+    int prv_is_nm = 0;
 
-/////////////////////////////////
-/////    graph methods   ////////
-/////////////////////////////////
+    for (uint32_t i=0; i<h->qe-qs; i++){
+        if (h->rev){
+            i1 = qs+i;
+            i2 = h->te-i;
+            a = seq_nt4_table[(uint8_t)read1->seq[i1]];
+            b = seq_nt4_table[(uint8_t)read1->seq[i2]];
+            if (a!=b && a+b==4){  // rev comp
+                prv_is_nm = 0;
+                continue;
+            }else{
+                if (prv_is_nm) {return -2;}  // consecutive mismatch
+                nm++;
+                prv_is_nm = 1;
+            }
+        }else{
+            i1 = qs+i;
+            i2 = h->ts+i;
+            if (read1->seq[i1]!=read2->seq[i2]){
+                if (prv_is_nm) {return -2;}  // consecutive mismatch
+                nm++;
+                prv_is_nm = 1;
+            }else{
+                prv_is_nm = 0;
+            }
+        }
+    }
+
+    return nm;
+}
+void hamt_count_mismatches_in_an_exact_overlap_debug(int ID1, int ID2){
+    UC_Read r1, r2;
+    ma_hit_t *h;
+    uint32_t qs;
+    init_UC_Read(&r1);
+    init_UC_Read(&r2);
+    for (int i=0; i<R_INF.paf[ID1].length; i++){
+        h = &R_INF.paf[ID1].buffer[i];
+        if (h->tn!=ID2) continue;
+        qs = (uint32_t) (h->qns>>32);
+        fprintf(stderr, "is rev: %d\n", (int)h->rev);
+        fprintf(stderr, "no long indel: %d\n", (int)h->no_l_indel);
+
+        recover_UC_Read(&r1, &R_INF, ID1);
+        recover_UC_Read(&r2, &R_INF, ID2);
+        for (int idx=0; idx<h->qe-qs; idx++){
+            fprintf(stderr, "  %d\t%c\t%c\n", idx, r1.seq[qs+idx], r2.seq[h->te-idx]);
+        }
+
+    }
+    destory_UC_Read(&r1);
+    destory_UC_Read(&r2);
+
+}
+
 
 int hit_is_perfect_containment(ma_hit_t *hit){
     uint32_t qs = (uint32_t)hit->qns;
@@ -3042,6 +3113,53 @@ void hamt_hit_contained_drop_singleton_multi(ma_hit_t_alloc* sources, ma_hit_t_a
     }
 
 }
+
+
+
+
+static void hamt_hit_drop_high_mismatch_arcs_worker(void *data, long i_r, int tid){  // callback for kt_for()
+    int verbose = 0;
+    hitcontain_aux_t *d = (hitcontain_aux_t*)data;
+    ma_hit_t_alloc *sources = d->sources;
+    long long n_read = d->n_read;
+    uint64_t *readLen = d->readLen;
+
+    ma_hit_t *h;
+    float nm;
+    UC_Read read1, read2;
+    init_UC_Read(&read1);
+    init_UC_Read(&read2);
+
+    for (int i=0; i<sources[i_r].length; i++){
+        h = &sources[i_r].buffer[i];
+        nm = (float)hamt_count_mismatches_in_an_exact_overlap(h, &read1, &read2);
+        if (verbose){
+            fprintf(stderr, "[debug::%s] qn %.*s (%d) tn %.*s (%d) rev %d nm %d\n", __func__,
+                            (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r), (int)i_r,
+                            (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn), (int)h->tn,
+                            (int)h->rev,
+                             (int)nm);
+        }
+        if (nm>50 /*|| nm/readLen[i_r]>*/){
+            h->del = 1;
+            d->counter = d->counter+1;
+        }
+    }
+    destory_UC_Read(&read1);
+    destory_UC_Read(&read2);
+}
+void hamt_hit_drop_high_mismatch_arcs(ma_hit_t_alloc* sources, 
+                                      long long n_read, uint64_t *readLen){
+    hitcontain_aux_t aux;
+    aux.sources = sources;
+    aux.n_read = n_read;
+    aux.readLen = readLen;
+    aux.counter = 0;
+
+    kt_for(asm_opt.thread_num, hamt_hit_drop_high_mismatch_arcs_worker, &aux, (long)n_read);
+    fprintf(stderr, "[M::%s] dropped %d arcs\n", __func__, aux.counter);
+}
+
 
 
 
@@ -28961,6 +29079,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
     hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+    // hamt_count_mismatches_in_an_exact_overlap_debug(65, 2768);
+    // exit(1);
+    // hamt_hit_drop_high_mismatch_arcs(sources, n_read, readLen);
     ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
 
     ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
@@ -29103,30 +29224,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
  
     ///note: don't apply asg_arc_del_too_short_overlaps() after this function!!!!
 
-    // hamt note: for some reason this block might break circles (aggressively downsampled mock dataset)
-    //            comment out for now, come back for it later.
-
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 111); 
-    // rescue_contained_reads_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
-    // mini_overlap_length, bubble_dist, 10, 1, 0, NULL, NULL);
-    // hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 112); 
-
-    // rescue_missing_overlaps_aggressive(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length,
-    // mini_overlap_length, bubble_dist, 1, 0, NULL);
-    // hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 113); 
-
-    // rescue_missing_overlaps_backward(NULL, sg, sources, coverage_cut, ruIndex, max_hang_length, 
-    // mini_overlap_length, bubble_dist, 10, 1, 0);
-    // hamt_ug_regen(sg, &tmp_ug, coverage_cut, sources, ruIndex); 
-    // hamtdebug_output_unitig_graph_ug(tmp_ug, output_file_name, 114); 
-    // rescue_wrong_overlaps_to_unitigs(NULL, sg, sources, reverse_sources, coverage_cut, ruIndex, 
-    // max_hang_length, mini_overlap_length, bubble_dist, NULL);
-    // rescue_no_coverage_aggressive(sg, sources, reverse_sources, &coverage_cut, ruIndex, max_hang_length, 
-    // mini_overlap_length, bubble_dist, 10);
-    // hamt_destroy_utg_coverage(tmp_ug);
-    // ma_ug_destroy(tmp_ug);
 
 
     {
@@ -29187,6 +29284,9 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
             ///////////////
+
+            hamt_ug_drop_shorter_ovlp(sg, hamt_ug, sources, reverse_sources);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             hamt_asgarc_ugCovCutDFSCircle_aggressive(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);

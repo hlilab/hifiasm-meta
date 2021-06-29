@@ -4167,6 +4167,114 @@ buf_t* b, uint32_t max_ext)
     return 0;
 }
 
+/* NOTE
+    Written during r43->r44, dropped because r44 was worse, and that this part doesn't matter...
+    The case was: some overlaps were actually exact, but perhaps because seeding problems,
+       they were reported to be inexact, only off by 1 or a few base pairs.
+       For example, readA and readB overlap by spans [0, a] and [0, b],
+       the mistaken case is to report the spans as, say, [0, a+1] and [0, b],
+       which will result the pair to be flagged as inexact by ha's if_exact_match.
+*/
+// int hamt_check_exact_match_for_some_cases_worker(ma_hit_t *h, uint64_t *readLen,
+//                                           UC_Read* q_read, UC_Read* t_read,
+//                                           int threshold){
+// 	// NOTE
+// 	//     This function should be used in addition the very initial sanchecks/cleanings.
+// 	// RETURN
+// 	//     0 if defintely ok
+// 	//     INT if could match but *the ends* are off by INT bp
+// 	//     -1 if defintely no, given the threshold
+// 	//     -2 pass, no comment (if the arc is deleted or something)
+// 	if (h->del) return -2;
+//     // fprintf(stderr, "check %d\n", 0);
+//     if ((h->qns>>32)!=0 && h->ts!=0) return -2;  // no comment for non-dovetail/containment ones
+
+// 	int l_diff = 0;
+// 	uint32_t ol1, ol2;
+// 	uint32_t qn, tn, qe, te, qs, ts;
+// 	qn = (uint32_t) (h->qns>>32);
+// 	tn = h->tn;
+// 	ol1 = h->qe - (uint32_t)h->qns;
+// 	ol2 = h->te - h->ts;
+//     qs = (uint32_t)h->qns;
+// 	qe = h->qe;
+//     ts = h->ts;
+// 	te = h->te;
+// 	char *q_seq;
+//     char *t_seq;
+
+//     if (ol1==ol2) return -2;
+//     // fprintf(stderr, "check %d\n", 1);
+//     if (qs!=0 && qe!=readLen[qn]) return -2;
+//     // fprintf(stderr, "check %d\n", 2);
+//     if (ts!=0 && te!=readLen[tn]) return -2;
+//     // fprintf(stderr, "check %d\n", 3);
+
+// 	if (ol1>ol2){
+// 		l_diff = ol1-ol2;
+// 		if (qs==0) qe-=l_diff;
+//         else qs+=l_diff;
+//         ol1 = ol2;
+// 	}else if (ol2>ol1){
+// 		l_diff = ol2-ol1;
+// 		if (ts==0) te-=l_diff;
+//         else ts+=l_diff;
+//         ol2 = ol1;
+// 	}
+//     if (l_diff>threshold) return -1;
+//     // fprintf(stderr, "check %d\n", 4);
+
+//     recover_UC_sub_Read(q_read, qs, ol1, 0, &R_INF, qn);
+//     recover_UC_sub_Read(t_read, ts, ol1, h->rev, &R_INF, tn);
+
+//     if (memcmp(q_read->seq, t_read->seq, ol1)==0){
+//         // fprintf(stderr, "check %d\n", 5);
+//         return l_diff;
+//     }else{
+//         return -1;
+//     }
+// }
+// int hamt_rescue_inexact_by_1bp(ma_hit_t_alloc* sources, uint64_t *readLen){
+//     // NOTE
+//     //     This function only alters the .el marking, won't change the actual alignment entry.
+//     int verbose = 0;
+//     UC_Read read1, read2;
+//     init_UC_Read(&read1);
+//     init_UC_Read(&read2);
+//     ma_hit_t *h;
+//     uint32_t w;
+//     int status;
+//     int ret = 0;
+//     int abnormal = 0;
+//     for (uint32_t v=0; v<R_INF.total_reads; v++){
+//         if (verbose) fprintf(stderr, "[debug::%s] at %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, v), Get_NAME(R_INF, v));
+//         for (int i=0; i<sources[v].length; i++){
+//             h = &sources[v].buffer[i];
+//             w = h->tn;
+//             if (sources[v].buffer[i].el) continue;   // skip overlaps already marked as exact
+//             if (verbose) fprintf(stderr, "[debug::%s]   target %.*s\n", __func__, 
+//                                             (int)Get_NAME_LENGTH(R_INF, sources[v].buffer[i].tn), Get_NAME(R_INF, sources[v].buffer[i].tn));
+//             status = hamt_check_exact_match_for_some_cases_worker(&sources[v].buffer[i], readLen, &read1, &read2, 1);
+//             if (verbose) fprintf(stderr, "[debug::%s]     > ret %d\n", __func__, status);
+//             if (status>=0){
+//                 ret++;
+//                 sources[v].buffer[i].el = 1;
+//                 h = get_specific_overlap_handle(sources, w, v);
+//                 if (!h){
+//                     abnormal++;
+//                     continue;
+//                 }
+//                 h->el = 1;
+//             }
+//         }
+//     }
+//     fprintf(stderr, "[M::%s] converted %d arcs (abnormal encountered: %d)\n", __func__, ret, abnormal);
+//     return ret;
+// }
+
+
+
+
 int test_triangular_exact(asg_t *g, uint32_t* nodes, uint32_t length, 
 uint32_t startNode, uint32_t endNode, int max_dist, buf_t* bub)
 {

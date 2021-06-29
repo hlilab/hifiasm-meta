@@ -9,6 +9,11 @@
 #include "Overlaps_hamt.h"
 #include "ksort.h"
 
+#define HAMT_MAX(x, y) ((x >= y)?(x):(y))  // same
+#define HAMT_MIN(x, y) ((x <= y)?(x):(y))  // same
+#define HAMT_DIFF(x, y) ((HAMT_MAX((x), (y))) - (HAMT_MIN((x), (y))))  // it's in Correct.h but don't want to include so
+
+
 KDQ_INIT(uint64_t)
 KDQ_INIT(uint32_t)
 KRADIX_SORT_INIT(ovhamt64, uint64_t, uint64_t, 8)
@@ -1463,7 +1468,9 @@ int hamt_asgarc_util_countSinglePath(asg_t *g, uint32_t v0, int include_del_seq,
 
 int hamt_asgarc_util_countNoneTipSuc(asg_t *g, uint32_t v, int base_label){
     // NOTE
-    //    actually, no dangling tip
+    //    Contigs that have more than one target on one side with the other side having no targets
+    //      will be considered as tips.
+    //    Use hamt_asgarc_util_countNoneDanglingTipSuc if you want to rule them out.
     if (asg_arc_n(g, v)==0){
         return 0;
     }
@@ -1484,7 +1491,8 @@ int hamt_asgarc_util_countNoneTipSuc(asg_t *g, uint32_t v, int base_label){
 }
 int hamt_asgarc_util_countNoneDanglingTipSuc(asg_t *g, uint32_t v, int base_label){
     // NOTE
-    //    actually, no dangling tip
+    //    Only contig with exact 1 target (the query) will be considered as a tip.
+    //    Use hamt_asgarc_util_countNoneTipSuc if you want to include multi-target tips.
     if (asg_arc_n(g, v)==0){
         return 0;
     }
@@ -8115,10 +8123,10 @@ int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, m
     //     Drop the shorter ovlp at a birfucation if the length diff between the two 
     //       is extreme. Additionally, will consider:
     //       - coverage diff
-    //       // - topo: don't drop if we get a tip or something afterwards
+    //       - topo: query has at least 2 non-tip targets (won't check further though)
     // RETURN
     //     number of ovlps dropped.
-    int verbose = 1;
+    int verbose = 0;
     int ret = 0;
     asg_t *auxsg = ug->g;
     int buf_l;
@@ -8207,3 +8215,85 @@ int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, m
     fprintf(stderr, "[M::%s] cut %d\n", __func__, ret);
     return ret;
 }
+
+
+// int hamt_ug_drop_worse_ovlp_at_bifur(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources){
+//     // NOTE
+//     //      Was written during r43->r44, dropped because worse empirical performance and 
+//     //       potentail overfitting.            
+//     // FUNC
+//     //     For example, given a->b (inexact) and a->c (exact), 
+//     //      where a has 18x coverage, b 34x, c 16x,
+//     //      we might want to drop a->b.
+//     // RETURN
+//     //     Number of arcs dropped.
+//     int ret = 0;
+//     asg_t *auxsg = ug->g;
+//     ma_hit_t *h;
+
+//     uint32_t vu, nv, wu, v, w;
+//     asg_arc_t *av;
+//     int sancheck;
+//     int is_exact;
+//     uint32_t targets[5];
+//     int covs[5];
+//     int ovlp_lengths[5];
+//     int exact_status[5];
+
+//     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+//         if (hamt_asgarc_util_countNoneDanglingTipSuc(auxsg, vu, 0)!=2){continue;}
+//         nv = asg_arc_n(auxsg, vu);
+//         av = asg_arc_a(auxsg, vu);
+        
+//         sancheck = 0;
+//         is_exact = 0;
+//         for (int i=0; i<nv; i++){
+//             if (av[i].del) continue;
+//             wu = av[i].v;
+//             if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, 0)==0 && 
+//                 hamt_asgarc_util_countPre(auxsg, wu, 0, 0, 0)==1) continue;  // is a tip with only the vu as its neighbor
+
+//             if ((vu&1)==0){
+//                 v = ug->u.a[vu>>1].end^1;
+//             }else{
+//                 v = ug->u.a[vu>>1].start^1;
+//             }
+//             if ((wu&1)==0){
+//                 w = ug->u.a[wu>>1].start;
+//             }else{
+//                 w = ug->u.a[wu>>1].end;
+//             }
+
+//             h = get_specific_overlap_handle(sources, v>>1, w>>1);
+//             if (!h) continue;  // ERROR
+//             if (h->el) is_exact++;
+            
+//             targets[sancheck] = wu;
+//             covs[sancheck] = HAMT_DIFF(ug->utg_coverage[wu>>1], ug->utg_coverage[vu>>1]);
+//             ovlp_lengths[sancheck] = (int)(h->te - h->ts);
+//             exact_status[sancheck] = (int)h->el;
+//             sancheck++;
+//             if (sancheck>2) break;
+//         }
+//         // assert(sancheck==2);
+//         if (sancheck!=2) continue; // ERROR
+        
+//         if (is_exact!=1) continue;  // either both are inexact, or both are exact. Don't try to treat these.
+//         if (HAMT_MIN(covs[0], covs[1])>10) continue;  // one of the target contig shall have similar coverage to the query contig
+//         if ((float)HAMT_MAX(covs[0], covs[1])/HAMT_MIN(covs[0], covs[1])<5) continue;  // ... and the other target does not.
+
+//         // if we reach here, drop the worse one
+//         if (exact_status[0]==0) {
+//             wu = targets[1];
+//         }else{
+//             wu = targets[0];
+//         }
+//         hamt_ug_arc_del(sg, ug, vu, wu, 1);
+//         ret++;
+        
+//     }
+
+
+//     fprintf(stderr, "[M::%s] dropped %d\n", __func__, ret);
+//     return ret;
+// }

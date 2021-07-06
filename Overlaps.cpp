@@ -719,6 +719,9 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
 {
     double startTime = Get_T();
     int verbose = 0;
+    int sancheck_type1 = 0;
+    int sancheck_type2 = 0;
+    int sancheck_type3 = 0;
 
     long long i, j, index;
     uint32_t qn, tn, is_del = 0;
@@ -757,11 +760,13 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
                     if(qn < tn)  // overwrite the entry ordered higher (later)
                     {
                         set_reverse_overlap(&(sources[tn].buffer[index]), &(sources[i].buffer[j]));
+                        sancheck_type1++;
                     }
                 }
                 else if(qLen_0 > qLen_1)  // overwrite the reverse entry
                 {
                     set_reverse_overlap(&(sources[tn].buffer[index]), &(sources[i].buffer[j]));
+                    sancheck_type2++;
                 }
                 
                 sources[i].buffer[j].del = is_del;
@@ -772,13 +777,209 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
                 set_reverse_overlap(&ele, &(sources[i].buffer[j]));  // add the reversed overlap
                 sources[i].buffer[j].del = ele.del = 1;  // but also delete it; note: assuming containment problem in high coverage occasions are already handled
                 add_ma_hit_t_alloc(&(sources[tn]), &ele);
+                sancheck_type3++;
             }
         }
     }
 
     if(VERBOSE >= 1)
     {
-        fprintf(stderr, "[M::%s] takes %0.2fs\n\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] takes %0.2fs; 3 types: %d, %d, %d\n\n", __func__, Get_T()-startTime,
+                    sancheck_type1, sancheck_type2, sancheck_type3);
+    }
+}
+
+typedef struct {
+    // worker will collect query-target pairs that shall go into `set_reverse_overlap`
+    ma_hit_t ***buf1;  // 1st in the pair, array of pointers each points to an array of pointers
+    ma_hit_t ***buf2;  // 2nd
+    uint32_t **is_hard_add;  // this slot needs a placeholder 1st, it's adding an entry rather than modify the 1st given the 2nd
+    uint64_t **is_hard_add_buf;
+    // ^ see block with ha comment "///means this edge just occurs in one direction"
+    uint64_t *n;  // buffer's current lengths, per thread
+    uint64_t *m;  // buffer's current sizes, per thread
+    ma_hit_t_alloc* sources;
+    long long i_start;
+    long long n_read;
+}normhit_aux_t;
+
+static void hamt_normalize_ma_hit_t_single_side_advance_worker(void *data, long i_r_, int tid){  // callback for kt_for()
+    normhit_aux_t *d = (normhit_aux_t*)data;
+    ma_hit_t_alloc *sources = d->sources;
+    long i_r = i_r_ + d->i_start;  // batched kt_for
+    if (i_r>=d->n_read) return;
+
+    ma_hit_t **buf1 = d->buf1[tid];
+    ma_hit_t **buf2 = d->buf2[tid];
+
+    uint32_t *is_hard_add = d->is_hard_add[tid];
+    uint64_t *is_hard_add_buf = d->is_hard_add_buf[tid];
+    uint64_t *buf_n = &d->n[tid];
+    uint64_t *buf_m = &d->m[tid];
+    // fprintf(stderr, "start: tid %d, n %d m%d\n", tid, (int)(*buf_n), (int)(*buf_m));fflush(stderr);
+
+    long long i = (long long) i_r; 
+    long long j, index;
+    uint32_t qn, tn, is_del = 0;
+    long long qLen_0, qLen_1;
+    ma_hit_t ele;
+    for (j = 0; j < sources[i].length; j++)  // iterate of overlaps of this vertex. (.length is Cigar_record's .length)
+    {
+        if (*buf_n==*buf_m){
+            // fprintf(stderr, "expand, tid %d, n %d m%d\n", tid, (int)(*buf_n), (int)(*buf_m));fflush(stderr);
+            *buf_m = (*buf_m) + ((*buf_m)>>1);
+            // d->buf1[tid] = (ma_hit_t**)realloc(d->buf1[tid], (*buf_m)*sizeof(ma_hit_t*));
+            d->buf2[tid] = (ma_hit_t**)realloc(d->buf2[tid], (*buf_m)*sizeof(ma_hit_t*));
+            d->is_hard_add[tid] = (uint32_t*)realloc(d->is_hard_add[tid], (*buf_m)*sizeof(uint32_t));
+            d->is_hard_add_buf[tid] = (uint64_t*)realloc(d->is_hard_add_buf[tid], (*buf_m)*sizeof(uint64_t));
+            // buf1 = d->buf1[tid];
+            buf2 = d->buf2[tid];
+            is_hard_add = d->is_hard_add[tid];
+            is_hard_add_buf = d->is_hard_add_buf[tid];
+        }
+
+        qn = Get_qn(sources[i].buffer[j]);
+        tn = Get_tn(sources[i].buffer[j]);
+
+        sources[i].buffer[j].bl = Get_qe(sources[i].buffer[j]) - Get_qs(sources[i].buffer[j]);
+        index = get_specific_overlap(&(sources[tn]), tn, qn);  // find ovlp of t->q
+
+        ///if(index != -1 && sources[tn].buffer[index].del == 0)
+        if(index != -1)  // both t->q and q->t are present
+        {
+            is_del = 0;
+            if(sources[i].buffer[j].del || sources[tn].buffer[index].del)
+            {
+                is_del = 1;
+            }
+
+            qLen_0 = Get_qe(sources[i].buffer[j]) - Get_qs(sources[i].buffer[j]);
+            qLen_1 = Get_qe(sources[tn].buffer[index]) - Get_qs(sources[tn].buffer[index]);
+
+            if(qLen_0 == qLen_1)
+            {
+                ///qn must be not equal to tn
+                ///make sources[qn] = sources[tn] if qn > tn
+                if(qn < tn)  // overwrite the entry ordered higher (later)
+                {
+                    set_reverse_overlap(&(sources[tn].buffer[index]), &(sources[i].buffer[j]));
+                    // buf1[*buf_n] = &(sources[tn].buffer[index]);
+                    // buf2[*buf_n] = &(sources[i].buffer[j]);
+                    // is_hard_add[*buf_n] = 0;
+                    // *buf_n = (*buf_n) + 1;
+                }
+            }
+            else if(qLen_0 > qLen_1)  // overwrite the reverse entry
+            {
+                set_reverse_overlap(&(sources[tn].buffer[index]), &(sources[i].buffer[j]));
+                // buf1[*buf_n] = &(sources[tn].buffer[index]);
+                // buf2[*buf_n] = &(sources[i].buffer[j]);
+                // is_hard_add[*buf_n] = 0;
+                // *buf_n = (*buf_n) + 1;
+            }
+            
+            sources[i].buffer[j].del = is_del;
+            sources[tn].buffer[index].del = is_del;
+        }
+        else ///means this edge just occurs in one direction
+        {  
+            // set_reverse_overlap(&ele, &(sources[i].buffer[j]));  // add the reversed overlap
+            sources[i].buffer[j].del = 1;  // but also delete it
+            // add_ma_hit_t_alloc(&(sources[tn]), &ele);
+
+            // buf1[*buf_n] = &(sources[tn].buffer[index]);  // is a placeholder
+            buf2[*buf_n] = &(sources[i].buffer[j]);
+            is_hard_add[*buf_n] = (tn<<1) | 1; 
+            is_hard_add_buf[*buf_n] = (((uint64_t)i)<<32) | ((uint64_t)j);
+            *buf_n = (*buf_n) + 1;
+        }
+    }
+
+
+}
+void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n_read){
+    // FUNC
+    //     Threaded normalize_ma_hit_t_single_side_advance.
+    double startTime = Get_T();
+    int verbose = 0;
+    int n_cpu = asm_opt.thread_num;
+    
+    int batch_size = n_cpu*64;
+    long long nb_batch =  n_read/((long long)batch_size)+1;
+    int sancheckA = 0;
+    int sancheckB = 0;
+    
+
+    // init data
+    int buf_size = 1024;
+    normhit_aux_t aux;
+    aux.sources = sources;
+    aux.i_start = 0;
+    aux.n_read = n_read;
+    aux.n = (uint64_t*)calloc(n_cpu, sizeof(uint64_t));
+    aux.m = (uint64_t*)calloc(n_cpu, sizeof(uint64_t));
+    aux.is_hard_add = (uint32_t**)calloc(n_cpu, sizeof(uint32_t*));
+    aux.is_hard_add_buf = (uint64_t**)calloc(n_cpu, sizeof(uint64_t*));
+    aux.buf1 = (ma_hit_t***)calloc(n_cpu, sizeof(ma_hit_t**));
+    aux.buf2 = (ma_hit_t***)calloc(n_cpu, sizeof(ma_hit_t**));
+    for (int i=0; i<n_cpu; i++){
+        aux.m[i] = buf_size;
+        aux.is_hard_add[i] = (uint32_t*)calloc(buf_size, sizeof(uint32_t));
+        aux.is_hard_add_buf[i] = (uint64_t*)calloc(buf_size, sizeof(uint64_t));
+        aux.buf1[i] = (ma_hit_t**)calloc(buf_size, sizeof(ma_hit_t*));
+        aux.buf2[i] = (ma_hit_t**)calloc(buf_size, sizeof(ma_hit_t*));
+    }
+
+    fprintf(stderr, "[debug::%s] nb_batch: %d\n", __func__, (int)nb_batch);
+    for (long long i_batch=0; i_batch<nb_batch; i_batch++){
+        for (int i=0; i<n_cpu; i++){aux.n[i] = 0;}  // reset all buffers
+        // fprintf(stderr, "i_batch %d\n", (int)i_batch);
+        aux.i_start = i_batch * ((long long)batch_size);
+
+        // collect
+        kt_for(n_cpu, hamt_normalize_ma_hit_t_single_side_advance_worker, &aux, (long)batch_size);
+
+        // treat
+        ma_hit_t ele;
+        // for (int tid=0; tid<n_cpu; tid++){
+        //     for (uint64_t n=0; n<aux.n[tid]; n++){
+        //         if (!aux.is_hard_add[tid][n]){
+        //             set_reverse_overlap(aux.buf1[tid][n], aux.buf2[tid][n]);
+        //             sancheckA++;
+        //         }
+        //     }
+        // }
+        uint32_t i_tmp, j_tmp;
+        for (int tid=0; tid<n_cpu; tid++){
+            for (uint64_t n=0; n<aux.n[tid]; n++){
+                if (aux.is_hard_add[tid][n]){
+                    i_tmp = aux.is_hard_add_buf[tid][n]>>32;
+                    j_tmp = (uint32_t)aux.is_hard_add_buf[tid][n];
+                    set_reverse_overlap(&ele, &sources[i_tmp].buffer[j_tmp]);
+                    ele.del = 1;
+                    add_ma_hit_t_alloc(&(sources[aux.is_hard_add[tid][n]>>1]), &ele);
+                    sancheckB++;
+                }
+            }
+        }
+    }
+
+    // cleanup
+    free(aux.n);
+    free(aux.m);
+    for (int i=0; i<n_cpu; i++){
+        free(aux.is_hard_add[i]);
+        free(aux.is_hard_add_buf[i]);
+        free(aux.buf1[i]);
+        free(aux.buf2[i]);
+    }
+    free(aux.is_hard_add);
+    free(aux.is_hard_add_buf);
+    free(aux.buf1); free(aux.buf2);
+
+    if(VERBOSE >= 1)
+    {
+        fprintf(stderr, "[M::%s] takes %0.2fs, typeA %d B %d\n\n", __func__, Get_T()-startTime, sancheckA, sancheckB);
     }
 }
 
@@ -29168,11 +29369,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     // (destroies sg and reset it (no extra malloc))
     renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
 
-    ///it's hard to say which function is better       
-    ///normalize_ma_hit_t_single_side(sources, n_read);
-    normalize_ma_hit_t_single_side_advance(sources, n_read);  // TODO: faster?
-    normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
-    
+    // normalize_ma_hit_t_single_side_advance(sources, n_read);  // TODO: faster?
+    // normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
+    hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
+    hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
 
     memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
 

@@ -1627,7 +1627,6 @@ static void *worker_mark_reads(void *data, int step, void *in){  // callback of 
 						ha_insert_read_len(p->rs_out, l, p->ks->name.l);
 					}else{
 						assert(p->rs_in->is_has_lengths && (!p->rs_in->is_all_in_mem));
-						assert(l == (int)p->rs_out->read_length[*p->n_seq]);
 						int i, n_N;
 						for (i = n_N = 0; i < l; ++i) // count number of ambiguous bases
 							if (seq_nt4_table[(uint8_t)p->ks->seq.s[i]] >= 4)
@@ -2212,7 +2211,6 @@ static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // 
 						ha_insert_read_len(p->rs_out, l, p->ks->name.l);
 					} else if (p->flag & HAF_RS_WRITE_SEQ) {
 						assert(p->rs_in->is_has_lengths && (!p->rs_in->is_all_in_mem));
-						assert(l == (int)p->rs_out->read_length[*p->n_seq]);
 						int i, n_N;
 						for (i = n_N = 0; i < l; ++i) // count number of ambiguous bases
 							if (seq_nt4_table[(uint8_t)p->ks->seq.s[i]] >= 4)

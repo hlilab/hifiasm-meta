@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include "Process_Read.h"
 #include "CommandLines.h"
+#define __STDC_FORMAT_MACROS 1
+#include <inttypes.h>
 
 void hamt_dump_read_selection_mask_runtime(hifiasm_opt_t *asm_opt, All_reads *rs){
     char *output_filename = (char*)malloc(strlen(asm_opt->output_file_name)+25);
@@ -124,6 +126,7 @@ void hist_readlength(All_reads *rs){
     int bins, max_length=50000, min_length = 1000, step=500;
     bins = max_length/step;
     int under=0, over=0;
+    int topping = 50;
     int d = 5000, topped;  // discrete bar to ascii
     
     int l, x, last_idx=0;
@@ -156,12 +159,13 @@ void hist_readlength(All_reads *rs){
         fprintf(stderr, "[M::%s] <%5.1fk: ", __func__, (float)min_length/1000);
         topped = 0;
         x = under/d;
-        if (x>100) {topped = 1;}
+        if (x>topping) {topped = 1;}
         else{topped = 0;}
         for (int j=0; j<x; j++){
             fputc(']', stderr);
         }
-        if (topped){fputc('+', stderr);}
+        fprintf(stderr, " %d", x);
+        if (topped){fputc(')', stderr);}
         fputc('\n', stderr);
     }
     for (int i=0; i<last_idx+1; i++){
@@ -169,13 +173,18 @@ void hist_readlength(All_reads *rs){
             fprintf(stderr, "[M::%s] %.1fk: 0\n", __func__, (float)(min_length+step*i)/1000);
         }else{
             fprintf(stderr, "[M::%s] %.1fk: ", __func__, (float)(min_length+step*i)/1000);
-            x = buf[i]/d;
-            if (x>100) {topped = 1;}
-            else{topped = 0;}
-            for (int j=0; j<x+1; j++){  // +1 to print at least one char (0<buf[i]<d)
-                fputc(']', stderr);
+            if (buf[i]==0){  // this bin doesn't have any read
+                fputc('0', stderr);
+            }else{
+                x = buf[i]/d;
+                if (x>topping) {topped = 1;}
+                else{topped = 0;}
+                for (int j=0; j<x+1; j++){
+                    fputc(']', stderr);
+                }
+                if (topped){fputc(')', stderr);}
+                fprintf(stderr, " %" PRIu32 "", buf[i]);
             }
-            if (topped){fputc('+', stderr);}
             fputc('\n', stderr);
         }
     }

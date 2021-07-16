@@ -1741,17 +1741,17 @@ void hamt_mark(const hifiasm_opt_t *asm_opt, All_reads *rs, ha_ct_t *h){
 								plmt.accumulated_time_step1, plmt.accumulated_time_step2);
 
 
-		if (rs->is_has_nothing){
-			rs->is_has_nothing = 0;
-			rs->is_has_lengths = 1;
-		}else if (rs->is_has_lengths && (!rs->is_all_in_mem)){
-			rs->is_all_in_mem = 1;
-		}
 
 		destory_UC_Read(&plmt.ucr);
 		if (plmt.hd) ha_ct_destroy(plmt.hd);
 		kseq_destroy(plmt.ks);
 		gzclose(fp);
+	}
+	if (rs->is_has_nothing){
+		rs->is_has_nothing = 0;
+		rs->is_has_lengths = 1;
+	}else if (rs->is_has_lengths && (!rs->is_all_in_mem)){
+		rs->is_all_in_mem = 1;
 	}
 }
 

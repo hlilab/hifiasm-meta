@@ -163,6 +163,7 @@ void hist_readlength(All_reads *rs){
         else{topped = 0;}
         for (int j=0; j<x; j++){
             fputc(']', stderr);
+            if (j>topping) break;
         }
         fprintf(stderr, " %d", x);
         if (topped){fputc(')', stderr);}
@@ -181,6 +182,7 @@ void hist_readlength(All_reads *rs){
                 else{topped = 0;}
                 for (int j=0; j<x+1; j++){
                     fputc(']', stderr);
+                    if (j>topping) break;
                 }
                 if (topped){fputc(')', stderr);}
                 fprintf(stderr, " %" PRIu32 "", buf[i]);

@@ -73,7 +73,7 @@ void Print_H(hifiasm_opt_t* asm_opt)
     fprintf(stderr, "    -z INT      length of adapters that should be removed [%d]\n", asm_opt->adapterLen);
     fprintf(stderr, "    --version   show version number\n");
     fprintf(stderr, "  Read selection:\n");
-    fprintf(stderr, "    -S          enable read selection.\n");
+    // fprintf(stderr, "    -S          enable read selection.\n");
     fprintf(stderr, "    --force-preovec\n");
     fprintf(stderr, "                enable and force read selection.\n");
     fprintf(stderr, "    --lowq-10\n");

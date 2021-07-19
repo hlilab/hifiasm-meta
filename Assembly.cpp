@@ -2105,7 +2105,7 @@ int hamt_assemble(void)
             hamt_flt_withsorting(&asm_opt, &R_INF);
             fprintf(stderr, "[M::%s] read kmer stats collected.\n", __func__);
 
-            ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 0);  // high freq filter on retained reads
+            ha_flt_tab = hamt_ft_gen(&asm_opt, &R_INF, asm_opt.preovec_coverage, 0);
             fprintf(stderr, "[M::%s] generated flt tab.\n", __func__);
 
             assert((!R_INF.is_has_nothing) && R_INF.is_has_lengths && R_INF.is_all_in_mem);

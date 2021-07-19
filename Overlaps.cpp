@@ -1733,6 +1733,9 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
     // NOTE
     //     See the TODO/BUG below before using.
     double startTime = Get_T();
+    double startTime_tmp;
+    double accTime_a = 0;
+    double accTime_b = 0;
     int n_cpu = asm_opt.thread_num;
     int ret0 = 0; // sancheck
 
@@ -1761,7 +1764,9 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
 
     // step 1
     for (long long i_batch=0; i_batch<nb_batch; i_batch++){
+        startTime_tmp = Get_T();
         kt_for(n_cpu, hamt_threaded_ma_hit_contained_advance_worker1, &aux, (long)batch_size);
+        accTime_a += Get_T() - startTime_tmp;
 
         // treat
         // TODO/BUG July 16 2021
@@ -1769,6 +1774,7 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
         //       which could race. However, doing them here is even worse (effectively
         //       letting intra-batch checks out of sync).
         //       Need a better way to thread `ma_hit_contained_advance`.
+        startTime_tmp = Get_T();
         for (int i=0; i<n_cpu; i++){
             for (int j=0; j<aux.n[i]; j++){
                 ret0++;
@@ -1784,6 +1790,7 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
                 }
             }
         }
+        accTime_b += Get_T() - startTime_tmp;
 
         // reset buffers
         for (int i=0; i<n_cpu; i++){
@@ -1796,9 +1803,15 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
 
     // step 1.5: intermediate
     transfor_R_to_U(ruIndex);
-    if (VERBOSE>=1) {fprintf(stderr, "[debug::%s] ret0 is %d\n", __func__, ret0); fflush(stderr);}
+    if (VERBOSE>=1) {
+        fprintf(stderr, "[debug::%s] ret0 is %d\n", __func__, ret0);
+        fprintf(stderr, "[prof::%s] step1 finished, part1 took %.2fs, part2 took %.2fs\n", 
+                                __func__, accTime_a, accTime_b);
+        
+    }
 
     // step 2
+    startTime_tmp = Get_T();
     kt_for(n_cpu, hamt_threaded_ma_hit_contained_advance_worker2, &aux, (long)n_read);
     uint64_t ret = 0;
     for (int i=0; i<n_cpu; i++){
@@ -1819,6 +1832,8 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
 
     if(VERBOSE >= 1)
     {
+        fprintf(stderr, "[prof::%s] step2 finished, took %.2fs\n", 
+                                __func__, Get_T()-startTime_tmp);
         fprintf(stderr, "[M::%s] dropped %" PRIu64 " reads, takes %0.2f s\n\n", __func__, ret, Get_T()-startTime);
     }
     return ret;
@@ -12084,9 +12099,17 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     int batch_size = n_cpu * 64;
     int nb_batches = num_sources / batch_size + 1;
 
+    double startTime_tmp;
+    double accumulatedTime_a = 0;
+    double accumulatedTime_b = 0;
+
     // step 1: collect weak hits
     for (int i_batch=0; i_batch<nb_batches; i_batch++){
+        startTime_tmp = Get_T();
         kt_for(n_cpu, hamt_clean_weak_ma_hit_t_worker1, &aux, (long)batch_size);
+        accumulatedTime_a += Get_T() - startTime_tmp;
+
+        startTime_tmp = Get_T();
         for (int tid=0; tid<n_cpu; tid++){  // treate the sequel part
             // sources[tn].buffer[index].bl = 0;  // do this outside of threading
             for (int i=0; i<aux.n[tid]; i++){
@@ -12095,7 +12118,14 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
             aux.n[tid] = 0;
         }
         aux.i_batch_start += batch_size;
+        accumulatedTime_b += Get_T() - startTime_tmp;
     }
+    if(VERBOSE >= 1)
+    {
+        fprintf(stderr, "[M::%s] step one finished, part1 %0.2f s, part2 %.2f s\n", __func__, 
+                                           accumulatedTime_a, accumulatedTime_b);
+    }
+    startTime = Get_T();
 
     // step2: flip bits
     kt_for(n_cpu, hamt_clean_weak_ma_hit_t_worker2, &aux, (long)num_sources);
@@ -12108,7 +12138,7 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
 
     if(VERBOSE >= 1)
     {
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] step two finished, took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 }
 

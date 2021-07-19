@@ -871,14 +871,19 @@ ha_ct_t *ha_count(const hifiasm_opt_t *asm_opt, int flag, ha_pt_t *p0, const voi
 		if (flag & HAF_RS_WRITE_LEN){
 		    if (!(flag & HAMTF_FORCE_DONT_INIT)){
 				init_All_reads(rs);
+				fprintf(stderr, "[debug::%s] call: init_All_reads\n", __func__);fflush(stderr);
 			}
 			else{
 				reset_All_reads(rs);
+				fprintf(stderr, "[debug::%s] call: reset_All_reads\n", __func__);fflush(stderr);
 			}
 		}
 		else if (flag & HAF_RS_WRITE_SEQ){
 			malloc_All_reads(rs);
+			fprintf(stderr, "[debug::%s] call: malloc_All_reads\n", __func__);fflush(stderr);
 		}
+	}else{
+		fprintf(stderr, "[debug::%s] what?\n", __func__);fflush(stderr);
 	}
 	yak_copt_init(&opt);
 	opt.k = asm_opt->k_mer_length;
@@ -891,8 +896,9 @@ ha_ct_t *ha_count(const hifiasm_opt_t *asm_opt, int flag, ha_pt_t *p0, const voi
 	opt.bf_shift = flag & HAF_COUNT_EXACT? 0 : asm_opt->bf_shift;
 	opt.n_thread = asm_opt->thread_num;
 	///asm_opt->num_reads is the number of fastq files
-	for (i = 0; i < asm_opt->num_reads; ++i)
+	for (i = 0; i < asm_opt->num_reads; ++i){
 		h = yak_count(&opt, asm_opt->read_file_names[i], flag|HAF_CREATE_NEW, p0, h, flt_tab, rs, &n_seq);
+	}
 	if (h && opt.bf_shift > 0)
 		ha_ct_destroy_bf(h);
 	return h;
@@ -1767,13 +1773,16 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 	int peak_hom, peak_het, cutoff;
 	ha_ct_t *h;
 	if (rs->is_has_nothing){
+		if (VERBOSE) {fprintf(stderr, "[debug::%s] rs has nothing\n", __func__); fflush(stderr);}
 		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_LEN|HAMTF_FORCE_DONT_INIT|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS since the array is initialized
 		rs->is_has_nothing = 0;
 		rs->is_has_lengths = 1;
 	}else if (rs->is_has_lengths && (!rs->is_all_in_mem)){
+		if (VERBOSE) {fprintf(stderr, "[debug::%s] rs has read lengths, total_reads is %d\n", __func__, (int)rs->total_reads); fflush(stderr);}
 		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_WRITE_SEQ|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS bc read global kmer status have been collected / the array is initialized
 		rs->is_all_in_mem = 1;
 	}else if (rs->is_all_in_mem){
+		if (VERBOSE) {fprintf(stderr, "[debug::%s] rs in mem, total_reads is %d\n", __func__, (int)rs->total_reads); fflush(stderr);}
 		h = ha_count(asm_opt, HAF_COUNT_ALL|HAF_RS_READ|HAMTF_HAS_MARKS, NULL, NULL, rs);  // HAMTF_HAS_MARKS bc read global kmer status have been collected / the array is initialized
 	}else{
 		fprintf(stderr, "[E::%s] unexpected, rs status markers are wrong? Traceback:\n", __func__);
@@ -1783,9 +1792,12 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 	}
 
 	// histogram
+	fprintf(stderr, "next: ha_ct_hist\n");fflush(stderr);
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
+	fprintf(stderr, "finished: ha_ct_hist\n");fflush(stderr);
 	peak_hom = ha_analyze_count(YAK_N_COUNTS, asm_opt->min_hist_kmer_cnt, cnt, &peak_het);
 	if (peak_hom > 0) fprintf(stderr, "[M::%s] peak_hom: %d; peak_het: %d\n", __func__, peak_hom, peak_het);
+	fprintf(stderr, "finished: ha_analyze_count\n");fflush(stderr);
 	
 	if (!asm_opt->is_disable_read_selection){
 		cutoff = (int)(coverage *2 * asm_opt->high_factor);
@@ -2112,9 +2124,11 @@ void exp_load_raw_reads(const hifiasm_opt_t *asm_opt, All_reads *rs, int has_len
 	uint32_t idx_seq = 0;
 	int ret;  // ks
 	if (!has_len) {
+		fprintf(stderr, "[debug::%s] doesn't have len, reset\n", __func__); fflush(stderr);
 		reset_All_reads(rs);
 
 		for (int idx_file =0; idx_file<asm_opt->num_reads; idx_file++){  // 1st pass
+			fprintf(stderr, "[debug::%s]    after reset, at file %d\n", __func__, idx_file); fflush(stderr);
 			fp = gzopen(asm_opt->read_file_names[idx_file], "r");
 			if (fp==0) {fprintf(stderr, "E::%s can't open input file.\n", __func__); exit(1);}
 			ks = kseq_init(fp);
@@ -2126,9 +2140,18 @@ void exp_load_raw_reads(const hifiasm_opt_t *asm_opt, All_reads *rs, int has_len
 		}
 	}
 	
+	// fprintf(stderr, "[debug::%s] malloc all reads... total_reads is %d\n", __func__, (int)rs->total_reads); fflush(stderr);
+	// {
+	// 	fprintf(stderr, "    index_size %d\n", (int)rs->index_size);
+	// 	fprintf(stderr, "    name_index_size %d\n", (int)rs->name_index_size);
+	// 	fprintf(stderr, "    total_reads_bases %" PRIu64 "\n", rs->total_reads_bases);
+	// 	fprintf(stderr, "    total_name_length %d\n", (int)rs->total_name_length);
+	// 	fprintf(stderr, "    hamt_stat_buf_size %d\n", (int)rs->hamt_stat_buf_size);
+	// }
 	malloc_All_reads(rs);
 
 	for(int idx_file =0; idx_file<asm_opt->num_reads; idx_file++){  // 2nd pass: get sequences
+		// fprintf(stderr, "[debug::%s] getting sequences, at file %d; idx_seq is %d\n", __func__, idx_file, (int)idx_seq); fflush(stderr);
 		int i, n_N, l;
 		fp = gzopen(asm_opt->read_file_names[idx_file], "r");
 		ks = kseq_init(fp);
@@ -2146,6 +2169,10 @@ void exp_load_raw_reads(const hifiasm_opt_t *asm_opt, All_reads *rs, int has_len
 	}
 	assert(rs->total_reads==idx_seq);
 	fprintf(stderr, "M::%s loaded %d sequences.\n", __func__, idx_seq); fflush(stderr);
+
+	rs->is_all_in_mem = 1;
+	rs->is_has_lengths = 1;
+	rs->is_has_nothing = 0;
 }
 
 static void *worker_mark_reads_withsorting(void *data, int step, void *in){  // callback of kt_pipeline
@@ -2422,8 +2449,8 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
 	ha_analyze_count(YAK_N_COUNTS, asm_opt->min_hist_kmer_cnt, cnt, &peak_het);
 
-	hamt_mark(asm_opt, rs, h);  // collects mean/median/std and mark global category of each read
-	// exp_load_raw_reads(asm_opt, rs, 1);  // already has seq lens, load sequences
+	hamt_mark(asm_opt, rs, h);  // collects mean/median/std and mark global category of each read; will override and update is_has_nothing/is_has_lengths/is_all_in_mem etc
+	// exp_load_raw_reads(asm_opt, rs, rs->is_has_lengths);  // already has seq lens, load sequences
 
 	/////// sorting ////////
 	// pack: lowFrequency | median | readID

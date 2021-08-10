@@ -965,12 +965,13 @@ int hamt_pre_ovec_v2(int threshold){
     // overide status if switch is present
     if (asm_opt.is_ignore_ovlp_cnt){
         is_do_preovec_selection = 1;
-        fprintf(stderr, "[M::%s] Ignore estimated total number of overlaps and proceed to read selection.\n", __func__);
+        fprintf(stderr, "[M::%s] Ignore estimated total number of overlaps and proceed to read selection.\n", __func__); fflush(stderr);
     }
 
     if (is_do_preovec_selection){
         cnt = cnt<cutoff ? cutoff : R_INF.total_reads - (cnt - cutoff);  // the number of reads we're going to keep
         fprintf(stderr, "[M::%s] plan to keep %d out of %d reads (%.2f%%).\n",__func__, cnt, (int)R_INF.total_reads, (float)cnt/R_INF.total_reads*100);
+        fflush(stderr);
         hamt_flt_withsorting_supervised(&asm_opt, &R_INF, cnt);
         fprintf(stderr, "[prof::%s]     ~ done supervised: %.2f s\n", __func__, Get_T()-t_profiling); t_profiling = Get_T();
         ret = 0;

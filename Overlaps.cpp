@@ -1627,11 +1627,19 @@ typedef struct {
     ma_sub_t *coverage_cut;
     uint32_t **qn;
     uint32_t **tn;
+    ma_hit_t*** h_single;  // for deleting individual edges
     uint8_t **which;
     uint32_t *n;
     uint32_t *m;
     uint32_t i_batch_start;
     long long n_read;
+
+    // A linear buffer of different length than the aboved ones, 
+    //   used for deleting multiple edges.
+    uint32_t *n2;
+    uint32_t *m2;
+    ma_hit_t*** h_multi;  // nb thread arraies of array of pointers
+    uint32_t **n2_index;  // nb thread arraies of indices used to segment h_multi; size follow n, not n2
 }aux_ma_hit_contain_t;
 
 static void hamt_threaded_ma_hit_contained_advance_worker1(void *data, long i_r_, int tid){
@@ -1646,6 +1654,8 @@ static void hamt_threaded_ma_hit_contained_advance_worker1(void *data, long i_r_
     if (coverage_cut[i].del) return;
 
     ma_hit_t *h = NULL;
+    ma_hit_t *tmp;
+    ma_hit_t_alloc *tmp_alloc;
     ma_sub_t *sq = NULL;
     ma_sub_t *st = NULL;
     asg_arc_t t;
@@ -1658,6 +1668,8 @@ static void hamt_threaded_ma_hit_contained_advance_worker1(void *data, long i_r_
             d->qn[tid] = (uint32_t*)realloc(d->qn[tid], sizeof(uint32_t) * d->m[tid]);
             d->tn[tid] = (uint32_t*)realloc(d->tn[tid], sizeof(uint32_t) * d->m[tid]);
             d->which[tid] = (uint8_t*)realloc(d->which[tid], sizeof(uint8_t) * d->m[tid]);
+            d->h_single[tid] = (ma_hit_t**)realloc(d->h_single[tid], sizeof(ma_hit_t*) * d->m[tid]);
+            d->n2_index[tid] = (uint32_t*)realloc(d->n2_index[tid], sizeof(uint32_t) * d->m[tid]);
         }
 
         h = &(sources[i].buffer[j]);
@@ -1673,21 +1685,71 @@ static void hamt_threaded_ma_hit_contained_advance_worker1(void *data, long i_r_
         if (r == MA_HT_QCONT) 
         {
             h->del = 1;
-            delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
-            delete_all_edges(sources, coverage_cut, Get_qn(*h));
+            // delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
+            // delete_all_edges(sources, coverage_cut, Get_qn(*h));
             // set_R_to_U(ruIndex, Get_qn(*h), Get_tn(*h), 0);
+
+            // (in place of delete_single_edge)
+            tmp = get_specific_overlap_with_del(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
+            d->h_single[tid][d->n[tid]] = tmp;
+            // (in place of delete_all_edges)
+            tmp_alloc = &sources[Get_qn(*h)];
+            if (d->n[tid]==0){
+                d->n2_index[tid][d->n[tid]] = 0;
+            }else{
+                d->n2_index[tid][d->n[tid]] =  d->n2_index[tid][d->n[tid]-1]+tmp_alloc->length;
+            }
+            if (tmp_alloc->length+d->n2[tid]>=d->m2[tid]){
+                d->m2[tid] = d->m2[tid] + (d->m2[tid]>>1);
+                d->h_multi[tid] = (ma_hit_t**)realloc(d->h_multi[tid], sizeof(ma_hit_t*) * d->m2[tid]);
+            }
+            for (int i_tmp=0; i_tmp<tmp_alloc->length; i_tmp++){
+                tmp_alloc->buffer[i_tmp].del = 1;
+                tmp = get_specific_overlap_with_del(sources, coverage_cut, 
+                                                    Get_tn(tmp_alloc->buffer[i_tmp]), 
+                                                    Get_qn(tmp_alloc->buffer[i_tmp]));
+                d->h_multi[tid][d->n2[tid]] = tmp;
+                d->n2[tid]++;
+            }
+            coverage_cut[Get_qn(*h)].del = 1;
+            // (in place of set_R_to_U)
             d->qn[tid][d->n[tid]] = Get_qn(*h);
             d->tn[tid][d->n[tid]] = Get_tn(*h);
             d->which[tid][d->n[tid]] = 0;  // tell caller to get rid of qn
             d->n[tid]++;
-
         }
         else if (r == MA_HT_TCONT) 
         {
             h->del = 1;
-            delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
-            delete_all_edges(sources, coverage_cut, Get_tn(*h));
+            // delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
+            // delete_all_edges(sources, coverage_cut, Get_tn(*h));
             // set_R_to_U(ruIndex, Get_tn(*h), Get_qn(*h), 0);
+
+            // (in place of delete_single_edge)
+            tmp = get_specific_overlap_with_del(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
+            d->h_single[tid][d->n[tid]] = tmp;
+            // (in place of delete_all_edges)
+
+            tmp_alloc = &sources[Get_tn(*h)];
+            if (d->n[tid]==0){
+                d->n2_index[tid][d->n[tid]] = 0;
+            }else{
+                d->n2_index[tid][d->n[tid]] =  d->n2_index[tid][d->n[tid]-1]+tmp_alloc->length;
+            }
+            if (tmp_alloc->length+d->n2[tid]>=d->m2[tid]){
+                d->m2[tid] = d->m2[tid] + (d->m2[tid]>>1);
+                d->h_multi[tid] = (ma_hit_t**)realloc(d->h_multi[tid], sizeof(ma_hit_t*) * d->m2[tid]);
+            }
+            for (int i_tmp=0; i_tmp<tmp_alloc->length; i_tmp++){
+                tmp_alloc->buffer[i_tmp].del = 1; 
+                tmp = get_specific_overlap_with_del(sources, coverage_cut, 
+                                                    Get_tn(tmp_alloc->buffer[i_tmp]), 
+                                                    Get_qn(tmp_alloc->buffer[i_tmp]));
+                d->h_multi[tid][d->n2[tid]] = tmp;
+                d->n2[tid]++;
+            }
+            coverage_cut[Get_tn(*h)].del = 1;
+            // (in place of set_R_to_U)
             d->qn[tid][d->n[tid]] = Get_qn(*h);
             d->tn[tid][d->n[tid]] = Get_tn(*h);
             d->which[tid][d->n[tid]] = 1;  // tell caller to get rid of tn
@@ -1748,13 +1810,25 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
     aux.m = (uint32_t*)calloc(n_cpu, sizeof(uint32_t));
     aux.qn = (uint32_t**)calloc(n_cpu, sizeof(uint32_t*));
     aux.tn = (uint32_t**)calloc(n_cpu, sizeof(uint32_t*));
+    aux.h_single = (ma_hit_t***)calloc(n_cpu, sizeof(ma_hit_t**));
+    aux.n2_index = (uint32_t**)calloc(n_cpu, sizeof(uint32_t*));
     aux.which = (uint8_t**)calloc(n_cpu, sizeof(uint8_t*));  // 0 means qn of shall be removed, 1 means tn
     aux.i_batch_start = 0;
     for (int i=0; i<n_cpu; i++){
         aux.m[i] = 1024;
         aux.qn[i] = (uint32_t*)calloc(1024, sizeof(uint32_t));
         aux.tn[i] = (uint32_t*)calloc(1024, sizeof(uint32_t));
+        aux.h_single[i] = (ma_hit_t**)calloc(1024, sizeof(ma_hit_t*));
+        aux.n2_index[i] = (uint32_t*)calloc(1024, sizeof(uint32_t));
         aux.which[i] = (uint8_t*)calloc(1024, sizeof(uint8_t));
+    }
+    // (the other linear buffer)
+    aux.n2 = (uint32_t*)calloc(n_cpu, sizeof(uint32_t));
+    aux.m2 = (uint32_t*)calloc(n_cpu, sizeof(uint32_t));
+    aux.h_multi = (ma_hit_t***)calloc(n_cpu, sizeof(ma_hit_t**));
+    for (int i=0; i<n_cpu; i++){
+        aux.m2[i] = 1024;
+        aux.h_multi[i] = (ma_hit_t**)calloc(1024, sizeof(ma_hit_t*));
     }
 
     // prepare batch splits
@@ -1769,23 +1843,19 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
         accTime_a += Get_T() - startTime_tmp;
 
         // treat
-        // TODO/BUG July 16 2021
-        //     The delete_single_edge/delete_all_edges steps are done by the worker1,
-        //       which could race. However, doing them here is even worse (effectively
-        //       letting intra-batch checks out of sync).
-        //       Need a better way to thread `ma_hit_contained_advance`.
         startTime_tmp = Get_T();
         for (int i=0; i<n_cpu; i++){
+            for (int j=0; j<aux.n2[i]; j++){// in place of delete_all_edges
+                if (aux.h_multi[i][j]!=NULL) {aux.h_multi[i][j]->del = 1;}
+            }
             for (int j=0; j<aux.n[i]; j++){
                 ret0++;
                 qn = aux.qn[i][j];
                 tn = aux.tn[i][j];
-                // delete_single_edge(sources, coverage_cut, tn, qn);
-                if (aux.which[i][j]==0){
-                    // delete_all_edges(sources, coverage_cut, qn);
+                if (aux.h_single[i][j]!=NULL) {aux.h_single[i][j]->del = 1;} // in place of delete_single_edge
+                if (aux.which[i][j]==0){  // 
                     set_R_to_U(ruIndex, qn, tn, 0);
                 }else{
-                    // delete_all_edges(sources, coverage_cut, tn);
                     set_R_to_U(ruIndex, tn, qn, 0);
                 }
             }
@@ -1795,6 +1865,7 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
         // reset buffers
         for (int i=0; i<n_cpu; i++){
             aux.n[i] = 0;
+            aux.n2[i] = 0;
         }
 
         // update offset
@@ -1821,13 +1892,21 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
     // cleanup
     free(aux.n);
     free(aux.m);
+    free(aux.n2);
+    free(aux.m2);
     for (int i=0; i<n_cpu; i++){
         free(aux.qn[i]);
         free(aux.tn[i]);
+        free(aux.h_single[i]);
+        free(aux.n2_index[i]);
         free(aux.which[i]);
+        free(aux.h_multi[i]);
     }
     free(aux.qn);
     free(aux.tn);
+    free(aux.h_single);
+    free(aux.n2_index);
+    free(aux.h_multi);
     free(aux.which);
 
     if(VERBOSE >= 1)
@@ -11697,6 +11776,16 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, uint8_t* r_flag)
     return ret;
 }
 
+void hamt_ug_seq_simple(asg_t *sg, ma_ug_t *ug, ma_sub_t* coverage_cut, 
+                        ma_hit_t_alloc* sources, R_to_U* ruIndex, int max_hang, int min_ovlp){
+    kvec_asg_arc_t_warp new_rtg_edges;
+    kv_init(new_rtg_edges.a);
+
+    ma_ug_seq(ug, sg, &R_INF, coverage_cut, sources, &new_rtg_edges, max_hang, min_ovlp);
+
+    kv_destroy(new_rtg_edges.a);
+}
+
 void ma_ug_print2(const ma_ug_t *ug, All_reads *RNF, asg_t* read_g, const ma_sub_t *coverage_cut, 
 ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FILE *fp)
 {
@@ -12002,7 +12091,8 @@ void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_source
     
 typedef struct {
     long long **index;
-    uint32_t **tn;
+    uint32_t **i;
+    uint32_t **j;
     uint32_t *n;
     uint32_t *m;
     uint32_t i_batch_start, n_reads;
@@ -12019,15 +12109,16 @@ static void hamt_clean_weak_ma_hit_t_worker1(void *data, long i_r_, int tid){  /
     ma_hit_t_alloc* reverse_sources = d->reverse_sources;
 
     long long j, index;
-    uint32_t qn, tn;
+    uint32_t qn, tn, qs, qe;
 
     for (j = 0; j < sources[i].length; j++)
     {
         if (d->n[tid]==d->m[tid]){
-            assert( (d->m[tid]>>1) < (UINT32_MAX - d->m[tid]) );  // sancheck, buffer shall grow larger than the max possible buffer size
+            assert( (d->m[tid]>>1) < (UINT32_MAX - d->m[tid]) );  // sancheck, buffer shall not grow larger than the max possible buffer size
             d->m[tid] = d->m[tid] + (d->m[tid]>>1);
             d->index[tid] = (long long*)realloc(d->index[tid], sizeof(long long) * d->m[tid]);
-            d->tn[tid] = (uint32_t*)realloc(d->tn[tid], sizeof(uint32_t) * d->m[tid]);
+            d->i[tid] = (uint32_t*)realloc(d->i[tid], sizeof(uint32_t) * d->m[tid]);
+            d->j[tid] = (uint32_t*)realloc(d->j[tid], sizeof(uint32_t) * d->m[tid]);
         }
 
         qn = Get_qn(sources[i].buffer[j]);
@@ -12036,21 +12127,15 @@ static void hamt_clean_weak_ma_hit_t_worker1(void *data, long i_r_, int tid){  /
 
         if(sources[i].buffer[j].ml == 0)  // overlap is weak
         {   
-            if(
-            !check_weak_ma_hit(&(sources[qn]), reverse_sources, tn, 
-            Get_qs(sources[i].buffer[j]), Get_qe(sources[i].buffer[j]))
-            /**
-            ||
-            !check_weak_ma_hit_reverse(&(reverse_sources[qn]), sources, tn)**/)
-            {
-                sources[i].buffer[j].bl = 0;
-                index = get_specific_overlap(&(sources[tn]), tn, qn);
-                // sources[tn].buffer[index].bl = 0;  // do this outside of threading
-                
-                d->index[tid][d->n[tid]] = index;
-                d->tn[tid][d->n[tid]] = tn;
-                d->n[tid] = d->n[tid]+1;
-            }
+            // don't do check_weak_ma_hit or it's race
+            // need to log: qn, tn, qs, qe, and index of the overlap
+            index = get_specific_overlap(&(sources[tn]), tn, qn);
+            d->index[tid][d->n[tid]] = index;
+            d->i[tid][d->n[tid]] = (uint32_t)i;
+            d->j[tid][d->n[tid]] = (uint32_t)j;
+
+            // (update linear buffer offset)
+            d->n[tid] = d->n[tid]+1;
         }
     }
 }
@@ -12084,7 +12169,9 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     aux.n = (uint32_t*)calloc(n_cpu, sizeof(uint32_t));
     aux.m = (uint32_t*)calloc(n_cpu, sizeof(uint32_t));
     aux.index = (long long**)calloc(n_cpu, sizeof(long long*));
-    aux.tn = (uint32_t**)calloc(n_cpu, sizeof(uint32_t*));
+    aux.i = (uint32_t**)calloc(n_cpu, sizeof(uint32_t*));
+    aux.j = (uint32_t**)calloc(n_cpu, sizeof(uint32_t*));
+
     aux.i_batch_start = 0;
     aux.n_reads = (uint32_t) num_sources;
     aux.sources = sources;
@@ -12092,7 +12179,8 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     for (int i=0; i<n_cpu; i++){
         aux.m[i] = 1024;
         aux.index[i] = (long long*)calloc(1024, sizeof(long long));
-        aux.tn[i] = (uint32_t*)calloc(1024, sizeof(uint32_t));
+        aux.i[i] = (uint32_t*)calloc(1024, sizeof(uint32_t));
+        aux.j[i] = (uint32_t*)calloc(1024, sizeof(uint32_t));
     }
 
     // prepare threading in batches
@@ -12104,6 +12192,8 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     double accumulatedTime_b = 0;
 
     // step 1: collect weak hits
+    uint32_t qn, tn, qs, qe, I, J;
+    long long ovlp_index;
     for (int i_batch=0; i_batch<nb_batches; i_batch++){
         startTime_tmp = Get_T();
         kt_for(n_cpu, hamt_clean_weak_ma_hit_t_worker1, &aux, (long)batch_size);
@@ -12111,10 +12201,21 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
 
         startTime_tmp = Get_T();
         for (int tid=0; tid<n_cpu; tid++){  // treate the sequel part
-            // sources[tn].buffer[index].bl = 0;  // do this outside of threading
             for (int i=0; i<aux.n[tid]; i++){
-                sources[aux.tn[tid][i]].buffer[aux.index[tid][i]].bl = 0;
+                I = aux.i[tid][i];
+                J = aux.j[tid][i];
+                qn = Get_qn(sources[I].buffer[J]);
+                tn = Get_qn(sources[I].buffer[J]);
+                qs = Get_qs(sources[I].buffer[J]);
+                qe = Get_qe(sources[I].buffer[J]);
+                ovlp_index = aux.index[tid][i];
+
+                if (!check_weak_ma_hit(&(sources[qn]), reverse_sources, tn, qs, qe)){
+                    sources[I].buffer[J].bl = 0;
+                    sources[tn].buffer[ovlp_index].bl = 0;
+                }
             }
+            // reset buffer
             aux.n[tid] = 0;
         }
         aux.i_batch_start += batch_size;
@@ -12133,8 +12234,13 @@ void hamt_clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     // cleanup
     free(aux.n);
     free(aux.m);
-    for (int i=0; i<n_cpu; i++) {free(aux.index[i]); free(aux.tn[i]);}
-    free(aux.index); free(aux.tn);
+    for (int i=0; i<n_cpu; i++) {
+        free(aux.index[i]); 
+        free(aux.i[i]);
+        free(aux.j[i]);
+    }
+    free(aux.index); 
+    free(aux.i); free(aux.j);
 
     if(VERBOSE >= 1)
     {
@@ -29747,8 +29853,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
 
 
-    // clean_weak_ma_hit_t(sources, reverse_sources, n_read);
-    hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);
+    clean_weak_ma_hit_t(sources, reverse_sources, n_read);
+    // hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // threaded
 
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     
@@ -29762,14 +29868,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
     // // hamt_hit_drop_high_mismatch_arcs(sources, n_read, readLen);
 
-    // ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
-    hamt_threaded_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex);  // TODO: this races, needs fix, but can't afford to do single thread on a large dataset
-
-    ///debug_info_of_specfic_read("m54329U_190827_173812/166332272/ccs", sources, reverse_sources, -1, "clean");
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
+    // hamt_threaded_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex);  // TODO: this races, needs fix, but can't afford to do single thread on a large dataset
 
     sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
-
-    ///debug_info_of_specfic_node((char*)"m64062_190804_172951/130483063/ccs", sg, ruIndex, (char*)"sbsbsb");
 
     asg_arc_del_trans(sg, gap_fuzz);
 
@@ -29906,7 +30008,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     ///note: don't apply asg_arc_del_too_short_overlaps() after this function!!!!
 
 
-
+    ma_ug_t *hamt_ug;
     {
         // r_utg
         output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
@@ -29920,7 +30022,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             int cleanID = 0;
 
-            ma_ug_t *hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+            hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
 
             // topo pre clean
@@ -30053,9 +30155,11 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
             // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            hamt_ug_prectg_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
+            hamt_ug_try_circularize(sg, hamt_ug, sources, reverse_sources, ruIndex, coverage_cut, 1000000);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
             hamt_ugasg_cut_shortTips(sg, hamt_ug, 0, 1, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
@@ -30089,11 +30193,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-            // // (debug)
-            // while (hamt_debug_ug_random_cut_arcs(sg, hamt_ug, 1)){
-            //     fprintf(stderr, "[debug::%s] random cut\n", __func__);
-            //     hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // }
+            // 
+            hamt_ug_try_circularize(sg, hamt_ug, sources, reverse_sources, ruIndex, coverage_cut, 1000000);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
 
             hamt_ug_destroy(hamt_ug);
         }  
@@ -30117,16 +30222,24 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             output_contig_graph_alternative(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
         }else{
-            // contig graph cleaning
-
-
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 0);
-
-
-            // generate alternative contig graph
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "a_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 1);
+
+            // // post pctg fixes (trinucleotide profiles etc)
+            // for (int i=0; i<3; i++){
+            //     hamt_ug_seq_simple(sg, hamt_ug, coverage_cut, sources, ruIndex, max_hang_length, mini_overlap_length);
+            //     if (!hamt_ug_finalprune(sg, hamt_ug)) {
+            //         fprintf(stderr, "[M::%s] leave final aggresive cleaning (i=%d)\n", __func__, i);
+            //         break;
+            //     }
+            //     hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // }
+            // hamt_ug_destroy(hamt_ug);
+            
+            // hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "pp_ctg", "ctg",
+            //                          sources, ruIndex, max_hang_length, mini_overlap_length, 0);
         }
     }
 

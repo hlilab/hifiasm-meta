@@ -77,9 +77,12 @@ void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug,
                                                         ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
                                                         const ma_sub_t* coverage_cut, 
                                                         int base_label);
-void hamt_ug_prectg_rescueLongUtg(asg_t *sg, 
+void hamt_ug_rescueLongUtg(asg_t *sg, 
                                     ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, R_to_U* ruIndex,
                                     const ma_sub_t* coverage_cut);
+int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug, 
+                            ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,R_to_U* ruIndex,
+                            const ma_sub_t* coverage_cut, int l_threshold);
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop, int max_length);
 int hamt_ug_resolve_oneMultiLeafSoapBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
@@ -133,5 +136,8 @@ int hamt_asg_arc_del_intersample_branching(asg_t *sg,
 int hamt_ug_cut_very_short_multi_tip(asg_t *sg, ma_ug_t *ug, int nb_threshold);
 int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources);
 
+
+// 
+int hamt_ug_finalprune(asg_t *sg, ma_ug_t *ug);
 
 #endif // __OVERLAPS_HAMT__

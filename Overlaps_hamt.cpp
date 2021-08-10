@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <math.h>
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
 #include <inttypes.h>
 #include <assert.h>
@@ -22,6 +23,36 @@ KRADIX_SORT_INIT(ovhamt32, uint32_t, uint32_t, 4)
 #define HAMT_PRIMARY_LABEL 0
 #define HAMT_ALTER_LABEL 1
 void hamt_ug_util_BFS_markSubgraph_trailing(ma_ug_t *ug_old, ma_ug_t *ug_new, int base_label);
+
+
+const unsigned char seq_nt4_table[256] = {
+	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  3, 3, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  3, 3, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
+	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4
+};
+float cosine_similarity(float *a, float *b, int l){
+    float d=0, A=0, B=0;
+    for (int i=0; i<l; i++){
+        d+= a[i]*b[i];
+        A+= a[i]*a[i];
+        B+= b[i]*b[i];
+    }
+    return d/(sqrt(A)*sqrt(B));
+
+}
 
 //////////////////////////////////////////////////////////////////////
 //                        debug functions                           //
@@ -233,6 +264,10 @@ void queue32_reset(queue32_t *q){
 
 int queue32_get_size(queue32_t *q){
     return q->n;
+}
+
+int queue32_isempty(queue32_t *q){
+    return !(q->n);
 }
 
 int queue32_is_in_queue(queue32_t *q, uint32_t d){
@@ -920,6 +955,9 @@ void asg_get_subgraph_DFSfinishTimes(asg_t *sg, stacku32_t *vertices, stacku32_t
     stacku64_destroy(&finishing_time);
 }
 
+void hamt_util_shortest_path(){
+    ;
+}
 
 
 int hamt_check_diploid(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, float ratio0,
@@ -1373,6 +1411,22 @@ void hamt_asgarc_util_get_the_two_targets(asg_t *g, uint32_t v, uint32_t *w, uin
     assert(idx=2);  // deadly
     *w = buf[0];
     *u = buf[1];
+}
+
+int hamt_asgarc_util_only_has_self_arc(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc, int base_label){
+    // FUNC
+    //     check if v's arcs are just v->v^1 and v^1->v (NOT v->v which is invalid.)
+    // RETURN
+    //     0 if not (note that this includes the case where v has no arc)
+    //     1 if yes
+    uint32_t tmp1, tmp2;
+    if (hamt_asgarc_util_countSuc(g, v, include_del_seq, include_del_arc, base_label)==1 &&
+        hamt_asgarc_util_countPre(g, v, include_del_seq, include_del_arc, base_label)==1){
+            hamt_asgarc_util_get_the_one_target(g, v, &tmp1, include_del_seq, include_del_arc, base_label);
+            hamt_asgarc_util_get_the_one_target(g, v^1, &tmp2, include_del_seq, include_del_arc, base_label);
+            if (tmp1==(tmp2^1)) return 1;
+       }
+    return 0;
 }
 
 int hamt_asgarc_util_walk_furthest_strict_single_path(asg_t *g, uint32_t v0, uint32_t *vn, int *nb_nodes, int limit, int base_label){
@@ -4372,9 +4426,10 @@ int hamt_ug_recover_ovlp_if_existed_core(asg_t *sg, ma_ug_t *ug, uint32_t start_
 
 int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint32_t end,
                                     ma_hit_t_alloc *sources, 
-                                    const ma_sub_t* coverage_cut, int search_span){
+                                    const ma_sub_t* coverage_cut, int search_span,
+                                    int yes_recover_it){
     // FUNC
-    //     check if start->end could've formed an arc. Add the arc accordingly if so
+    //     check if start->end could've formed an arc. Add the arc accordingly if so, or not (*set yes_recover_it)
     // PAR
     //     search_span : how many reads to search if the overlap of start/end pair 
     //                     is suboptimal (e.g. containment) & couldn't directly form the arc.
@@ -4395,7 +4450,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
 
     v = start;
     w = end;
-    status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 1);
+    status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, yes_recover_it);
     if (status<0){
         return -1;
     }else if (status>0){
@@ -4432,7 +4487,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
                 }else if (status<0){break;}
             }
             if (idx==(search_span-1)){fprintf(stderr, "[W::%s] search span not big enough?\n", __func__);}
-            status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w_end, sources, coverage_cut, 1);
+            status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w_end, sources, coverage_cut, yes_recover_it);
             assert(status==1);
             // fprintf(stderr, "stepped recovery, read pair: %.*s - %.*s\n", (int)Get_NAME_LENGTH(R_INF, v>>1), Get_NAME(R_INF, v>>1),
             //                                                                (int)Get_NAME_LENGTH(R_INF, w_end>>1), Get_NAME(R_INF, w_end>>1));
@@ -4457,7 +4512,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
         return -1;
     }
     for (int i=0; i<search_span-1; i++){
-        status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, 1);
+        status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v, w, sources, coverage_cut, yes_recover_it);
         if (status>0){
             // step the other side
             uint32_t v_end = v;
@@ -4475,7 +4530,7 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
                 }else if (status<0){break;}
             }
             if (idx==(search_span-1)){fprintf(stderr, "[W::%s] search span not big enough?\n", __func__);}
-            status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v_end, w, sources, coverage_cut, 1);
+            status = hamt_ug_recover_ovlp_if_existed_core(sg, ug, v_end, w, sources, coverage_cut, yes_recover_it);
             assert(status==1);
             fprintf(stderr, "stepped recovery, read pair: %.*s - %.*s\n", (int)Get_NAME_LENGTH(R_INF, v_end>>1), Get_NAME(R_INF, v_end>>1),
                                                                            (int)Get_NAME_LENGTH(R_INF, w>>1), Get_NAME(R_INF, w>>1));
@@ -6386,7 +6441,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
                         fprintf(stderr, "[debug::%s]     start vertex is %.*s\n", __func__, (int)Get_NAME_LENGTH(R_INF, start_v>>1), Get_NAME(R_INF, start_v>>1));
                     }
                     // check if overlap ever existed
-                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, 5)>0){
+                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, 5, 1)>0){
                         // drop old links
                         hamt_ug_arc_del(sg, ug, vu, wu, 1);
                         hamt_ug_arc_del(sg, ug, wu, uu, 1);
@@ -6462,7 +6517,7 @@ void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug,
                     // check if there's ever an overlap 
                     v = ug->u.a[wu>>1].start;
                     w = ug->u.a[wu>>1].end^1;
-                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, w, v, sources, coverage_cut, 5)>0){
+                    if (hamt_ug_recover_ovlp_if_existed(sg, ug, w, v, sources, coverage_cut, 5, 1)>0){
                         if (verbose){
                             fprintf(stderr, "[debug::%s] treated utg%.6d\n", __func__, (int)(wu>>1)+1);
                         }
@@ -6493,7 +6548,7 @@ void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug,
 
 }
 
-void hamt_ug_prectg_rescueLongUtg(asg_t *sg, 
+void hamt_ug_rescueLongUtg(asg_t *sg, 
                                     ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,R_to_U* ruIndex,
                                     const ma_sub_t* coverage_cut)
 {
@@ -6524,7 +6579,7 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
         if (verbose) {fprintf(stderr, "rescueLong\tat utg%.6d\n", (int)(vu>>1)+1);}
         start_v = ug->u.a[vu>>1].start;
         end_v = ug->u.a[vu>>1].end^1;
-        if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, 20)>0){
+        if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, 20, 1)>0){
             nb_treated++;
             color[vu>>1] = 1;
             if (verbose){
@@ -6547,7 +6602,151 @@ void hamt_ug_prectg_rescueLongUtg(asg_t *sg,
         fprintf(stderr, "[M::%s] added %d links.\n", __func__, nb_treated);
     }
 }
+int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug, 
+                            ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,R_to_U* ruIndex,
+                            const ma_sub_t* coverage_cut, int l_threshold){
+    // FUNC
+    //     Check all long contigs with at least 1 arc for start-end overlap.
+    //     If an overlap looks solid and the start & end is connected via other small contigs,
+    //      consider to make it a circle and cut off from the current subgraph.
+    //     For example:
+    //            v1(start)---v2(start)---...(other contigs)
+    //             |           |
+    //            v1(end)-----v2(end)---...(other contigs)
+    //        where v1 is long and v2 is tiny. There's no topo requirement for other arcs of v2.
+    // NOTE
+    //      To try to circularize isolated long linear contigs, see hamt_ug_rescueLongUtg.
+    // RETURN
+    //      Number of treatments
+    int verbose = 1;
+    int ret = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t start_v, end_v;  // start/end read of unitig
+    uint32_t start, target, tmp;
+    uint32_t nv; 
+    asg_arc_t *av;
 
+    int search_span = 10;  // for finding overlapped reads at ends
+    int search_neighbour_span = 3;  // for naive short path finding
+    int search_neighbour_bp = 50000;  // for naive short path finding, max in-between contig length
+    int search_neighbour_has_long = 0;  // for naive short path finding, if any connected contig is long
+    queue32_t q[2];
+    queue32_init(&q[0]);
+    queue32_init(&q[1]);
+    uint8_t which_q = 0;
+    int passed;
+    int sancheck_nbcut;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){  
+        // candiate unitig should be long and not isolated
+        if (ug->u.a[vu>>1].len<1000000) continue;
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)==0 && hamt_asgarc_util_countPre(auxsg, vu, 0, 0, 0)==0) continue;
+        if (hamt_asgarc_util_only_has_self_arc(auxsg, vu, 0, 0, 0)) continue;  // unitig is an isolated circle
+        start_v = ug->u.a[vu>>1].start;
+        end_v = ug->u.a[vu>>1].end^1;
+
+        passed = 0;
+        // check for overlap between start/end of the contig, and the shortest path connecting them
+        if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, 0)>0){  // only check, don't push anything
+            if (verbose){ fprintf(stderr, "[debug::%s] tig %.6d start %.*s end %.*s\n", __func__,
+                                    (int)(vu>>1)+1, 
+                                    (int)Get_NAME_LENGTH(R_INF, start_v>>1), 
+                                         Get_NAME(R_INF, start_v>>1),
+                                    (int)Get_NAME_LENGTH(R_INF, end_v>>1), 
+                                         Get_NAME(R_INF, end_v>>1));
+                        }
+            // check if there's a very short path 
+            // (naive, short in terms of both base pairs and number of contigs)
+            if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)==0){
+                target = vu^1;
+                start = vu^1;
+            }else{
+                target = vu;
+                start = vu;
+            }
+            // (init)
+            queue32_reset(&q[0]);
+            queue32_reset(&q[1]);
+            search_neighbour_has_long = 0;
+            nv = asg_arc_n(auxsg, start);
+            av = asg_arc_a(auxsg, start);
+            for (int i=0; i<nv; i++){
+                if (av[i].del) continue;
+                if (av[i].v==target){
+                    passed = 2;
+                    break;
+                }
+                if (ug->u.a[av[i].v>>1].len>search_neighbour_bp){
+                    search_neighbour_has_long = 1;  // don't push long neighbours
+                }else{
+                    queue32_enqueue(&q[which_q], av[i].v);
+                }
+            }
+            // if no immediate arc, check a couple neighbours
+            if (!passed){ 
+                for (int i=0; i<search_neighbour_span; i++){
+                    while(queue32_dequeue(&q[which_q], &tmp)){
+                        if (tmp==target){
+                            passed = 2;
+                            break;
+                        }
+                        nv = asg_arc_n(auxsg, start);
+                        av = asg_arc_a(auxsg, start);
+                        for (int tmpi=0; tmpi<nv; tmpi++){  // push child nodes
+                            if (av[i].del) continue;
+                            if (ug->u.a[av[i].v>>1].len>search_neighbour_bp){
+                                search_neighbour_has_long = 1;  // don't push long neighbours
+                            }else{
+                                queue32_enqueue(&q[!which_q], av[i].v);  // put neighbors in the other buffer
+                            }
+                        }
+                    }
+                    if (passed>1){break;}
+                    queue32_reset(&q[which_q]);
+                    which_q = !which_q;
+                }
+            }
+            // do we want to circularize?
+            if (verbose) {fprintf(stderr, "[deubg::%s]   pass %d, long neighbor %d\n", __func__, passed, search_neighbour_has_long);}
+            if (passed>1 || (!search_neighbour_has_long)){
+                sancheck_nbcut = 0;
+                // drop links other than self link (if it exists)
+                nv = asg_arc_n(auxsg, vu);
+                av = asg_arc_a(auxsg, vu);
+                for (int i=0; i<nv; i++){
+                    if (av[i].v!=vu) {
+                        hamt_ug_arc_del(sg, ug, vu, av[i].v, 1);
+                        sancheck_nbcut++;
+                    }
+                }
+                nv = asg_arc_n(auxsg, vu^1);
+                av = asg_arc_a(auxsg, vu^1);
+                for (int i=0; i<nv; i++){
+                    if (av[i].v!=(vu^1)) {
+                        hamt_ug_arc_del(sg, ug, vu^1, av[i].v, 1);
+                        sancheck_nbcut++;
+                    }
+                }
+                if (verbose) {fprintf(stderr, "[deubg::%s]   dropped %d\n", __func__, sancheck_nbcut);}
+                hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, 1);
+                ret++;
+            }
+        }
+    }
+
+    queue32_destroy(&q[0]);
+    queue32_destroy(&q[1]);
+    if (ret){
+        free(sg->idx);
+        sg->idx = 0;
+        sg->is_srt = 0;
+        asg_cleanup(sg);
+    }
+    if (VERBOSE){
+        fprintf(stderr, "[M::%s] added %d links.\n", __func__, ret);
+    }
+    return ret;
+}
 
 int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, 
                                           int base_label, int alt_label, int is_hard_drop,
@@ -6782,16 +6981,23 @@ int hamt_ug_treatBifurcation_hapCovCut(asg_t *sg, ma_ug_t *ug, float covdiff_rat
 int hamt_ug_basic_topoclean(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
     int nb_cut = 0;
     nb_cut += hamt_ug_pop_bubble(sg, ug, base_label, alt_label, is_hard_drop);  // note: include small tip cutting
-    // hamt_asgarc_ugTreatMultiLeaf(sg, ug, 50000);  // note: doesn't protect obvious end-of-path tips
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 0);
     nb_cut += hamt_ug_pop_miscbubble(sg, ug, base_label);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 1);
     nb_cut += hamt_ug_pop_simpleInvertBubble(sg, ug, base_label, alt_label, is_hard_drop);
-    nb_cut += hamt_ug_pop_miscbubble_aggressive(sg, ug, base_label);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 2);
+    // nb_cut += hamt_ug_pop_miscbubble_aggressive(sg, ug, base_label);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 3);
 
     nb_cut += hamt_ug_pop_terminalSmallTip(sg, ug, base_label, alt_label, is_hard_drop);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 4);
     nb_cut += hamt_ug_pop_tinyUnevenCircle(sg, ug, base_label, alt_label, is_hard_drop);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 5);
 
     nb_cut += hamt_ug_pop_simpleShortCut(sg, ug, base_label, alt_label, is_hard_drop);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 6);
     nb_cut += hamt_ug_oneutgCircleCut(sg, ug, base_label);
+    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 7);
     return nb_cut;
 }
 
@@ -6933,7 +7139,7 @@ int hamt_ug_rescueLowCovHapGap_simple(asg_t *sg, ma_ug_t *ug,
                 if ( (hamt_ovlp_read_coverage_nbreads(sources, start>>1, 0, readLen[start>>1]) + 
                       hamt_ovlp_read_coverage_nbreads(reverse_sources, start>>1, 0, readLen[end>>1])) <= 10){
                     // if (verbose) {fprintf(stderr, "cov check passed\n");}
-                    ret = hamt_ug_recover_ovlp_if_existed(sg, ug, start, end, reverse_sources, coverage_cut, 10);
+                    ret = hamt_ug_recover_ovlp_if_existed(sg, ug, start, end, reverse_sources, coverage_cut, 10, 1);
                     if (ret>0) {
                         nb_treated++;
                         // modify sources
@@ -6960,7 +7166,7 @@ int hamt_ug_rescueLowCovHapGap_simple(asg_t *sg, ma_ug_t *ug,
                 if ( (hamt_ovlp_read_coverage_nbreads(sources, start>>1, 0, readLen[start>>1]) + 
                       hamt_ovlp_read_coverage_nbreads(reverse_sources, start>>1, 0, readLen[end>>1])) > 10) {continue;}  // not low coverage
                 // if (verbose) {fprintf(stderr, "cov check passed\n");}
-                ret = hamt_ug_recover_ovlp_if_existed(sg, ug, start, end, reverse_sources, coverage_cut, 10);
+                ret = hamt_ug_recover_ovlp_if_existed(sg, ug, start, end, reverse_sources, coverage_cut, 10, 1);
                 if (ret>0) {
                     nb_treated++;
                     // modify sources
@@ -7976,7 +8182,7 @@ int hamt_ug_rescue_bifurTip(asg_t *sg, ma_ug_t *ug, int base_label,
             }
 
             
-            if (hamt_ug_recover_ovlp_if_existed(sg, ug, startread, endread, sources, coverage_cut, 0)>0){
+            if (hamt_ug_recover_ovlp_if_existed(sg, ug, startread, endread, sources, coverage_cut, 0, 1)>0){
                 hamt_ug_arc_del(sg, ug, vu, wu[0], 1);
                 hamt_ug_arc_del(sg, ug, vu, wu[1], 1);
                 cnt+=1;
@@ -8297,3 +8503,215 @@ int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, m
 //     fprintf(stderr, "[M::%s] dropped %d\n", __func__, ret);
 //     return ret;
 // }
+
+
+
+
+
+
+
+int hamt_ug_3mer_cut_with_coverage(asg_t *sg, ma_ug_t *ug, int threshold_l){
+    // FUNC
+    //     This is meant to be part of the final pruning.
+    //     Collect all trinucleotide profile of long contigs 
+    //      (also assume that unitig coverage has been made available),
+    //      for each bifurcation where all 3 unitigs involved are long, 
+    //      pick one path if trinucleotide profile and coverage hints agree.
+    // TODO
+    //     Waterproof the math; in meta assembly we don't have super long contigs right now though.
+    // RETURN
+    //     Bifurcations treated.
+    int verbose = 1;
+    int ret = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t *map = (uint32_t*)calloc(auxsg->n_seq, sizeof(uint32_t));  // unitig ID to indices used by the linear buffer
+    float **profile;
+    float **profile_rev;
+    uint32_t idx = 0;
+    ma_utg_t *p;
+    char *seq;
+
+    // count long unitigs
+    for (uint32_t vu=0; vu<auxsg->n_seq; vu++){
+        map[vu] = idx;
+        if (ug->u.a[vu].len>=__FLT_MAX__){
+            fprintf(stderr, "[W::%s] contig too long, skipping it\n", __func__);
+        }
+        if (ug->u.a[vu].len>threshold_l){
+            idx++;
+        }
+    }
+    if (verbose){fprintf(stderr, "[debug::%s] total %d long tigs\n", __func__, (int)idx);}
+    profile = (float**)calloc(idx, sizeof(float*));
+    profile_rev = (float**)calloc(idx, sizeof(float*));
+    for (int i=0; i<idx; i++){
+        profile[i] = (float*)calloc(64, sizeof(float));
+        profile_rev[i] = (float*)calloc(64, sizeof(float));
+    }
+
+    // collect 3mer profiles, assuming no N base
+    idx = 0;
+    uint32_t tmp;
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1) continue;
+        if (ug->u.a[vu>>1].len<=threshold_l) continue;
+        p = &ug->u.a[vu>>1];
+        seq = p->s;
+        assert(seq);
+        for (int i=0; i<ug->u.a[vu>>1].len-3+1; i++){
+            tmp = seq_nt4_table[(uint8_t)seq[i]]*16 + seq_nt4_table[(uint8_t)seq[i+1]]*4 + seq_nt4_table[(uint8_t)seq[i+2]];
+            profile[idx][tmp]++;
+            tmp = (3-seq_nt4_table[(uint8_t)seq[i+2]])*16 + (3-seq_nt4_table[(uint8_t)seq[i+1]])*4 + (3-seq_nt4_table[(uint8_t)seq[i]]);
+            profile_rev[idx][tmp]++;
+        }
+        for (int i=0; i<64; i++){
+            profile[idx][i] = profile[idx][i]/(ug->u.a[vu>>1].len-2);
+            profile_rev[idx][i] = profile_rev[idx][i]/(ug->u.a[vu>>1].len-2);
+        }
+        idx++;
+    }
+
+    // check bifurcations
+    uint32_t wu[2];
+    float cos1, cos2;
+    float *h_vu, *h_wu1, *h_wu2;
+    int covdiff1, covdiff2;
+    int which_cos, which_cov;
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (ug->u.a[vu>>1].len<=threshold_l || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)!=2) continue;
+        hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, 0);
+        if (ug->u.a[wu[0]>>1].len<=threshold_l || ug->u.a[wu[1]>>1].len<=threshold_l) continue;  // require both targets to be long
+        // if (hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, 0)==0 || hamt_asgarc_util_countSuc(auxsg, wu[1], 0, 0, 0)==0) continue;  // targets are not tips
+        
+        // get profile hints
+        if (verbose){fprintf(stderr, "[debug::%s] > %.6d\n", __func__, (int)(vu>>1)+1);}
+        if (verbose){fprintf(stderr, "[debug::%s]     get profile\n", __func__);}
+        if(vu&1){h_vu = profile_rev[map[vu>>1]];}
+        else{h_vu = profile[map[vu>>1]];}
+        if (wu[0]&1){h_wu1 = profile_rev[map[wu[0]>>1]];}
+        else{h_wu1 = profile[map[wu[0]>>1]];}
+        if (wu[1]&1){h_wu2 = profile_rev[map[wu[1]>>1]];}
+        else{h_wu2 = profile[map[wu[1]>>1]];}
+        cos1 = 1-cosine_similarity(h_vu, h_wu1, 64);
+        cos2 = 1-cosine_similarity(h_vu, h_wu2, 64);
+        if (cos1>0.01 && cos2>0.01) {  // large cosine distances - somehow both ways look like bad choices
+            if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, 0)==0){  // handle is a tip, cut both
+                hamt_ug_arc_del(sg, ug, vu, wu[0], 1);
+                hamt_ug_arc_del(sg, ug, vu, wu[1], 1);
+                if (VERBOSE || verbose){
+                    fprintf(stderr, "[M::%s] ctg%.6d -> ctg%.6d/ctg%.6d, drop handle\n", __func__,
+                                    (int)(vu>>1)+1, (int)(wu[0]>>1)+1, (int)(wu[1]>>1)+1);
+                }
+            }else{
+                if (verbose){
+                    fprintf(stderr, "[M::%s] ctg%.6d -> ctg%.6d/ctg%.6d, cosine does not support\n", __func__,
+                                    (int)(vu>>1)+1, (int)(wu[0]>>1)+1, (int)(wu[1]>>1)+1);
+                }
+            }
+            continue;
+        }else{
+            if (cos1-cos2>0.005){
+                which_cos = 1;  // prefer wu[1]
+            }else if (cos2-cos1>0.005){
+                which_cos = 0;  // prefer wu[0]
+            }else{
+                if (verbose){fprintf(stderr, "[debug::%s]     profile diff not significant\n", __func__);}
+                continue;  // profile diff not significant
+            }
+        }
+        
+        // get coverage hints
+        if (verbose){fprintf(stderr, "[debug::%s]     get coverage\n", __func__);}
+        covdiff1 = abs(ug->utg_coverage[wu[0]>>1] - ug->utg_coverage[vu>>1]);
+        covdiff2 = abs(ug->utg_coverage[wu[1]>>1] - ug->utg_coverage[vu>>1]);
+        if (abs(covdiff1-covdiff2)<5) {
+            if (verbose){fprintf(stderr, "[debug::%s]     coverage diff not significant\n", __func__);}
+            continue;
+        }
+        if (covdiff1<covdiff2) {which_cov = 0;}
+        else {which_cov = 1;}
+
+        // do they agree?
+        if (which_cos==which_cov){
+            if (VERBOSE || verbose){
+                fprintf(stderr, "[M::%s] ctg%.6d -> ctg%.6d, discard path to ctg%.6d\n", __func__,
+                                 (int)(vu>>1)+1, (int)(wu[which_cos]>>1)+1, (int)(wu[!which_cos]>>1)+1);
+            }
+            hamt_ug_arc_del(sg, ug, vu, wu[!which_cos], 1);
+            ret++;
+        }else{
+            if (verbose){fprintf(stderr, "[debug::%s]     decision did not agree, pass\n", __func__);}
+        }
+    }
+
+    free(map);
+    for (int i=0; i<idx; i++){free(profile[i]); free(profile_rev[i]);}
+    free(profile);
+    free(profile_rev);
+    // if (ret){
+    //     asg_cleanup(sg);
+    //     asg_cleanup(auxsg);
+    // }
+    if (verbose){fprintf(stderr, "[debug::%s] total %d\n", __func__, ret);}
+    return ret;
+}
+
+
+int hamt_ug_finalprune(asg_t *sg, ma_ug_t *ug){
+    // FUNC
+    //     A set of aggressive pruning after p_ctg. 
+    //     Will drop very long tips (>100kb) etc. Doing this because
+    //      currently binning does not use or cannot efficiently use
+    //      assembly graph's topology information, and in additional,
+    //      might want to recruit contigs that are not *that* close
+    //      to each other on the assembly graph.
+    //     Therefore it might be of
+    //      interest to just let hifiasm-meta get rid of dangling stuff
+    //      and report longer contigs.
+    //     Better binning or alike would be more preferable in the future.
+    // TODO
+    //     To duplicate or not to duplicate.
+    // RETURN
+    //     Number of treatments.
+    int verbose = 1;
+    int ret = 0;
+
+    asg_t *auxsg = ug->g;
+
+    uint32_t nv, vu, wu;
+    asg_arc_t *av;
+
+    // "binning" for long tigs 
+    ret += hamt_ug_3mer_cut_with_coverage(sg, ug, 200000);
+    fprintf(stderr, "[M::%s] 3mer cut finished, total treatments so far: %d\n", __func__, ret);
+
+    // topo-dependent pruning of tips, regardless of the tig's length
+    // TODO: should consider target lengths
+    for (vu=0; vu<auxsg->n_seq*2; vu++){
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, 0)!=0 || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)!=1) continue;
+        if (hamt_asgarc_util_get_the_one_target(auxsg, vu, &wu, 0, 0, 0)<0){
+            fprintf(stderr, "[E::%s] can't get target for ctg%.6d when should\n", __func__, (int)(vu>>1)+1);
+            continue;
+        }
+
+        if (verbose){fprintf(stderr, "[debug::%s] > %.6d\n", __func__, (int)(vu>>1)+1);}
+        if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, 0)==0 || hamt_asgarc_util_countNoneTipSuc(auxsg, wu^1, 0)==0) continue;  // target must has other links in both direction
+        if (verbose){fprintf(stderr, "[debug::%s]     checkpoint\n", __func__);}
+
+        hamt_ug_arc_del(sg, ug, vu, wu, 1);
+        if (VERBOSE){
+            fprintf(stderr, "[M::%s] long tig drop: ctg%.6d\n", __func__, (int)(vu>>1)+1);
+        }
+        ret++;
+    }
+
+    // topo-dependent pruning of small subgraphs 
+
+    // clean
+    if (ret){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    fprintf(stderr, "[M::%s] all finished, total treatments: %d\n", __func__, ret);
+    return ret;
+}

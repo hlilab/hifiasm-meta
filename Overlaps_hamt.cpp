@@ -7512,19 +7512,9 @@ int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink,
     asg_arc_t *av;
     asg_arc_t *au;
     asg_t *auxsg = ug->g;
+    int ret = 0;
 
-    // (for pushing unitigs to alt hap)
-    stacku32_t alt_buf;
-    stacku32_init(&alt_buf);
-
-    uint8_t *color = (uint8_t*)calloc(auxsg->n_seq, 1);
-
-    // a buffer for greedily choosing the path with most coverage
-    stacku64_t for_sorting;
-    stacku64_init(&for_sorting);
-    uint64_t packed_value;
-
-    // special case: self circle (shortcut or 1 unitig circle)
+    // special case, early termination: self circle (shortcut or 1 unitig circle)
     nv = asg_arc_n(auxsg, source);
     av = asg_arc_a(auxsg, source);
     for (int i=0; i<nv; i++){
@@ -7535,10 +7525,17 @@ int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink,
         }
     }
 
+    uint8_t *color = (uint8_t*)calloc(auxsg->n_seq, 1);
+
+    // a buffer for greedily choosing the path with most coverage
+    stacku64_t for_sorting;
+    stacku64_init(&for_sorting);
+    uint64_t packed_value;
+
     stacku32_t s, visited;
     stacku32_init(&s);
     stacku32_init(&visited);  // directed IDs; linear search
-    int is_exhausted, is_loop, ret=0, san=0;
+    int is_exhausted, is_loop, san=0;
     int is_hinted_circular = ((sink>>1) == (source>>1));
     int is_reached_sink = 0;
 
@@ -7697,18 +7694,13 @@ int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink,
             vu = wu;
         }
 
-        // push tigs to alt
-        while (stacku32_pop(&alt_buf, &vu)){
-            hamt_ug_utg_softdel(sg, ug, vu, alt_label);
-        }
-
-
         ret = 1;
     }
 
 finish:
     stacku32_destroy(&s);
     stacku32_destroy(&visited);
+    stacku64_destroy(&for_sorting);
     free(color);
     return ret;
 }

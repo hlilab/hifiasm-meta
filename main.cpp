@@ -56,6 +56,7 @@ int main(int argc, char *argv[])
     fprintf(fp, "# Hifiasm_meta version: %s\n", HAMT_VERSION);
 	fprintf(fp, "# Real time: %.3f sec; CPU: %.3f sec; Peak RSS: %.3f GB\n", yak_realtime(), yak_cputime(), yak_peakrss_in_gb());
 	fclose(fp);
+	free(logname);
 	
 	
 	destory_opt(&asm_opt);

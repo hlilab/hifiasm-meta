@@ -765,7 +765,8 @@ static void *worker_count(void *data, int step, void *in) // callback for kt_pip
 		}
 		p->accumulated_time_step2 += Get_T() - t_profiling;
 		///just clean seq
-		free(s->seq); free(s->len);
+		free(s->seq);  // s->seq[index] are freed in worker_count_step2sub's callback
+		free(s->len);
 		s->seq = 0, s->len = 0;
 		return s;
 	} else if (step == 2) { // step 3: insert k-mers to hash table
@@ -1792,12 +1793,9 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 	}
 
 	// histogram
-	fprintf(stderr, "next: ha_ct_hist\n");fflush(stderr);
 	ha_ct_hist(h, cnt, asm_opt->thread_num);
-	fprintf(stderr, "finished: ha_ct_hist\n");fflush(stderr);
 	peak_hom = ha_analyze_count(YAK_N_COUNTS, asm_opt->min_hist_kmer_cnt, cnt, &peak_het);
 	if (peak_hom > 0) fprintf(stderr, "[M::%s] peak_hom: %d; peak_het: %d\n", __func__, peak_hom, peak_het);
-	fprintf(stderr, "finished: ha_analyze_count\n");fflush(stderr);
 	
 	if (!asm_opt->is_disable_read_selection){
 		cutoff = (int)(coverage *2 * asm_opt->high_factor);
@@ -2358,7 +2356,15 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 			free(s->RIDs);
 			free(s);
 		}
-		else {return s;}
+		else {
+			// lnbuf will be reused as the handle for threaded buffers, 
+			// free theh alloc here.
+			for (int i=0; i<1<<p->hd->pre; i++){
+				free(s->lnbuf[i].a);
+			}
+			free(s->lnbuf);
+			return s;
+		}
 	} else if (step==1){  // process reads
 		// what does this block do:
 		//     - retain reads based on runtime kmer frequency
@@ -2429,12 +2435,6 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 			free(s->threaded_lnbuf[i_cpu]);
 		}
 		free(s->threaded_lnbuf);
-		#if 0
-		for (int i=0; i<1<<p->hd->pre; i++){
-			free(s->lnbuf[i].a);
-			}				
-		free(s->lnbuf);
-		#endif
 		free(s->RIDs);
 		free(s);
 	}

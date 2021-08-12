@@ -3153,7 +3153,6 @@ void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int ma
         n_del = hamt_sg_pop_simpleInvertBubble(g);
         if (VERBOSE>=1){
             fprintf(stderr, "[M::%s] removed %d invert bubble on string graph\n", __func__, n_del);
-            fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
         }
     }
     free(a.a);
@@ -3558,7 +3557,6 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] dropped %d links.\n", __func__, nb_cut);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 }
 
@@ -3686,7 +3684,6 @@ void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug, int base_l
 
     if (VERBOSE){
         fprintf(stderr, "[M::%s] cut %d.\n", __func__, nb_cut);
-        fprintf(stderr, "[T::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
     }
     asg_cleanup(sg);
     asg_cleanup(auxsg);
@@ -3890,7 +3887,6 @@ void hamt_asgarc_ugTreatMultiLeaf(asg_t *sg, ma_ug_t *ug, int threshold_l,// thr
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] dropped %d links (%d nodes treated).\n", __func__, nb_del, nb_del_node);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 }
 
@@ -4049,7 +4045,6 @@ void hamt_asgarc_ugTreatBifurcation(asg_t *sg, ma_ug_t *ug, int threshold_nread,
     free(color_sg);
     if (VERBOSE){
         fprintf(stderr, "[M::%s] dropped %d arcs at bifurcation point, skipped %d; rescued %d arcs.\n", __func__, nb_cut, nb_skip, nb_rescue);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 }
 
@@ -4118,7 +4113,6 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] cut %d unitig tigs.\n", __func__, nb_cut);
-        fprintf(stderr, "[T::%s] took %0.2fs\n\n", __func__, Get_T()-startTime);
     }
     return nb_cut;
 }
@@ -4297,7 +4291,6 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
             }
         }
         fprintf(stderr, "[M::%s] %d out of %d arcs are bridge edges.\n", __func__, n_bridges, (int)auxsg->n_arc);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
 
     // check arcs
@@ -5294,7 +5287,6 @@ int hamt_ug_pop_bubble(asg_t *sg,ma_ug_t *ug, int base_label, int alt_label, int
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] popped %d simple bubbles on unitig graph.\n", __func__, nb_cut);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
     return nb_cut+nb_tip_cut;
 }
@@ -5402,7 +5394,6 @@ int hamt_ug_pop_miscbubble(asg_t *sg, ma_ug_t *ug, int base_label){
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] popped %d spots\n", __func__, nb_cut);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
     return nb_cut;
 }
@@ -5478,7 +5469,6 @@ int hamt_ug_pop_miscbubble_aggressive(asg_t *sg, ma_ug_t *ug, int base_label){
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] popped %d spots\n", __func__, nb_cut);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
     return nb_cut;
 }
@@ -5527,7 +5517,6 @@ int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int a
     }
     if (VERBOSE){
         fprintf(stderr, "[M::%s] popped %d locations\n", __func__, nb_cut);
-        fprintf(stderr, "[T::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
     }
     return nb_cut;
 }
@@ -6317,7 +6306,6 @@ void hamt_ug_prectgTopoClean(asg_t *sg,
             auxsg = ug->g;
             if (VERBOSE){
                 fprintf(stderr, "[M::%s] popped total %d locations (round %d).\n", __func__, nb_pop, round);
-                fprintf(stderr, "[T::%s] took %0.2fs.\n\n", __func__, Get_T()-startTime);
 
             }
         }

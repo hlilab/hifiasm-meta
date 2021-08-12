@@ -30109,7 +30109,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 nb_complex_bubble_cut += hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 if (nb_complex_bubble_cut==0){
-                    if (VERBOSE) {fprintf(stderr, "debug, early termination of complex bubble pop (round %d)\n", round_resolve);}
+                    fprintf(stderr, "[M::%s] leave complex bubble popping (round %d)\n", __func__, round_resolve);
                     break;
                 }
             }
@@ -30246,7 +30246,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	*coverage_cut_ptr = coverage_cut;
 	*sg_ptr = sg;
 
-    fprintf(stderr, "Inconsistency threshold for low-quality regions in BED files: %u%%\n", asm_opt.bed_inconsist_rate);
+    if (!asm_opt.is_use_exp_graph_cleaning) {fprintf(stderr, "Inconsistency threshold for low-quality regions in BED files: %u%%\n", asm_opt.bed_inconsist_rate);}
 }
 
 

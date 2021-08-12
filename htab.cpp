@@ -872,16 +872,16 @@ ha_ct_t *ha_count(const hifiasm_opt_t *asm_opt, int flag, ha_pt_t *p0, const voi
 		if (flag & HAF_RS_WRITE_LEN){
 		    if (!(flag & HAMTF_FORCE_DONT_INIT)){
 				init_All_reads(rs);
-				fprintf(stderr, "[debug::%s] call: init_All_reads\n", __func__);fflush(stderr);
+				// fprintf(stderr, "[debug::%s] call: init_All_reads\n", __func__);fflush(stderr);
 			}
 			else{
 				reset_All_reads(rs);
-				fprintf(stderr, "[debug::%s] call: reset_All_reads\n", __func__);fflush(stderr);
+				// fprintf(stderr, "[debug::%s] call: reset_All_reads\n", __func__);fflush(stderr);
 			}
 		}
 		else if (flag & HAF_RS_WRITE_SEQ){
 			malloc_All_reads(rs);
-			fprintf(stderr, "[debug::%s] call: malloc_All_reads\n", __func__);fflush(stderr);
+			// fprintf(stderr, "[debug::%s] call: malloc_All_reads\n", __func__);fflush(stderr);
 		}
 	}else{
 		fprintf(stderr, "[debug::%s] what?\n", __func__);fflush(stderr);
@@ -1011,7 +1011,6 @@ void *ha_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, int *hom_cov, int i
 
 ha_pt_t *ha_pt_gen(const hifiasm_opt_t *asm_opt, const void *flt_tab, int read_from_store, int is_hp_mode, All_reads *rs, int *hom_cov, int *het_cov)
 {
-	fprintf(stderr, "called ha_pt_gen, RS status: has nothing %d, has lengths %d, all in mem %d\n", R_INF.is_has_nothing, R_INF.is_has_lengths, R_INF.is_all_in_mem);
 	int64_t cnt[YAK_N_COUNTS], tot_cnt;
 	int peak_hom, peak_het, i, extra_flag1, extra_flag2;
 	ha_ct_t *ct;
@@ -1479,7 +1478,7 @@ void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, 
 	if (round==0){  // keep globally infrequent reads
 		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
 			if (!flag_round0_said_warning){
-				fprintf(stderr, "[W::%s] read limit reached while recruiting lowq reads. continue anyway\n", __func__);
+				fprintf(stderr, "[M::%s] read limit reached while recruiting lowq reads. continue anyway\n", __func__);
 				flag_round0_said_warning = 1;
 			}
 		}
@@ -2526,7 +2525,7 @@ void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs
 			plmt.runtime_median_threshold +=50;  // deprecated
 			rounds_of_dropping++;
 		
-			fprintf(stderr, "[M::%s] finished selection, retained %d reads (out of %d).\n", __func__, plmt.nb_reads_kept, plmt.nb_reads_limit);	
+			fprintf(stderr, "[M::%s] finished selection, retained %d reads (goal was %d; total read count is %d).\n", __func__, plmt.nb_reads_kept, plmt.nb_reads_limit, (int)R_INF.total_reads);
 			prv_nb_reads = plmt.nb_reads_kept;
 		
 		}

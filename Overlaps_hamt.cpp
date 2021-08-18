@@ -1261,6 +1261,44 @@ int hamt_check_if_share_target(asg_t *g, uint32_t v, uint32_t u, int ignore_dire
     }   
     return 0;
 }
+int hamt_check_if_jump_reachable_simple(asg_t *g, uint32_t v, uint32_t u, uint32_t w, int ban_w,
+                                   uint8_t ignore_direction){
+    // FUNC
+    //     Check if node v can reach node u easily, which is defined as 
+    //       the pass only containing one additional node that is NOT w.
+    //     Note that dirrect v->u does not count (or we don't need this function).
+    // PARAMETER
+    //     Note that v and u should always contain the direction bit.
+    // TODO?
+    //     base_label?
+    // RETURN
+    //     Number of possible passes (0 if none);
+    int ret = 0;
+    int verbose = 0;
+    uint32_t nv = asg_arc_n(g, v);
+    asg_arc_t *av = asg_arc_a(g, v);
+    uint32_t nw;
+    asg_arc_t *aw;
+    uint8_t ig = !!ignore_direction;
+
+    if (verbose) {fprintf(stderr, "[debug::%s] > check %.6d\n", __func__, (int)(v>>1)+1);}
+    for (uint32_t i=0; i<nv; i++){
+        if (av[i].del) continue;
+        if (ban_w && av[i].v==w) continue;
+        if (verbose) {fprintf(stderr, "[debug::%s]  (inter: %.6d)\n", __func__, (int)((av[i].v)>>1)+1);}
+        nw = asg_arc_n(g, av[i].v);
+        aw = asg_arc_a(g, av[i].v);
+        for (uint32_t j=0; j<nw; j++){
+            if (aw[j].del) continue;
+            if (verbose) {fprintf(stderr, "[debug::%s]  (target: %.6d)\n", __func__, (int)((aw[j].v)>>1)+1);}
+            if ((aw[j].v>>ig)==(u>>ig)){
+                if (verbose){fprintf(stderr, "[debug::%s]   via %.6d\n",__func__, (int)(aw[j].v>>1)+1);}
+                ret++;
+            }
+        }
+    }
+    return ret;
+}
 
 int hamt_ug_arc_del_selfcircle(asg_t *sg, ma_ug_t *ug, uint32_t vu, int base_label){
     // NOTE: caller is responsible for more topo context sanchecks.
@@ -5473,6 +5511,169 @@ int hamt_ug_pop_miscbubble_aggressive(asg_t *sg, ma_ug_t *ug, int base_label){
     return nb_cut;
 }
 
+int hamt_ug_drop_transitive_links(asg_t *sg, ma_ug_t *ug, int base_label){
+    // FUNC
+    //     Given a->b->c and a->c (and the reverse direction) and a!=c, 
+    //      we consider drop a->c (and the rev).
+    //     (in the code a,b,c is vu,wu,uu)
+    // TODO
+    //     Only checking the most obvious cases right now (you can only have one b).
+    //     The ideal way is to DFS with limits of how many nodes/base pairs for the shortest path.
+    // RETURN
+    //     Number of arcs dropped.
+    int ret = 0;
+    int verbose = 0;
+    uint32_t wu, uu, nv, nu;
+    int yes_del;
+    asg_arc_t *av, *au;
+    asg_t *auxsg = ug->g;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (auxsg->seq_vis[vu>>1]!=base_label) continue;
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)<=1) continue;
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            wu = av[i].v;
+            if (hamt_asgarc_util_countPre(auxsg, wu, 0, 0, base_label)<=1) continue;
+
+            yes_del = 0;  // reset flag
+            for (int j=0; j<nv; j++){
+                if (j==i) continue;  // it's wu it self
+                if (av[j].del) continue;
+                uu = av[j].v;
+                if ((uu>>1)==(vu>>1)) continue;
+                nu = asg_arc_n(auxsg, uu);
+                au = asg_arc_a(auxsg, uu);
+                for (int z=0; z<nu;z++){
+                    if (au[z].del) continue;
+                    if (au[z].v==wu){
+                        if (verbose){
+                            fprintf(stderr, "[debug::%s] drop arc between utg%.6d and utg%.6d\n",
+                                            __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
+                        }
+                        yes_del = 1;
+                        ret++;
+                        hamt_ug_arc_del(sg, ug, vu, wu, 1);
+                        break;
+                    }
+                }
+                if (yes_del) break;  // vu->wu has been removed, no need to check other paths.
+            }
+        }
+    }
+    if (ret){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    return ret;
+}
+int hamt_ug_drop_transitive_nodes(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_label){
+    // FUNC
+    //     Remove a node if all its predecessors could still easily reach all its
+    //      targets after removal.
+    // PARAMETER
+    //     Do not remove nodes larger than `size_limit_bp`, since
+    //      we're only checking the immediate surroundings and therefore
+    //      not aware of loops.
+    // TODO
+    //     We are only checking the most obvious case right now, 
+    //       i.e. the predecessors shall reach the targets via passes
+    //       only containing one additional node.
+    // RETURN
+    //     Number of nodes dropped.
+    int ret = 0;
+    int verbose = 0;
+    uint32_t vu_pre, vu_tar;
+    int yes_del;
+
+    uint32_t n_pre, n_tar;
+    asg_arc_t *a_pre, *a_tar;
+    asg_t *auxsg = ug->g;
+
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (ug->u.a[vu>>1].len>size_limit_bp) continue;
+        if (auxsg->seq_vis[vu>>1]!=base_label) continue;
+        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)==0 ||
+            hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)==0) continue;  // tip or free floating unitig
+        n_pre = asg_arc_n(auxsg, vu^1);
+        a_pre = asg_arc_a(auxsg, vu^1);
+        n_tar = asg_arc_n(auxsg, vu);
+        a_tar = asg_arc_a(auxsg, vu);
+
+        if (verbose){
+            fprintf(stderr, "[debug::%s] at utg%.6d. Predecessors:\n", __func__, (int)(vu>>1)+1);
+            for (uint32_t i_pre=0; i_pre<n_pre; i_pre++){
+                if (a_pre[i_pre].del) continue;
+                fprintf(stderr, "[debug::%s]     utg%.6d\n", __func__, (int)(a_pre[i_pre].v>>1)+1);
+            }
+            fprintf(stderr, "[debug::%s] (Successors:)\n", __func__);
+            for (uint32_t i_tar=0; i_tar<n_tar; i_tar++){
+                if (a_tar[i_tar].del) continue;
+                fprintf(stderr, "[debug::%s]     utg%.6d\n", __func__, (int)(a_tar[i_tar].v>>1)+1);
+            }
+        }
+
+        yes_del = 1;  // reset
+        for (uint32_t i_pre=0; i_pre<n_pre; i_pre++){
+            if (a_pre[i_pre].del) continue;
+            vu_pre = a_pre[i_pre].v^1;
+            for (uint32_t i_tar=0; i_tar<n_tar; i_tar++){
+                if (a_tar[i_tar].del) continue;
+                vu_tar = a_tar[i_tar].v;
+                if (hamt_check_if_jump_reachable_simple(auxsg, vu_pre, vu_tar, vu, 1, 0)==0){
+                    yes_del = 0;
+                    break;
+                }
+            }
+            if (!yes_del) break;  // at least one pair isn't reacheable 
+        }
+        if (yes_del){
+            if (verbose){
+                fprintf(stderr, "[debug::%s] drop utg%.6d\n", __func__, (int)(vu>>1)+1);
+            }
+            for (uint32_t i_pre=0; i_pre<n_pre; i_pre++){
+                hamt_ug_arc_del(sg, ug, a_pre[i_pre].v^1, vu, 1);
+            }
+            for (uint32_t i_tar=0; i_tar<n_tar; i_tar++){
+                hamt_ug_arc_del(sg, ug, vu, a_tar[i_tar].v, 1);
+            }
+            auxsg->seq_vis[vu>>1] = !base_label;
+            ret++;
+        }
+
+    }
+    if (ret){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+    return ret;
+}
+int hamt_ug_drop_transitive(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_label){
+    // A better hamt_ug_pop_miscbubble_aggressive.
+    // RETURN
+    //     Total number of treatments. 
+
+    // Drop links first. 
+    // The other way around is ok too, but note that the result will be slightly differenct.
+    int ret = 0;
+    for (int i=0; i<3; i++){
+        int ret1=0, ret2=0;
+        ret1 = hamt_ug_drop_transitive_links(sg, ug, base_label);
+
+        // Drop nodes. 
+        ret2 = hamt_ug_drop_transitive_nodes(sg, ug, size_limit_bp, base_label);
+
+        fprintf(stderr, "[M::%s] dropped %d links and %d nodes.\n", __func__, ret1, ret2);
+        ret += ret1+ret2;
+        
+        if (ret1+ret2==2)break;
+    }
+
+    return ret;
+}
+
 
 int hamt_ug_pop_simpleInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
     int verbose = 0;
@@ -6571,9 +6772,15 @@ void hamt_ug_rescueLongUtg(asg_t *sg,
             nb_treated++;
             color[vu>>1] = 1;
             if (verbose){
-                fprintf(stderr, "[debug::%s] added circle link for utg%.6d \n", __func__, (int)(vu>>1)+1);
+                fprintf(stderr, "[debug::%s] added circle link for utg%.6d (homo)\n", __func__, (int)(vu>>1)+1);
             }
-        }        
+        }else if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, reverse_sources, coverage_cut, 20, 1)>0){
+            nb_treated++;
+            color[vu>>1] = 1;
+            if (verbose){
+                fprintf(stderr, "[debug::%s] added circle link for utg%.6d (het)\n", __func__, (int)(vu>>1)+1);
+            }
+        }
     }
 
     // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 221);
@@ -6606,7 +6813,7 @@ int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug,
     //      To try to circularize isolated long linear contigs, see hamt_ug_rescueLongUtg.
     // RETURN
     //      Number of treatments
-    int verbose = 1;
+    int verbose = 0;
     int ret = 0;
     asg_t *auxsg = ug->g;
     uint32_t start_v, end_v;  // start/end read of unitig
@@ -6624,6 +6831,8 @@ int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug,
     uint8_t which_q = 0;
     int passed;
     int sancheck_nbcut;
+    
+    int existed_homo = 0, existed_het = 0;
 
     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){  
         // candiate unitig should be long and not isolated
@@ -6635,7 +6844,9 @@ int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug,
 
         passed = 0;
         // check for overlap between start/end of the contig, and the shortest path connecting them
-        if (hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, 0)>0){  // only check, don't push anything
+        existed_homo = hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, 0);
+        existed_het = hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, reverse_sources, coverage_cut, search_span, 0);
+        if (existed_homo>0 || existed_het>0){  // only check, don't push anything
             if (verbose){ fprintf(stderr, "[debug::%s] tig %.6d start %.*s end %.*s\n", __func__,
                                     (int)(vu>>1)+1, 
                                     (int)Get_NAME_LENGTH(R_INF, start_v>>1), 
@@ -6716,7 +6927,11 @@ int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug,
                     }
                 }
                 if (verbose) {fprintf(stderr, "[deubg::%s]   dropped %d\n", __func__, sancheck_nbcut);}
-                hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, 1);
+                if (existed_homo>0){
+                    hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, 1);
+                }else{
+                    hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, reverse_sources, coverage_cut, search_span, 1);
+                }
                 ret++;
             }
         }
@@ -6969,23 +7184,16 @@ int hamt_ug_treatBifurcation_hapCovCut(asg_t *sg, ma_ug_t *ug, float covdiff_rat
 int hamt_ug_basic_topoclean(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
     int nb_cut = 0;
     nb_cut += hamt_ug_pop_bubble(sg, ug, base_label, alt_label, is_hard_drop);  // note: include small tip cutting
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 0);
     nb_cut += hamt_ug_pop_miscbubble(sg, ug, base_label);
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 1);
     nb_cut += hamt_ug_pop_simpleInvertBubble(sg, ug, base_label, alt_label, is_hard_drop);
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 2);
     // nb_cut += hamt_ug_pop_miscbubble_aggressive(sg, ug, base_label);
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 3);
+    // nb_cut += hamt_ug_drop_transitive(sg, ug, 100000, base_label);
 
     nb_cut += hamt_ug_pop_terminalSmallTip(sg, ug, base_label, alt_label, is_hard_drop);
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 4);
     nb_cut += hamt_ug_pop_tinyUnevenCircle(sg, ug, base_label, alt_label, is_hard_drop);
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 5);
 
     nb_cut += hamt_ug_pop_simpleShortCut(sg, ug, base_label, alt_label, is_hard_drop);
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 6);
     nb_cut += hamt_ug_oneutgCircleCut(sg, ug, base_label);
-    // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, "hey", 7);
     return nb_cut;
 }
 
@@ -7772,11 +7980,12 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                     if (verbose) fprintf(stderr, "[deubg::%s] skip becuase sink==source\n", __func__);
                     continue;
                 } 
-                if (hamt_ug_check_localSourceSinkPair(ug, source, sink, &max_length, &max_coverage, base_label, 200)){
+                if (hamt_ug_check_localSourceSinkPair(ug, source, sink, &max_length, &max_coverage, base_label, 1000)){
                     if ( ((ug->u.a[source>>1].len<50000) && (ug->u.a[sink>>1].len<50000)) ||   // note/TODO/bug: this is an arbitrary waterproof, trying to prevent weird cases (since we searched both directions during traversal to tolerate inversions/loops)
-                         ( (max_length>500000) /*&& !(ug->u.a[sink>>1].len>max_length*2 || ug->u.a[source>>1].len>max_length*2) */) ||
+                         ( (max_length>500000) /*&& !(ug->u.a[sink>>1].len>max_length*2 || ug->u.a[source>>1].len>max_length*2) */) /*||
                          (max_coverage > (ug->utg_coverage[source>>1]*2)) ||   // note/TODO/bug: also arbitrary, better safe than sorry for repeat elements
-                         (max_coverage > (ug->utg_coverage[sink>>1]  *2)) ){
+                         (max_coverage > (ug->utg_coverage[sink>>1]  *2)) */
+                         ){
                         if (verbose){
                             fprintf(stderr, "[debug::%s] failed length or cov. Max l %d, max cov %d (handles' are %d and %d)\n", 
                                                 __func__, 
@@ -8501,7 +8710,7 @@ int hamt_ug_3mer_cut_with_coverage(asg_t *sg, ma_ug_t *ug, int threshold_l){
     //     Waterproof the math; in meta assembly we don't have super long contigs right now though.
     // RETURN
     //     Bifurcations treated.
-    int verbose = 1;
+    int verbose = 0;
     int ret = 0;
     asg_t *auxsg = ug->g;
     uint32_t *map = (uint32_t*)calloc(auxsg->n_seq, sizeof(uint32_t));  // unitig ID to indices used by the linear buffer
@@ -8653,7 +8862,7 @@ int hamt_ug_finalprune(asg_t *sg, ma_ug_t *ug){
     //     To duplicate or not to duplicate.
     // RETURN
     //     Number of treatments.
-    int verbose = 1;
+    int verbose = 0;
     int ret = 0;
 
     asg_t *auxsg = ug->g;

@@ -46,7 +46,7 @@ static ko_longopt_t long_options[] = {
     { "dump-all-ovlp", ko_no_argument, 417},
 
     { "gc-sb-max", ko_no_argument, 418},  // graph cleaning, max unitig length in superbubbles
-    { "coasm", ko_no_argument, 419},  // graph cleaning, max unitig length in superbubbles
+    { "force-rs", ko_no_argument, 419},  // aka force-preovec, better named
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -166,7 +166,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_dump_ovec_error_count = 0;
     asm_opt->lowq_thre_10 = 50;  // lower 10% quantile runtime kmer frequency
     asm_opt->lowq_thre_5 = 50;  // lower 5% quantile runtime kmer frequency
-    asm_opt->lowq_thre_3 = -1;  // lower 5% quantile runtime kmer frequency
+    asm_opt->lowq_thre_3 = 10;  // lower 5% quantile runtime kmer frequency
     asm_opt->write_debug_gfa = 0;  // disable
     asm_opt->is_dump_relevant_reads = 0;
     asm_opt->fp_relevant_reads = NULL;
@@ -495,7 +495,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 402) {asm_opt->is_dump_ovec_error_count = 1; fprintf(stderr, "DEBUG DUMP: get ovec error counts\n");}
         else if (c == 406) {asm_opt->is_dump_read_mask = 1; fprintf(stderr, "DEBUG DUMP: will write read selection mask to file.\n");}
         else if (c == 407) {asm_opt->is_dump_read_names = 1; fprintf(stderr, "DEBUG DUMP: read names\n");}
-        else if (c == 408) {
+        else if (c == 408 || c==419) {
             fprintf(stderr, "[M::%s] Forced pre-ovec read selection. Ignoring count of ovlp.\n", __func__);
             asm_opt->is_ignore_ovlp_cnt = 1;
             asm_opt->is_disable_read_selection = 0;

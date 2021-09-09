@@ -11941,8 +11941,10 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
         }
 
 
+        // fprintf(fp, "S\t%s\t%s\tLN:i:%d\tdp:f:%u", name, (p->s&&print_seq)? p->s : "*", p->len,  // note: vanilla hifiasm uses rd:i instead of dp:f. The dp:f was modified for bandage.
+                            // get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
         fprintf(fp, "S\t%s\t%s\tLN:i:%d\tdp:f:%u", name, (p->s&&print_seq)? p->s : "*", p->len,  // note: vanilla hifiasm uses rd:i instead of dp:f. The dp:f was modified for bandage.
-                            get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
+                            ug->utg_coverage[i]);
         if (!asm_opt.is_use_exp_graph_cleaning){
             fprintf(fp, "\n");
         }else{
@@ -13968,6 +13970,116 @@ void hamt_output_unitig_graph_advance(asg_t *sg, ma_sub_t* coverage_cut, char* o
     kv_destroy(new_rtg_edges.a);
 }
 
+void hamt_ug_print_debug(const ma_ug_t *ug, const ma_ug_t *ug0, All_reads *RNF, asg_t* read_g, const ma_sub_t *coverage_cut, 
+ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FILE *fp)
+{
+    // Monkey patch, use ug->utg_coverage[i] rather than calculating the coverage on the fly.
+    //  This was used to easily enable one integer labeling to visualize in bandage, no other usage.
+    uint8_t* primary_flag = (uint8_t*)calloc(read_g->n_seq, sizeof(uint8_t));
+	uint32_t i, j, l;
+	char name[32];
+
+	for (i = 0; i < ug->u.n; ++i) { // the Segment lines in GFA
+		ma_utg_t *p = &ug->u.a[i];
+        if(p->m == 0) continue;
+        
+        if (!asm_opt.is_use_exp_graph_cleaning){
+            sprintf(name, "%s%.6d%c", prefix, i + 1, "lc"[p->circ]);
+        }else{
+            sprintf(name, "s%d.%s%.6d%c", (int)p->subg_label, prefix, i + 1, "lc"[p->circ]);
+        }
+
+
+        // fprintf(fp, "S\t%s\t%s\tLN:i:%d\tdp:f:%u", name, (p->s&&print_seq)? p->s : "*", p->len,  // note: vanilla hifiasm uses rd:i instead of dp:f. The dp:f was modified for bandage.
+                            // get_ug_coverage(p, read_g, coverage_cut, sources, ruIndex, primary_flag));
+        fprintf(fp, "S\t%s\t%s\tLN:i:%d\tdp:f:%u", name, (p->s&&print_seq)? p->s : "*", p->len,  // note: vanilla hifiasm uses rd:i instead of dp:f. The dp:f was modified for bandage.
+                            ug0->utg_coverage[i]);
+        if (!asm_opt.is_use_exp_graph_cleaning){
+            fprintf(fp, "\n");
+        }else{
+            // hamt, append trailing subgraph IDs
+
+            // sancheck: all reads of a unitig should have the same subgraph label
+            uint32_t readID = ug->u.a[i].a[0]>>33;
+            ma_utg_subglabels_t *subgp = &R_INF.subg_label_trail->a[readID];
+            int sancheck_label=-1, sancheck_label_length=subgp->n;
+            for (int i_read=0; i_read<ug->u.a[i].n; i_read++){
+                assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].n==sancheck_label_length);  // same buffer length
+                for (int i_label=0; i_label<sancheck_label_length; i_label++){
+                    assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].a[i_label] == subgp->a[i_label]);  // same array of labels
+                }
+            }
+            
+            // write
+            fprintf(fp, "\tts:B:I");  // GFA1: array of uint32_t integers.
+            for (int i_sub=0; i_sub<subgp->n; i_sub++){
+                fprintf(fp, ",%d", (int)subgp->a[i_sub]);
+            }
+            fprintf(fp, "\n");
+        }
+
+        
+		for (j = l = 0; j < p->n; l += (uint32_t)p->a[j++]) {
+			uint32_t x = p->a[j]>>33;
+			if(x<RNF->total_reads)
+            {
+                fprintf(fp, "A\t%s\t%d\t%c\t%.*s\t%d\t%d\tid:i:%d\tHG:A:%c\n", name, l, "+-"[p->a[j]>>32&1],
+                (int)Get_NAME_LENGTH((*RNF), x), Get_NAME((*RNF), x), 
+                coverage_cut[x].s, coverage_cut[x].e, x, "apmaaa"[RNF->trio_flag[x]]);
+            }
+            else
+            {
+                fprintf(fp, "A\t%s\t%d\t%c\t%s\t%d\t%d\tid:i:%d\tHG:A:%c\n", name, l, "+-"[p->a[j]>>32&1],
+					"FAKE", coverage_cut[x].s, coverage_cut[x].e, x, '*');
+            }
+            
+            
+        }
+	}
+	for (i = 0; i < ug->g->n_arc; ++i) { // the Link lines in GFA
+		uint32_t u = ug->g->arc[i].ul>>32, v = ug->g->arc[i].v;
+        if (!asm_opt.is_use_exp_graph_cleaning){
+            fprintf(fp, "L\t%s%.6d%c\t%c\t%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
+            prefix, (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
+            prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
+        }else{  // hamt
+            fprintf(fp, "L\ts%d.%s%.6d%c\t%c\ts%d.%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
+            (int)ug->u.a[u>>1].subg_label, prefix, (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
+            (int)ug->u.a[v>>1].subg_label, prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
+        }
+	}
+    free(primary_flag);    
+}
+void hamt_output_unitig_graph_advance_debug(asg_t *sg, ma_ug_t *ug0, ma_sub_t* coverage_cut, char* output_file_name, const char *suffix, const char *seq_prefix,
+                              ma_hit_t_alloc* sources, R_to_U* ruIndex, int max_hang, int min_ovlp, int label)
+{
+    // (companion monkey patch of the function above.)
+    kvec_asg_arc_t_warp new_rtg_edges;
+    kv_init(new_rtg_edges.a);
+
+    ma_ug_t *ug = NULL;
+    ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, label);
+    hamt_ug_util_BFS_markSubgraph(ug, label);// collect subgraph info
+
+    ma_ug_seq(ug, sg, &R_INF, coverage_cut, sources, &new_rtg_edges, max_hang, min_ovlp);
+
+    fprintf(stderr, "[M::%s] Writing GFA... \n", __func__);
+    
+    char* gfa_name = (char*)malloc(strlen(output_file_name)+100);
+    sprintf(gfa_name, "%s.%s.gfa", output_file_name, suffix);
+    FILE* output_file = fopen(gfa_name, "w");
+    hamt_ug_print_debug(ug, ug0, &R_INF, sg, coverage_cut, sources, ruIndex, 1, seq_prefix, output_file);
+    fclose(output_file);
+
+    sprintf(gfa_name, "%s.%s.noseq.gfa", output_file_name, suffix);
+    output_file = fopen(gfa_name, "w");
+    hamt_ug_print_debug(ug, ug0, &R_INF, sg, coverage_cut, sources, ruIndex, 0, seq_prefix, output_file);
+    fclose(output_file);
+
+    free(gfa_name);
+    hamt_ug_destroy(ug);
+    kv_destroy(new_rtg_edges.a);
+}
 
 void merge_unitig_content(ma_utg_t* collection, ma_ug_t* ug, asg_t* read_g, kvec_asg_arc_t_warp* edge)
 {
@@ -25144,6 +25256,89 @@ char* output_file_name, long long n_read, ma_hit_t_alloc* reverse_sources, R_to_
     fprintf(stderr, "debug_graph has been written.\n");
     return 1;
 }
+int hamt_write_debug_graph(asg_t *sg, ma_hit_t_alloc* sources, ma_sub_t* coverage_cut, 
+char* output_file_name, long long n_read, ma_hit_t_alloc* reverse_sources, R_to_U* ruIndex)
+{
+    // monkey patch of a debug utility: set probing point in the graph cleaning flow and 
+    //                               write/read graph bins from there (instead of starting from 
+    //                               raw unitig graph every time.)
+
+    char* gfa_name = (char*)malloc(strlen(output_file_name)+55);
+
+    ////write_All_reads(&R_INF, gfa_name);
+    sprintf(gfa_name, "%s.all.probe.source", output_file_name);
+    write_ma_hit_ts(sources, R_INF.total_reads, gfa_name);
+    sprintf(gfa_name, "%s.all.probe.reverse", output_file_name);
+    write_ma_hit_ts(reverse_sources, R_INF.total_reads, gfa_name);
+    sprintf(gfa_name, "%s.all.probe.coverage_cut", output_file_name);
+    write_coverage_cut(coverage_cut, gfa_name, n_read);
+    sprintf(gfa_name, "%s.all.probe.ruIndex", output_file_name);
+    write_ruIndex(ruIndex, gfa_name);
+    sprintf(gfa_name, "%s.all.probe.asg_t", output_file_name);
+    write_asg_t(sg, gfa_name);
+    free(gfa_name);
+    fprintf(stderr, "Wrote probing dbg-gfa.\n");
+    return 1;
+}
+int hamt_load_debug_graph(asg_t** sg, ma_hit_t_alloc** sources, ma_sub_t** coverage_cut, 
+char* output_file_name, ma_hit_t_alloc** reverse_sources, R_to_U* ruIndex, long long total_reads)
+{
+    // (companion monky patch of the function above)
+    FILE* fp = NULL;
+    char* gfa_name = (char*)malloc(strlen(output_file_name)+55);
+    sprintf(gfa_name, "%s.all.probe.source.bin", output_file_name);
+    fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    sprintf(gfa_name, "%s.all.probe.reverse.bin", output_file_name);
+    fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    sprintf(gfa_name, "%s.all.probe.coverage_cut.bin", output_file_name);
+    fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    sprintf(gfa_name, "%s.all.probe.ruIndex.bin", output_file_name);
+    fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    sprintf(gfa_name, "%s.all.probe.asg_t.bin", output_file_name);
+    fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+
+    if((*sources)!=NULL) destory_ma_hit_t_alloc((*sources), total_reads);
+    if((*reverse_sources)!=NULL) destory_ma_hit_t_alloc((*reverse_sources), total_reads);
+    if((*coverage_cut)!=NULL) free((*coverage_cut));
+    if((ruIndex)!=NULL) destory_R_to_U((ruIndex));
+    if((*sg)!=NULL) asg_destroy(*sg);
+
+    sprintf(gfa_name, "%s.all.probe.source", output_file_name);
+    if (!load_ma_hit_ts(sources, gfa_name)){
+        fprintf(stderr, "[W::%s] have %s but loading failed\n", __func__, gfa_name);
+        free(gfa_name); return 0;
+    }
+
+    sprintf(gfa_name, "%s.all.probe.reverse", output_file_name);
+    if (!load_ma_hit_ts(reverse_sources, gfa_name)){
+        fprintf(stderr, "[W::%s] have %s but loading failed\n", __func__, gfa_name);
+        free(gfa_name); return 0;
+    }
+    
+    sprintf(gfa_name, "%s.all.probe.coverage_cut", output_file_name);
+    if (!load_coverage_cut(coverage_cut, gfa_name)){
+        fprintf(stderr, "[W::%s] have %s but loading failed\n", __func__, gfa_name);
+        free(gfa_name); return 0;
+    }
+
+    sprintf(gfa_name, "%s.all.probe.ruIndex", output_file_name);
+    if (!load_ruIndex(ruIndex, gfa_name)){
+        fprintf(stderr, "[W::%s] have %s but loading failed\n", __func__, gfa_name);
+        free(gfa_name); return 0;
+    }
+
+    sprintf(gfa_name, "%s.all.probe.asg_t", output_file_name);
+    if (!load_asg_t(sg, gfa_name)){
+        fprintf(stderr, "[W::%s] have %s but loading failed\n", __func__, gfa_name);
+        free(gfa_name); return 0;
+    }
+
+    R_INF.paf = (*sources); R_INF.reverse_paf = (*reverse_sources);
+
+    free(gfa_name);
+    return 2;
+}
+
 
 
 int load_debug_graph(asg_t** sg, ma_hit_t_alloc** sources, ma_sub_t** coverage_cut, 
@@ -29829,6 +30024,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 {
 	ma_sub_t *coverage_cut = *coverage_cut_ptr;
 	asg_t *sg = *sg_ptr;
+    ma_ug_t *hamt_ug = 0;
 
     // extra rescues and others
     if (asm_opt.is_mode_low_cov){
@@ -29837,7 +30033,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     // hamt_try_rescue_containment(sources, n_read);  // containment mitigation
     // hamt_rescue_inexact_by_1bp(sources, readLen);  // function added in r44, impact is hard to say, maybe having it is a little bit better?
 
-
+    if (debug_g && (asm_opt.do_probe_gfa==1)) {
+        fprintf(stderr, "[M::%s] go to probe gfa\n", __func__);
+        goto probe;
+    }
     if(debug_g && !asm_opt.write_new_graph_bins) goto debug_gfa;
     fprintf(stderr, "[M::%s] no debug gfa\n", __func__);
 
@@ -30008,7 +30207,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     ///note: don't apply asg_arc_del_too_short_overlaps() after this function!!!!
 
 
-    ma_ug_t *hamt_ug;
     {
         // r_utg
         output_unitig_graph(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
@@ -30035,8 +30233,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 acc = hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-                acc += hamt_ug_drop_transitive(sg, hamt_ug, 100000, 0);
-                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                if (asm_opt.is_aggressive){
+                    acc += hamt_ug_drop_transitive(sg, hamt_ug, 100000, 0);
+                    hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                }
 
                 acc += hamt_ug_cut_very_short_multi_tip(sg, hamt_ug, 4);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
@@ -30202,8 +30402,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
-
-            hamt_ug_destroy(hamt_ug);
         }  
 
         #if 0
@@ -30229,8 +30427,26 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 0);
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "a_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 1);
+            if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
+                hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
+            }
 
-            // // post pctg fixes (trinucleotide profiles etc)
+
+            // post pctg fixes (trinucleotide profiles etc)
+probe:
+            ;
+#if 0
+            if (debug_g && (asm_opt.do_probe_gfa==1)){  // we got here by `goto`, need to generate ug
+                hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
+            }
+            for (int i=0; i<5; i++){
+                fprintf(stderr, "========================%d\n", i);
+                if (hamt_ug_popLooseTangles(sg, hamt_ug, 30000)){
+                    hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                }else{break;}
+            }
+            hamt_ug_popLooseTangles_v2(sg, hamt_ug, 10);
             // for (int i=0; i<3; i++){
             //     hamt_ug_seq_simple(sg, hamt_ug, coverage_cut, sources, ruIndex, max_hang_length, mini_overlap_length);
             //     if (!hamt_ug_finalprune(sg, hamt_ug)) {
@@ -30241,10 +30457,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // }
             // hamt_ug_destroy(hamt_ug);
             
-            // hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "pp_ctg", "ctg",
+
+            // hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "post_ctg", "ctg",
             //                          sources, ruIndex, max_hang_length, mini_overlap_length, 0);
+            hamt_output_unitig_graph_advance_debug(sg, hamt_ug, coverage_cut, asm_opt.output_file_name, "post_ctg", "ctg",
+                                     sources, ruIndex, max_hang_length, mini_overlap_length, 0);
+#endif
+        if (hamt_ug) {hamt_ug_destroy(hamt_ug);}
+        else {fprintf(stderr, "WARNING: ug did not exist, were you using --probe-gfa?\n");}
         }
     }
+
 
 	*coverage_cut_ptr = coverage_cut;
 	*sg_ptr = sg;
@@ -30266,16 +30489,27 @@ long long bubble_dist, int read_graph, int write)
     init_R_to_U(&ruIndex, n_read);
     asg_t *sg = NULL;
     ma_sub_t* coverage_cut = NULL;
+    int loaded_debug_gfa;
         
     ///actually min_thres = asm_opt.max_short_tip + 1 there are asm_opt.max_short_tip reads
     min_thres = asm_opt.max_short_tip + 1;
 
-    if (asm_opt.flag & HA_F_VERBOSE_GFA)
+    if ( (asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.do_probe_gfa)
     {
-        // if(load_debug_graph(&sg, &sources, &coverage_cut, output_file_name, &reverse_sources, &ruIndex))
-        if(load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read))
+        fprintf(stderr, "try loading bin files of assembly graph...\n");
+        if(asm_opt.do_probe_gfa){
+            loaded_debug_gfa = hamt_load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);    
+            if (!loaded_debug_gfa){  // fallback
+                fprintf(stderr, "--probe-gfa loading failed, fallback to try --dbg-gfa...\n");
+                asm_opt.do_probe_gfa = -1;
+                loaded_debug_gfa = load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);
+            }
+        }else{
+            loaded_debug_gfa = load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);
+        }
+        if(loaded_debug_gfa)
         {
-            fprintf(stderr, "debug gfa has been loaded\n");
+            fprintf(stderr, "debug gfa has been loaded (code %d)\n", loaded_debug_gfa);
             
             if (!asm_opt.is_use_exp_graph_cleaning){
                 clean_graph(min_dp, sources, reverse_sources, n_read, readLen, mini_overlap_length, 

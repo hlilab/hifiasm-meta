@@ -47,6 +47,7 @@ static ko_longopt_t long_options[] = {
 
     { "gc-sb-max", ko_no_argument, 418},  // graph cleaning, max unitig length in superbubbles
     { "force-rs", ko_no_argument, 419},  // aka force-preovec, better named
+    { "probe-gfa", ko_no_argument, 420},
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -173,6 +174,8 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_mode_low_cov = 0;
     asm_opt->write_new_graph_bins = 0;
     asm_opt->gc_superbubble_tig_max_length = 100000;
+    asm_opt->gc_tangle_max_tig = 200;
+    asm_opt->is_aggressive = 0; 
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable
 }
@@ -439,7 +442,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
     asm_argcv.ha_argv = argv;    
     // asm_opt->argcv = &asm_argcv;
 
-    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:VSB:", long_options)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "hvt:o:k:w:m:n:r:a:b:z:x:y:p:c:d:M:P:if:D:FN:1:2:3:4:l:s:O:eu:VSB:A", long_options)) >= 0) {
         if (c == 'h')
         {
             Print_H(asm_opt);
@@ -454,7 +457,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         // vanilla: abcdef hi klmnopqrstuvwxyz
         // vanilla:    D F      MNOP               
         // meta   :
-        // meta   :  B                S  V 
+        // meta   : AB                S  V 
 		else if (c == 'f') asm_opt->bf_shift = atoi(opt.arg);
         else if (c == 't') asm_opt->thread_num = atoi(opt.arg); 
         else if (c == 'o') {
@@ -485,6 +488,10 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 'e') asm_opt->flag |= HA_F_BAN_ASSEMBLY;
         else if (c == 'u') asm_opt->flag |= HA_F_BAN_POST_JOIN;
         // hamt
+        else if (c == 'A') {
+            asm_opt->is_aggressive = 1;
+            asm_opt->gc_tangle_max_tig = 1000;
+        }
         else if (c == 'V') VERBOSE += 1;  // 1 will print out ha's debug and a few others, 1+ will print ovlp read skip info for each read
         else if (c == 'S') {
             asm_opt->is_disable_read_selection = 0; 
@@ -530,7 +537,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->is_dump_relevant_reads = 1;
         }
         else if (c == 418) {asm_opt->gc_superbubble_tig_max_length = atoi(opt.arg);}
-        else if (c == 419) {asm_opt->mode_coasm = 1;}
+        else if (c == 420) {asm_opt->do_probe_gfa = 1;}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

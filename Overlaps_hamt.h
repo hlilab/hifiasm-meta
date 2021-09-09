@@ -141,5 +141,6 @@ int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, m
 
 // 
 int hamt_ug_finalprune(asg_t *sg, ma_ug_t *ug);
-
+int hamt_ug_popLooseTangles(asg_t *sg, ma_ug_t *ug, int threshold_min_handle_length);
+int hamt_ug_popLooseTangles_v2(asg_t *sg, ma_ug_t *ug, int max_step);
 #endif // __OVERLAPS_HAMT__

@@ -511,7 +511,7 @@ void hamt_try_rescue_containment(ma_hit_t_alloc* sources, long long nb_reads){
     //     Set reverse overlap for one-direction overlaps that happen to be perfect containments.
     //     The added overlap will be in the same collection as the query.
     // NOTE
-    //     Introduce to resolve a problem happens in very high coverage occasions (roughly >200x).
+    //     Introduced to resolve a problem happens in very high coverage occasions (roughly >200x).
     //     Doesn't align the other direction for double check.
     //     This was done inside `normalize_ma_hit_t_single_side_advance`. Seperating out
     //       for clarity.
@@ -3262,7 +3262,7 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     // TODO
     // We don't want to protect too many contained reads, the graph complexity explodes.
     // Would be ideal if we can esitmate coverage for each haplotype, but that needs more effort.
-    // The comprise here is to assume that the shorter read is safe to drop
+    // The compromise here is to assume that the shorter read is safe to drop if
     //    it has a bunch of parent reads or arcs, which implies this region is 
     //    getting at least some coverage.
     if (buf_len>3){goto finish;}

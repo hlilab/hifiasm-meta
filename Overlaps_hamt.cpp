@@ -797,9 +797,9 @@ void hamt_ug_cleanup_arc_by_labels(asg_t *sg, ma_ug_t *ug){
         asg_cleanup(sg);
         asg_cleanup(auxsg);
     }
-    if (VERBOSE>1){
-        fprintf(stderr, "[debug::%s] cleaned up %d arcs\n", __func__, cnt);
-    }
+    // if (VERBOSE>1){
+    //     fprintf(stderr, "[debug::%s] cleaned up %d arcs\n", __func__, cnt);
+    // }
 }
 
 void hamt_ug_init_seq_vis(ma_ug_t *ug, uint8_t flag){
@@ -3870,7 +3870,11 @@ void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug, int base_l
     asg_t *auxsg = ug->g;
     uint32_t v, w, nv, nw;
     asg_arc_t *av, *aw;
-    uint32_t covs[20], cov_min, cov_max, cov_v, cov_tmp;  // TODO: tho it's probably safe enough
+    uint32_t /*covs[20],*/ cov_min, cov_max, cov_v, cov_tmp;
+
+    stacku32_t covs_s;
+    stacku32_init(&covs_s);
+    uint32_t *covs = covs_s.a;
 
     for (v=0; v<auxsg->n_seq*2; v++){
         if (base_label>=0 && sg->seq_vis[v>>1]!=base_label) {continue;}
@@ -3901,15 +3905,18 @@ void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug, int base_l
             nw = asg_arc_n(auxsg, w^1);
             aw = asg_arc_a(auxsg, w^1);
             int idx = 0;
+            stacku32_reset(&covs_s);
             for (int i=0; i<nw; i++){
                 if (aw[i].del){continue;}
                 if (base_label>=0 && auxsg->seq_vis[aw[i].v>>1]!=base_label) {continue;}
                 if ((aw[i].v>>1)==(v>>1)){continue;}  // skip the handle
                 if (hamt_asgarc_util_isTip(auxsg, aw[i].v, 0, 0, base_label)){continue;}  // don't use tip's coverage
-                covs[idx] = (uint32_t)ug->utg_coverage[aw[i].v>>1];
-                idx++;
+                stacku32_push(&covs_s, (uint32_t)ug->utg_coverage[aw[i].v>>1]);  // covs[idx] = (uint32_t)ug->utg_coverage[aw[i].v>>1]; idx++;                
             }
-            covs[idx++] = (uint32_t)ug->utg_coverage[w>>1];
+            stacku32_push(&covs_s, (uint32_t)ug->utg_coverage[w>>1]);  // covs[idx++] = (uint32_t)ug->utg_coverage[w>>1]; idx++;
+            idx = covs_s.n;
+            covs = covs_s.a;
+
             radix_sort_ovhamt32(covs, covs+idx);
             cov_min = covs[0];
             cov_max = covs[idx-1];
@@ -3978,6 +3985,7 @@ void hamt_asgarc_ugCovCutDFSCircle_aggressive(asg_t *sg, ma_ug_t *ug, int base_l
         asg_cleanup(sg);
         asg_cleanup(auxsg);
     }
+    stacku32_destroy(&covs_s);
     fprintf(stderr, "[M::%s] cut %d.\n", __func__, nb_cut);
 }
 
@@ -5630,7 +5638,7 @@ int hamt_ug_pop_miscbubble(asg_t *sg, ma_ug_t *ug, int base_label){
                 break;
             }
         }
-        if (idx<2){
+        if (idx<2 || idx>=20){
             continue;
         }
 
@@ -6778,6 +6786,8 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
     //    Does several rounds of ug destroy-regen, also writes inter gfa if specified.
     int verbose = 0;
     int nb_modified = 0;
+    double startTime;
+
     uint32_t start, end, start_v, end_v;  // start and end are meant to be unitig IDs (with dir); start_v and end_v are vertex IDs
     int l1, l2;
     uint32_t nv, wu, uu;
@@ -6785,6 +6795,8 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
     int is_circular;
 
     for (int round=0; round<3; round++){
+        startTime = Get_T();
+        nb_modified = 0;
         if (verbose){
             fprintf(stderr, "[debug::%s] entered round %d\n", __func__, round);
         }
@@ -6892,6 +6904,9 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
                 }
             }
         }
+        if (VERBOSE){
+            fprintf(stderr, "[M::%s] finished round %d, modified %d, used %.2f s\n", __func__, round, nb_modified, Get_T()-startTime);
+        }
         // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 210+round);
         if (nb_modified){
             free(sg->idx);
@@ -6899,12 +6914,12 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
             sg->is_srt = 0;
             asg_cleanup(sg);
             asg_cleanup(auxsg);
+            hamt_ug_destroy(ug);
+        }else{
+            hamt_ug_destroy(ug);
+            if (VERBOSE) {fprintf(stderr, "[M::%s] leaving\n", __func__);}
+            break;
         }
-        hamt_ug_destroy(ug);
-    }
-
-    if (VERBOSE){
-        fprintf(stderr, "[M::%s] modified %d spots\n", __func__, nb_modified);
     }
 }
 

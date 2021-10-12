@@ -108,6 +108,8 @@ typedef struct {
     int mode_coasm;
     int is_aggressive;
     int do_probe_gfa;
+    // hamt, multiprocessing context for get_specific_overlap's binary search 
+    int get_specific_overlap_is_use_bf;
 
     // end of hamt
     

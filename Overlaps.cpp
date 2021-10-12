@@ -17,6 +17,13 @@
 
 KRADIX_SORT_INIT(hamtu64, uint64_t, uint64_t, 8)  // hamt
 
+// (hifiasm-meta: when to sort and use binary search over linear search)
+// note: sorted/not sorted is indicated by global variables under asm_opt.
+//       Must use `add_ma_hit_t_alloc` to add entries to buffer.
+#define LINEAR_BF_BREAKEVEN_POINT 64
+void sort_paf_buffers_by_targetID(ma_hit_t_alloc *x, long long n_read);
+
+
 // (hifiasm: filter short potential unitigs)
 #define ASG_ET_MERGEABLE 0
 #define ASG_ET_TIP       1
@@ -390,23 +397,69 @@ void destory_ma_hit_t_alloc(ma_hit_t_alloc* x, long long total_reads)
 
 void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element)
 {
+    // NOTE
+    //     Although we can choose to maintain sorting order when inserting,
+    //      given that 1) we might want to have different sort order under
+    //      different context, and 2) there might be a breakeven value
+    //      that we will choose no sorting for short buffers,
+    //      I choose to store sorting state and let binary search function
+    //      call the sorting when needed.
 	if (x->length + 1 > x->size) {
 		x->size = x->length + 1;
 		kroundup32(x->size);
 		REALLOC(x->buffer, x->size);
 	}
+    int qn = (int)(element->qns>>32);
+    int tn = (int)(element->tn);
 	x->buffer[x->length++] = *element;
+    x->buffer_sorted_by_qns = 0;
+    x->buffer_sorted_by_tn = 0;
 }
 
-
-long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)  // note: qn and tn doesn't have direction, it's read ID
-{
-    long long i;
-    for (i = 0; i < x->length; i++){
-        if(x->buffer[i].tn == tn && ((uint32_t)(x->buffer[i].qns>>32)) == qn)
-            return i;
+long long get_specific_overlap_binarysearch(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn){
+	if (x->length==0) return -1;
+    if (!x->buffer_sorted_by_tn) {
+        radix_sort_hit_tn(x->buffer, x->buffer+x->length);
+        x->buffer_sorted_by_tn = 1;
     }
+	
+	int low=0, high=x->length-1, idx;
+    if (tn<x->buffer[0].tn || tn>x->buffer[high].tn) return -1; 
+
+    while (low<=high){
+        idx = (high-low)/2 + low;
+        if (tn<x->buffer[idx].tn){
+            high = idx-1;
+        }else if (tn>x->buffer[idx].tn){
+            low = idx+1;
+        }else{
+            assert( ((uint32_t)(x->buffer[idx].qns>>32)) == qn  );
+            return idx;
+        }
+    }
+	// fprintf(stderr, "NOT FOUND: tn is %d, array dump:\n", (int)tn);
+	// for (int i=0; i<x->length; i++){
+	// 	fprintf(stderr, "  i %d: %d\n", (int)i, (int)(x->buffer[i].tn) );fflush(stderr);
+	// }
     return -1;
+}
+long long get_specific_overlap_linearsearch(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)
+{
+    uint32_t i;
+    for (i = 0; i < x->length; i++){
+        if(x->buffer[i].tn == tn && ((uint32_t)(x->buffer[i].qns>>32)) == qn){
+            return i; 
+        }
+    }
+    return -1;  // not found
+}
+long long get_specific_overlap(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)
+{
+	if ( (!asm_opt.get_specific_overlap_is_use_bf) || x->length<LINEAR_BF_BREAKEVEN_POINT){
+		return get_specific_overlap_linearsearch(x, qn, tn);
+	}else{
+		return get_specific_overlap_binarysearch(x, qn, tn);
+	}
 }
 
 ma_hit_t *get_specific_overlap_handle(ma_hit_t_alloc *sources, uint32_t qn, uint32_t tn){  // note: no direction bit
@@ -962,6 +1015,15 @@ void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long l
                 }
             }
         }
+
+        // maintain sort order
+        if (asm_opt.get_specific_overlap_is_use_bf){  // get_specific_overlap might use binary search so we have to sort
+            sort_paf_buffers_by_targetID(sources, n_read);
+        }
+
+        for (int tid=0; tid<n_cpu; tid++){
+            aux.n[tid] = 0;
+        }
     }
 
     // cleanup
@@ -977,9 +1039,10 @@ void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long l
     free(aux.is_hard_add_buf);
     free(aux.buf1); free(aux.buf2);
 
-    if(VERBOSE >= 1)
+    if(VERBOSE >= 0)
     {
         fprintf(stderr, "[M::%s] takes %0.2fs, typeA %" PRIu64 " B %" PRIu64 "\n\n", __func__, Get_T()-startTime, sancheckA, sancheckB);
+        fflush(stderr);
     }
 }
 
@@ -1340,12 +1403,8 @@ void drop_edges_by_trio(ma_hit_t_alloc* sources, long long num_sources)
     }
 }
 
-
-
-ma_hit_t* get_specific_overlap_with_del(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
-uint32_t qn, uint32_t tn)
-{
-    if(coverage_cut[qn].del || coverage_cut[tn].del) return NULL;
+ma_hit_t* get_specific_overlap_with_del_linearsearch(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
+uint32_t qn, uint32_t tn){
     ma_hit_t_alloc* x = &(sources[qn]);
     uint32_t i;
     for (i = 0; i < x->length; i++)
@@ -1361,6 +1420,49 @@ uint32_t qn, uint32_t tn)
     }
 
     return NULL;
+}
+
+ma_hit_t* get_specific_overlap_with_del_binarysearch(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
+uint32_t qn, uint32_t tn){
+    ma_hit_t_alloc *x = &sources[qn];
+    if (x->length==0) return NULL;
+
+    if (!x->buffer_sorted_by_tn) {
+        radix_sort_hit_tn(x->buffer, x->buffer+x->length);
+        x->buffer_sorted_by_tn = 1;
+    }
+
+    int low=0, high=x->length-1, idx;
+    if (tn<x->buffer[0].tn || tn>x->buffer[high].tn) return NULL; 
+    while (low<=high){
+        idx = (high-low)/2 + low;
+        if (tn<x->buffer[idx].tn){
+            high = idx-1;
+        }else if (tn>x->buffer[idx].tn){
+            low = idx+1;
+        }else{
+            assert( ((uint32_t)(x->buffer[idx].qns>>32)) == qn  );
+            if(x->buffer[idx].del) return NULL;
+            if(coverage_cut[Get_qn(x->buffer[idx])].del) return NULL;
+            if(coverage_cut[Get_tn(x->buffer[idx])].del) return NULL;
+            return &(x->buffer[idx]);
+        }
+    }
+
+    return NULL;
+}
+
+ma_hit_t* get_specific_overlap_with_del(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
+uint32_t qn, uint32_t tn)
+{
+    // source but ignore entires with deleted tag; returns a handle
+    if(coverage_cut[qn].del || coverage_cut[tn].del) return NULL;
+
+    if ( (!asm_opt.get_specific_overlap_is_use_bf) || sources[qn].length<LINEAR_BF_BREAKEVEN_POINT){
+		return get_specific_overlap_with_del_linearsearch(sources, coverage_cut, qn, tn);
+	}else{
+		return get_specific_overlap_with_del_binarysearch(sources, coverage_cut, qn, tn);
+	}
 }
 
 
@@ -1583,7 +1685,7 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
         }
     }
 
-    fprintf(stderr, "[debug::%s] ret0: %d\n", __func__, ret0);
+    fprintf(stderr, "[debug::%s] ret0: %d, used %.2f s\n", __func__, ret0, Get_T()-startTime);
 
     transfor_R_to_U(ruIndex);
 
@@ -1615,9 +1717,10 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
         }
     }
 
-    if(VERBOSE >= 1)
+    if(VERBOSE >= 0)
     {
-        fprintf(stderr, "[M::%s] dropped %d reads, takes %0.2f s\n\n", __func__, ret, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] dropped %d reads, used total of %0.2f s\n\n", __func__, ret, Get_T()-startTime);
+        fflush(stderr);
     }
     return ret;
 }
@@ -1792,8 +1895,6 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
                                            R_to_U* ruIndex){
     // FUNC
     //     Threaded ma_hit_contained_advance
-    // NOTE
-    //     See the TODO/BUG below before using.
     double startTime = Get_T();
     double startTime_tmp;
     double accTime_a = 0;
@@ -1839,6 +1940,8 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
     // step 1
     for (long long i_batch=0; i_batch<nb_batch; i_batch++){
         startTime_tmp = Get_T();
+
+        // collect
         kt_for(n_cpu, hamt_threaded_ma_hit_contained_advance_worker1, &aux, (long)batch_size);
         accTime_a += Get_T() - startTime_tmp;
 
@@ -1922,6 +2025,7 @@ int hamt_threaded_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_
 void ma_hit_flt(ma_hit_t_alloc* sources, long long n_read, ma_sub_t *coverage_cut, int max_hang, int min_ovlp)
 {
     double startTime = Get_T();
+    int nb_treatedA = 0, nb_treatedB = 0;
 	long long i, j, rLen;
 	asg_arc_t t;
 
@@ -1961,6 +2065,7 @@ void ma_hit_flt(ma_hit_t_alloc* sources, long long n_read, ma_sub_t *coverage_cu
             {
                 h->del = 1;
                 delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
+                nb_treatedA++;
             }
         
             
@@ -1969,12 +2074,14 @@ void ma_hit_flt(ma_hit_t_alloc* sources, long long n_read, ma_sub_t *coverage_cu
         if(rLen == 0)
         {
             (coverage_cut)[i].del = 1;
+            nb_treatedB++;
         }
     }
 
     if(VERBOSE >= 1)
     {
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] takes %0.2f s, typeA %d , typeB %d\n\n", __func__, Get_T()-startTime, nb_treatedA, nb_treatedB);
+        fflush(stderr);
     }
 }
 
@@ -2090,7 +2197,8 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
 	free(b.a);
     if(VERBOSE >= 1)
     {   
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime); 
+        fflush(stderr);
     }
 }
 
@@ -2984,7 +3092,10 @@ typedef struct {
     long long n_read;
     uint64_t *readLen;
     ma_sub_t *coverage_cut;
-    int counter;  // NOTE this might RACE during update, but it's an output and not used elsewhere
+    int *counter;   // per thread counter
+    uint32_t **buf_u32_q;    // per thread linear buffers
+    uint32_t **buf_u32_t; 
+    int* buf_u32_n; int* buf_u32_m;
 }hitcontain_aux_t;
 
 static void hamt_hit_contained_drop_singleton_worker(void *data, long i_r, int tid){  // callback for kt_for()
@@ -3305,15 +3416,15 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
                                 __func__, (int)Get_NAME_LENGTH(R_INF, w), Get_NAME(R_INF, w));
                 }    
                 need_to_protect = 0;
+                // note: do not go to finish yet, we still need to check other neighbors and see if any of them ask for protection.
+            }else{
+                if (verbose>1){
+                    fprintf(stderr, "[debug::%s]     ~ neighbor %.*s hinted more haps\n",
+                                __func__, (int)Get_NAME_LENGTH(R_INF, w), Get_NAME(R_INF, w));
+                }
+                need_to_protect = 1;
                 goto finish;
             }
-
-            if (verbose>1){
-                fprintf(stderr, "[debug::%s]     ~ neighbor %.*s hinted more haps\n",
-                            __func__, (int)Get_NAME_LENGTH(R_INF, w), Get_NAME(R_INF, w));
-            }
-            need_to_protect = 1;
-            goto finish;
         }else{
             if (verbose>1){
                 fprintf(stderr, "[debug::%s]     ~ neighbor %.*s ok\n",
@@ -3337,10 +3448,17 @@ finish:
                             (int)Get_NAME_LENGTH(R_INF, hits[i]->tn), Get_NAME(R_INF, hits[i]->tn));
             }
         }
-        d->counter++;
-        for (i=0; i<buf_len; i++){
-            hits[i]->del = 1;
-            delete_single_edge_both_dir(sources, coverage_cut, (uint32_t)i_r, hits[i]->tn);
+        d->counter[tid]++;
+        for (i=0; i<buf_len; i++){ 
+            // delete_single_edge_both_dir(sources, coverage_cut, (uint32_t)i_r, hits[i]->tn);
+            if (d->buf_u32_n[tid]>=d->buf_u32_m[tid]){
+                d->buf_u32_m[tid] = d->buf_u32_m[tid] + (d->buf_u32_m[tid]>>1);
+                d->buf_u32_q[tid] = (uint32_t*)realloc(d->buf_u32_q[tid], sizeof(uint32_t)*d->buf_u32_m[tid]);
+                d->buf_u32_t[tid] = (uint32_t*)realloc(d->buf_u32_t[tid], sizeof(uint32_t)*d->buf_u32_m[tid]);
+            }
+            d->buf_u32_q[tid][d->buf_u32_n[tid]] = (uint32_t)i_r;
+            d->buf_u32_t[tid][d->buf_u32_n[tid]] = (uint32_t)(hits[i]->tn);
+            d->buf_u32_n[tid]++;
             
         }
     }else if (need_to_protect==0){
@@ -3550,7 +3668,7 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
         sprintf(tmp_msg, "[debug::%s]     (there were %d contained reads)\n", __func__, (int)IDs_contained.n);
         hamt_dbgmsg_append(&msg, tmp_msg, strlen(tmp_msg));
     }
-    d->counter++;
+    d->counter[tid]++;
 
 finish:
     kv_destroy(buf);
@@ -3586,13 +3704,18 @@ void hamt_hit_contained_multi(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     aux.n_read = n_read;
     aux.readLen = readLen;
     aux.coverage_cut = coverage_cut;
-    aux.counter = 0;
+    aux.counter = (int*)calloc(asm_opt.thread_num, sizeof(int));
 
     kt_for(asm_opt.thread_num, hamt_hit_contained_worker, &aux, (long)n_read);
-    // kt_for(1, hamt_hit_contained_worker, &aux, (long)n_read);
+    int total = 0;
+    for (int i=0; i<asm_opt.thread_num; i++){
+        total+=aux.counter[i];
+    }
+    free(aux.counter);
 
     if (VERBOSE){
-        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \n\n", __func__, Get_T()-startTime, aux.counter);
+        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated %d spots; \n\n", __func__, Get_T()-startTime, total);
+        fflush(stderr);
     }
 }
 
@@ -3600,27 +3723,60 @@ void hamt_hit_contained_drop_singleton_multi(ma_hit_t_alloc* sources, ma_hit_t_a
                         ma_sub_t *coverage_cut){
     double startTime = Get_T();
 
+    int init_buffer_size = 128;
     hitcontain_aux_t aux;
     aux.sources = sources;
     aux.reverse_sources = reverse_sources;
     aux.n_read = n_read;
     aux.readLen = readLen;
     aux.coverage_cut = coverage_cut;
-    aux.counter = 0;
+    aux.counter = (int*)calloc(asm_opt.thread_num, sizeof(int));
+    // init per thread linear buffers
+    aux.buf_u32_n = (int*)calloc(asm_opt.thread_num, sizeof(int));
+    aux.buf_u32_m = (int*)calloc(asm_opt.thread_num, sizeof(int));
+    aux.buf_u32_q = (uint32_t**)calloc(asm_opt.thread_num, sizeof(uint32_t*));
+    aux.buf_u32_t = (uint32_t**)calloc(asm_opt.thread_num, sizeof(uint32_t*));
+    for (int i=0; i<asm_opt.thread_num; i++){
+        aux.buf_u32_q[i] = (uint32_t*)calloc(init_buffer_size, sizeof(uint32_t));
+        aux.buf_u32_t[i] = (uint32_t*)calloc(init_buffer_size, sizeof(uint32_t));
+        aux.buf_u32_m[i] = init_buffer_size;
+    }
 
-    // kt_for(asm_opt.thread_num, hamt_hit_contained_drop_singleton_worker, &aux, (long)n_read);
-    kt_for(asm_opt.thread_num, hamt_hit_contained_drop_singleton_worker_v2, &aux, (long)n_read);
-    // kt_for(1, hamt_hit_contained_drop_singleton_worker_v2, &aux, (long)n_read);
-
+    // collect
+    kt_for(asm_opt.thread_num, hamt_hit_contained_drop_singleton_worker_v2, &aux, (long)n_read);  // kt_for(asm_opt.thread_num, hamt_hit_contained_drop_singleton_worker, &aux, (long)n_read);
+    // delete
+    int total_del = 0;
+    for (int tid=0; tid<asm_opt.thread_num; tid++){
+        for (int j=0; j<aux.buf_u32_n[tid]; j++){
+            delete_single_edge_both_dir(sources, coverage_cut, aux.buf_u32_q[tid][j], aux.buf_u32_t[tid][j]);
+            total_del++;
+        }
+    }
+    
+    int total_incident = 0;
+    for (int i=0; i<asm_opt.thread_num; i++){
+        total_incident+=aux.counter[i];
+    }    
+    free(aux.counter);
+    for (int i=0; i<asm_opt.thread_num; i++){
+        free(aux.buf_u32_q[i]);
+        free(aux.buf_u32_t[i]);
+    }
+    free(aux.buf_u32_n);
+    free(aux.buf_u32_m);
+    free(aux.buf_u32_q);
+    free(aux.buf_u32_t);
+    
     if (VERBOSE){
-        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \n\n", __func__, Get_T()-startTime, aux.counter);
+        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated %d spots (%d handles); \n\n", __func__, Get_T()-startTime, total_del, total_incident);
+        fflush(stderr);
     }
 
 }
 
 
 
-
+#if 0
 static void hamt_hit_drop_high_mismatch_arcs_worker(void *data, long i_r, int tid){  // callback for kt_for()
     int verbose = 0;
     hitcontain_aux_t *d = (hitcontain_aux_t*)data;
@@ -3663,7 +3819,7 @@ void hamt_hit_drop_high_mismatch_arcs(ma_hit_t_alloc* sources,
     kt_for(asm_opt.thread_num, hamt_hit_drop_high_mismatch_arcs_worker, &aux, (long)n_read);
     fprintf(stderr, "[M::%s] dropped %d arcs\n", __func__, aux.counter);
 }
-
+#endif
 
 
 
@@ -3671,6 +3827,7 @@ void ma_hit_cut(ma_hit_t_alloc* sources, long long n_read, uint64_t* readLen,
 long long mini_overlap_length, ma_sub_t** coverage_cut)
 {
     double startTime = Get_T();
+    int nb_treatedA = 0, nb_treatedB=0;
 	size_t i, j;
     ma_hit_t* p;
     ma_sub_t* rq;
@@ -3754,6 +3911,7 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
             {
                 p->del = 1;
                 delete_single_edge(sources, (*coverage_cut), Get_tn(*p), Get_qn(*p));
+                nb_treatedA++;
                 ///delete_all_edges(paf, coverage_cut, i); 
             }
         }
@@ -3761,12 +3919,13 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
         if(rLen == 0)
         {
             (*coverage_cut)[i].del = 1;
+            nb_treatedB++;
         }
     }
 
     if(VERBOSE >= 1)
     {
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] takes %0.2f s, typeA %d , typeB %d\n\n", __func__, Get_T()-startTime, nb_treatedA, nb_treatedB);
     }
     
 }
@@ -12035,6 +12194,11 @@ int asg_cut_internal(asg_t *g, int max_ext)
 void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, long long num_sources)
 {
     double startTime = Get_T();
+    double tmpT;
+    int placeholder1;
+    long long placeholder2;
+    int nb_treated = 0;
+
     long long i, j, index;
     uint32_t qn, tn;
 
@@ -12050,15 +12214,16 @@ void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_source
             //if this is a weak overlap
             if(sources[i].buffer[j].ml == 0)  // is weak
             {   
-                if(
-                !check_weak_ma_hit(&(sources[qn]), reverse_sources, tn, 
-                Get_qs(sources[i].buffer[j]), Get_qe(sources[i].buffer[j]))
+                placeholder1 = check_weak_ma_hit(&(sources[qn]), reverse_sources, tn, 
+                                                 Get_qs(sources[i].buffer[j]), Get_qe(sources[i].buffer[j]));
+                if(!placeholder1
                 /**
                 ||
                 !check_weak_ma_hit_reverse(&(reverse_sources[qn]), sources, tn)**/)
                 {
                     sources[i].buffer[j].bl = 0;
                     index = get_specific_overlap(&(sources[tn]), tn, qn);
+                    assert (index>=0);  // we have qn->tn and must be able to find its counterpart (the tn->qn overlap).
                     sources[tn].buffer[index].bl = 0;
                 }
             }
@@ -12081,14 +12246,18 @@ void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_source
             else
             {
                 sources[i].buffer[j].del = 1;
+                nb_treated++;
             }
         }
     }
 
-    if(VERBOSE >= 1)
+    if(VERBOSE >= 0)
     {
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] takes %0.2f s, treated %d\n\n", __func__, Get_T()-startTime, nb_treated);
+        fflush(stderr);
     }
+
+    // nothing was inserted, don't need to maintain sorting order
 }
     
 typedef struct {
@@ -12148,15 +12317,7 @@ static void hamt_clean_weak_ma_hit_t_worker2(void *data, long i, int tid){  // c
 
     for (uint32_t j=0; j<sources[i].length; j++){
         if(sources[i].buffer[j].del) continue;
-
-        if(sources[i].buffer[j].bl != 0)
-        {
-            sources[i].buffer[j].del = 0;
-        }
-        else
-        {
-            sources[i].buffer[j].del = 1;
-        }
+        sources[i].buffer[j].del = !sources[i].buffer[j].bl;
     }
 }
 
@@ -29778,6 +29939,41 @@ int max_hang, int min_ovlp)
     }
 }
 
+
+#define mahit_tn_key(a) ((a).tn)
+KRADIX_SORT_INIT(pafbuffer_sort, ma_hit_t, mahit_tn_key, member_size(ma_hit_t, tn))
+
+typedef struct{
+    long long n_read;
+    ma_hit_t_alloc *x;
+
+}pafbuffer_sort_tn_aux_t;
+static void sort_paf_buffers_by_targetID_worker(void *data, long i_read, int tid){  // callback for kt_for
+    pafbuffer_sort_tn_aux_t *aux = (pafbuffer_sort_tn_aux_t*)data;
+    if (aux->x[i_read].buffer_sorted_by_tn) return;
+    uint32_t buf_l = aux->x[i_read].length;
+    if (buf_l<LINEAR_BF_BREAKEVEN_POINT) return;
+    ma_hit_t *buf = aux->x[i_read].buffer;
+    radix_sort_pafbuffer_sort(buf, buf+buf_l);
+    aux->x[i_read].buffer_sorted_by_tn = 1;
+    return;
+}
+void sort_paf_buffers_by_targetID(ma_hit_t_alloc *x, long long n_read){
+    // FUNC
+    //     Sort each x[qn].buffer by its x[qn].buffer[i].tn values.
+    //     Used to enable hamt's binary searches.
+    double startTime = Get_T();
+    int n_cpu = asm_opt.thread_num;
+    pafbuffer_sort_tn_aux_t aux;
+    aux.x = x;
+    aux.n_read = n_read;
+
+    kt_for(n_cpu, sort_paf_buffers_by_targetID_worker, &aux, n_read);
+
+    // fprintf(stderr, "[T::%s] used %.2f s\n\n", __func__, Get_T()-startTime);
+}
+
+
 void clean_graph(
 int min_dp, ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, 
 long long n_read, uint64_t* readLen, long long mini_overlap_length, 
@@ -30030,8 +30226,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     if (asm_opt.is_mode_low_cov){
         hamt_smash_haplotype(sources, reverse_sources, n_read);
     }
-    // hamt_try_rescue_containment(sources, n_read);  // containment mitigation
-    // hamt_rescue_inexact_by_1bp(sources, readLen);  // function added in r44, impact is hard to say, maybe having it is a little bit better?
 
     if (debug_g && (asm_opt.do_probe_gfa==1)) {
         fprintf(stderr, "[M::%s] go to probe gfa\n", __func__);
@@ -30040,35 +30234,37 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     if(debug_g && !asm_opt.write_new_graph_bins) goto debug_gfa;
     fprintf(stderr, "[M::%s] no debug gfa\n", __func__);
 
-    ///just for debug
-    // (destroies sg and reset it (no extra malloc))
     renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
 
-    // normalize_ma_hit_t_single_side_advance(sources, n_read);  // TODO: faster?
+    asm_opt.get_specific_overlap_is_use_bf = 1; sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
+    
+    // normalize_ma_hit_t_single_side_advance(sources, n_read);
     // normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
     hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
     hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
-
+    
     memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
 
 
-    clean_weak_ma_hit_t(sources, reverse_sources, n_read);
-    // hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // threaded
+    clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // threaded
+    asm_opt.get_specific_overlap_is_use_bf = 0;
+
 
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     
-    // hamt: spare some low coverage simple cases
-    detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
-    // detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
+    asm_opt.get_specific_overlap_is_use_bf = 1; sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
+    detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);  // detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
     ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
+    asm_opt.get_specific_overlap_is_use_bf = 0;
     hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
     hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
-    // // hamt_hit_drop_high_mismatch_arcs(sources, n_read, readLen);
 
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);
-    // hamt_threaded_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex);  // TODO: this races, needs fix, but can't afford to do single thread on a large dataset
+    asm_opt.get_specific_overlap_is_use_bf = 1; sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
+    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // hamt_threaded_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex);  // TODO
+    asm_opt.get_specific_overlap_is_use_bf = 0;
+
 
     sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
@@ -30539,6 +30735,8 @@ long long bubble_dist, int read_graph, int write)
 
     if (!(asm_opt.flag & HA_F_BAN_ASSEMBLY))
     {
+        sort_paf_buffers_by_targetID(sources, n_read);
+        sort_paf_buffers_by_targetID(reverse_sources, n_read);
         try_rescue_overlaps(sources, reverse_sources, n_read, 4); 
 
         if (!asm_opt.is_use_exp_graph_cleaning){

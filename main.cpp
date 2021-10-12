@@ -33,6 +33,12 @@ int main(int argc, char *argv[])
 	}
 
 
+	time_t rawtime;
+    struct tm * timeinfo;
+    time (&rawtime);
+    timeinfo = localtime (&rawtime);
+	fprintf(stderr, "[M::%s] Start: %s\n", __func__, asctime(timeinfo));
+
 	// main
 	if (asm_opt.is_use_exp_graph_cleaning){
 		ret = hamt_assemble();

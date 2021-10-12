@@ -68,6 +68,11 @@ typedef struct {
 	uint8_t is_fully_corrected;
 	uint8_t is_abnormal;
 	// uint8_t *was_symm;
+
+	// NOTE for the following:
+	//     This is for hamt routines only. Hifiasm might maintain sorted buffers,
+	//      remember that they will not be aware of these.
+	uint8_t buffer_sorted_by_tn:1, buffer_sorted_by_qns:1;  // hamt; TODO: maybe just use a mask?
 } ma_hit_t_alloc;
 
 

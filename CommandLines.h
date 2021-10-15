@@ -4,7 +4,7 @@
 #include <pthread.h>
 
 #define HA_VERSION "0.13-r308"
-#define HAMT_VERSION "0.2-r049"
+#define HAMT_VERSION "0.2-r053"
 
 
 // #define VERBOSE 1

@@ -1021,9 +1021,6 @@ void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long l
             sort_paf_buffers_by_targetID(sources, n_read);
         }
 
-        for (int tid=0; tid<n_cpu; tid++){
-            aux.n[tid] = 0;
-        }
     }
 
     // cleanup

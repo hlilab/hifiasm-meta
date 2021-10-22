@@ -568,10 +568,6 @@ int hamt_ovlp_read_coverage_nbreads(ma_hit_t_alloc *sources, long long i_read, u
 //////////////////////////////////////////////////////////////////////
 
 int does_ovlp_ever_exist(ma_hit_t_alloc *sources, uint32_t v0, uint32_t w0, ma_hit_t **h0, ma_hit_t **h0_rev){
-    // NOTE
-    //     sources is effectively R_INF.paf
-    // FUNC
-    //     check overlaps of the same haplotype
     // RETURN
     //     1 if yes
     //     0 if no
@@ -1699,20 +1695,45 @@ void hamt_asgarc_util_get_the_two_targets(asg_t *g, uint32_t v, uint32_t *w, uin
     *u = buf[1];
 }
 
-int hamt_asgarc_util_only_has_self_arc(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc, int base_label){
+int hamt_asgarc_util_has_self_arc(asg_t *g, uint32_t v, int base_label){
     // FUNC
     //     check if v's arcs are just v->v^1 and v^1->v (NOT v->v which is invalid.)
+    //     does not included anything marked as deleted.
     // RETURN
     //     0 if not (note that this includes the case where v has no arc)
-    //     1 if yes
+    //     1 if yes and only self-arc exists (unconnected circular contig)
+    //     2 if self-arc and other arcs
     uint32_t tmp1, tmp2;
-    if (hamt_asgarc_util_countSuc(g, v, include_del_seq, include_del_arc, base_label)==1 &&
-        hamt_asgarc_util_countPre(g, v, include_del_seq, include_del_arc, base_label)==1){
-            hamt_asgarc_util_get_the_one_target(g, v, &tmp1, include_del_seq, include_del_arc, base_label);
-            hamt_asgarc_util_get_the_one_target(g, v^1, &tmp2, include_del_seq, include_del_arc, base_label);
-            if (tmp1==(tmp2^1)) return 1;
-       }
-    return 0;
+    int self_arc = 0;
+    int other_arc = 0;
+
+    uint32_t nv = asg_arc_n(g, v);
+    asg_arc_t *av = asg_arc_a(g, v);
+    for (int i=0; i<nv; i++){
+        if (av[i].del) continue;
+        if (g->seq[av[i].v>>1].del) continue;
+        if (base_label>=0 && g->seq_vis[av[i].v>>1]!=base_label) continue;
+        
+        if (av[i].v==v) self_arc++;
+        else other_arc++;
+    }
+    // 2nd direction
+    nv = asg_arc_n(g, v^1);
+    av = asg_arc_a(g, v^1);
+    for (int i=0; i<nv; i++){
+        if (av[i].del) continue;
+        if (g->seq[av[i].v>>1].del) continue;
+        if (base_label>=0 && g->seq_vis[av[i].v>>1]!=base_label) continue;
+        
+        if (av[i].v==(v^1)) self_arc++;
+        else other_arc++;
+    }
+
+    if (self_arc==0) return 0;
+    else{
+        if (other_arc==0) return 1;
+        else return 2;
+    }
 }
 
 int hamt_asgarc_util_walk_furthest_strict_single_path(asg_t *g, uint32_t v0, uint32_t *vn, int *nb_nodes, int limit, int base_label){
@@ -4684,33 +4705,27 @@ int hamt_ug_recover_ovlp_if_existed_core(asg_t *sg, ma_ug_t *ug, uint32_t start_
         return -1;
     }
     if (!h || !h_rev) {return 0;}  // (suppress compiler warning)
-    asg_arc_t t, *p;
+    asg_arc_t t_forward, t_rev, *p;
     int ql = coverage_cut[Get_qn(*h)].e - coverage_cut[Get_qn(*h)].s;
     int tl = coverage_cut[Get_tn(*h)].e - coverage_cut[Get_tn(*h)].s;
-    int r = ma_hit2arc(h, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
-    if (r>=0){
-        // push the 1st direction to the asg
-        if (yes_recover_it){
+    int r_forward = ma_hit2arc(h, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t_forward);
+    ql = coverage_cut[Get_qn(*h_rev)].e - coverage_cut[Get_qn(*h_rev)].s;
+    tl = coverage_cut[Get_tn(*h_rev)].e - coverage_cut[Get_tn(*h_rev)].s;
+    int r_rev = ma_hit2arc(h_rev, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t_rev);
+    if (r_forward>=0 && r_rev>=0){
+        if (yes_recover_it){ // sancheck: do nothing if arc exists
+            fprintf(stderr, "[debug::%s]recover, forward %d , rev %d\n", __func__,  r_forward, r_rev);  // TODO/BUG: why r_forward!=r_rev ?
             p = asg_arc_pushp(sg);
-            *p = t;
-        }
-        // push the other direction
-        ql = coverage_cut[Get_qn(*h_rev)].e - coverage_cut[Get_qn(*h_rev)].s;
-        tl = coverage_cut[Get_tn(*h_rev)].e - coverage_cut[Get_tn(*h_rev)].s;
-        r = ma_hit2arc(h_rev, ql, tl, asm_opt.max_hang_Len, asm_opt.max_hang_rate, asm_opt.min_overlap_Len, &t);
-        if (r>=0){
-            if (yes_recover_it){
-                p = asg_arc_pushp(sg);
-                *p = t;
-            }
+            *p = t_forward;
+            p = asg_arc_pushp(sg);
+            *p = t_rev;
             if (verbose) fprintf(stderr, "[debug::%s] success\n", __func__);
-            return 1;
-        }else{
-            if (verbose) fprintf(stderr, "[W::%s] tried to recover arc via a not-so-good overlap (a)\n", __func__);
-            return 0;
+            
         }
+        return 1;
     }else{
-        if (verbose) fprintf(stderr, "[W::%s] tried to recover arc via a not-so-good overlap (b)\n", __func__);
+        if (yes_recover_it && verbose) 
+            fprintf(stderr, "[debug::%s] wanted to recover arc but gave up.\n", __func__);
         return 0;
     }    
 }
@@ -4748,9 +4763,6 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     }else if (status>0){
         // fprintf(stderr, "ideal recovery\n");
         return 1;
-    }
-    if (search_span<0){  // for more generic usage
-        return 0;
     }
 
     // there was overlap, but wasn't able to form the arc
@@ -7096,12 +7108,19 @@ int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug,
     int sancheck_nbcut;
     
     int existed_homo = 0, existed_het = 0;
+    int will_need_adding_selfarc = 0;
 
     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){  
+
         // candiate unitig should be long and not isolated
         if (ug->u.a[vu>>1].len<1000000) continue;
         if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)==0 && hamt_asgarc_util_countPre(auxsg, vu, 0, 0, 0)==0) continue;
-        if (hamt_asgarc_util_only_has_self_arc(auxsg, vu, 0, 0, 0)) continue;  // unitig is an isolated circle
+        
+        // ignore unconnected circular contig; check if self arc already exists to avoid double arc
+        will_need_adding_selfarc = hamt_asgarc_util_has_self_arc(auxsg, vu, 0);
+        if (will_need_adding_selfarc==1) continue;  // unconnected circular contig
+        will_need_adding_selfarc = !will_need_adding_selfarc;
+
         start_v = ug->u.a[vu>>1].start;
         end_v = ug->u.a[vu>>1].end^1;
 
@@ -7189,11 +7208,11 @@ int hamt_ug_try_circularize(asg_t *sg, ma_ug_t *ug,
                         sancheck_nbcut++;
                     }
                 }
-                if (verbose) {fprintf(stderr, "[deubg::%s]   dropped %d\n", __func__, sancheck_nbcut);}
+                if (verbose) {fprintf(stderr, "[deubg::%s]   dropped %d, will=%d\n", __func__, sancheck_nbcut, will_need_adding_selfarc);}
                 if (existed_homo>0){
-                    hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, 1);
+                    hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, sources, coverage_cut, search_span, will_need_adding_selfarc);
                 }else{
-                    hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, reverse_sources, coverage_cut, search_span, 1);
+                    hamt_ug_recover_ovlp_if_existed(sg, ug, end_v, start_v, reverse_sources, coverage_cut, search_span, will_need_adding_selfarc);
                 }
                 ret++;
             }

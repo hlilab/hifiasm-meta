@@ -21,7 +21,8 @@ KRADIX_SORT_INIT(hamtu64, uint64_t, uint64_t, 8)  // hamt
 // note: sorted/not sorted is indicated by global variables under asm_opt.
 //       Must use `add_ma_hit_t_alloc` to add entries to buffer.
 #define LINEAR_BF_BREAKEVEN_POINT 64
-void sort_paf_buffers_by_targetID(ma_hit_t_alloc *x, long long n_read);
+void sort_paf_buffers_by_targetID(ma_hit_t_alloc *source, long long n_read);
+void sort_one_paf_buffer_by_targetID(ma_hit_t_alloc *x);
 
 
 // (hifiasm: filter short potential unitigs)
@@ -191,6 +192,9 @@ uint64_t* source_index, long long listLen)
         ele.no_l_indel = tmp->no_l_indel;
         
         add_ma_hit_t_alloc(dest_paf, &ele);
+    }
+    if (asm_opt.get_specific_overlap_is_use_bf){
+        sort_one_paf_buffer_by_targetID(dest_paf);
     }
 }
 
@@ -402,8 +406,10 @@ void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element)
     //      given that 1) we might want to have different sort order under
     //      different context, and 2) there might be a breakeven value
     //      that we will choose no sorting for short buffers,
-    //      I choose to store sorting state and let binary search function
-    //      call the sorting when needed.
+    //     I choose to store sorting state.
+    //      To split read and write access, the sorting will be performed 
+    //      after calls of this function if needed. This way the code won't accidentally
+    //      break hifiasm's call of add_ma_hit_t_alloc.
 	if (x->length + 1 > x->size) {
 		x->size = x->length + 1;
 		kroundup32(x->size);
@@ -418,10 +424,11 @@ void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element)
 
 long long get_specific_overlap_binarysearch(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn){
 	if (x->length==0) return -1;
-    if (!x->buffer_sorted_by_tn) {
-        radix_sort_hit_tn(x->buffer, x->buffer+x->length);
-        x->buffer_sorted_by_tn = 1;
-    }
+    assert(x->buffer_sorted_by_tn);
+    // if (!x->buffer_sorted_by_tn) {  // note: order is maintained by sorting after each `add_ma_hit_t_alloc`
+    //     radix_sort_hit_tn(x->buffer, x->buffer+x->length);
+    //     x->buffer_sorted_by_tn = 1;
+    // }
 	
 	int low=0, high=x->length-1, idx;
     if (tn<x->buffer[0].tn || tn>x->buffer[high].tn) return -1; 
@@ -437,10 +444,6 @@ long long get_specific_overlap_binarysearch(ma_hit_t_alloc* x, uint32_t qn, uint
             return idx;
         }
     }
-	// fprintf(stderr, "NOT FOUND: tn is %d, array dump:\n", (int)tn);
-	// for (int i=0; i<x->length; i++){
-	// 	fprintf(stderr, "  i %d: %d\n", (int)i, (int)(x->buffer[i].tn) );fflush(stderr);
-	// }
     return -1;
 }
 long long get_specific_overlap_linearsearch(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)
@@ -581,6 +584,9 @@ void hamt_try_rescue_containment(ma_hit_t_alloc* sources, long long nb_reads){
             if ( (rev_index==-1) && (hit_is_perfect_containment(&sources[i].buffer[j])) ){
                 set_reverse_overlap(&new_hit, &(sources[i].buffer[j]));  // add the reversed overlap
                 add_ma_hit_t_alloc(&(sources[tID]), &new_hit);
+                if (asm_opt.get_specific_overlap_is_use_bf){
+                    sort_one_paf_buffer_by_targetID(&sources[tID]);
+                }
             }
         }
     }
@@ -608,6 +614,9 @@ void hamt_smash_haplotype(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sourc
 
             // copy the overlap
             add_ma_hit_t_alloc(&(sources[qID]), hit);
+            if (asm_opt.get_specific_overlap_is_use_bf){
+                sort_one_paf_buffer_by_targetID(&sources[qID]);
+            }
         }
     }
 }
@@ -782,7 +791,7 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
     ma_hit_t ele;
     for (i = 0; i < num_sources; i++)  // iterate over vertices
     {
-        for (j = 0; j < sources[i].length; j++)  // iterate of overlaps of this vertex. (.length is Cigar_record's .length)
+        for (j = 0; j < sources[i].length; j++)
         {
             qn = Get_qn(sources[i].buffer[j]);
             tn = Get_tn(sources[i].buffer[j]);
@@ -831,6 +840,9 @@ void normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long long n
                 sources[i].buffer[j].del = ele.del = 1;  // but also delete it; note: assuming containment problem in high coverage occasions are already handled
                 add_ma_hit_t_alloc(&(sources[tn]), &ele);
                 sancheck_type3++;
+                if (asm_opt.get_specific_overlap_is_use_bf){
+                    sort_one_paf_buffer_by_targetID(&sources[tn]);
+                }
             }
         }
     }
@@ -986,7 +998,6 @@ void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long l
     fprintf(stderr, "[debug::%s] nb_batch: %d\n", __func__, (int)nb_batch);
     for (long long i_batch=0; i_batch<nb_batch; i_batch++){
         for (int i=0; i<n_cpu; i++){aux.n[i] = 0;}  // reset all buffers
-        // fprintf(stderr, "i_batch %d\n", (int)i_batch);
         aux.i_start = i_batch * ((long long)batch_size);
 
         // collect
@@ -11976,12 +11987,13 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
             
         }
 	}
-	// for (i = 0; i < ug->g->n_arc; ++i) { // the Link lines in GFA
-	// 	uint32_t u = ug->g->arc[i].ul>>32, v = ug->g->arc[i].v;
-	// 	fprintf(fp, "L\t%s%.6d%c\t%c\t%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
-    //     prefix, (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
-	// 	prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
-	// }
+	for (i = 0; i < ug->g->n_arc; ++i) { // the Link lines in GFA
+		uint32_t u = ug->g->arc[i].ul>>32, v = ug->g->arc[i].v;
+		fprintf(fp, "L\t%s%.6d%c\t%c\t%s%.6d%c\t%c\t%dM\tL1:i:%d\n", 
+        prefix, (u>>1)+1, "lc"[ug->u.a[u>>1].circ], "+-"[u&1],
+		prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], ug->g->arc[i].ol, asg_arc_len(ug->g->arc[i]));
+	}
+    #if 0
     asg_arc_t* au = NULL;
     uint32_t nu, u, v;
     for (i = 0; i < ug->u.n; ++i) {
@@ -12018,6 +12030,7 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
             prefix,	(v>>1)+1, "lc"[ug->u.a[v>>1].circ], "+-"[v&1], au[j].ol, asg_arc_len(au[j]));
         }
     }
+    #endif
     free(primary_flag);    
 }
 
@@ -29955,19 +29968,25 @@ static void sort_paf_buffers_by_targetID_worker(void *data, long i_read, int tid
     aux->x[i_read].buffer_sorted_by_tn = 1;
     return;
 }
-void sort_paf_buffers_by_targetID(ma_hit_t_alloc *x, long long n_read){
+void sort_paf_buffers_by_targetID(ma_hit_t_alloc *source, long long n_read){
     // FUNC
     //     Sort each x[qn].buffer by its x[qn].buffer[i].tn values.
     //     Used to enable hamt's binary searches.
     double startTime = Get_T();
     int n_cpu = asm_opt.thread_num;
     pafbuffer_sort_tn_aux_t aux;
-    aux.x = x;
+    aux.x = source;
     aux.n_read = n_read;
 
     kt_for(n_cpu, sort_paf_buffers_by_targetID_worker, &aux, n_read);
 
     // fprintf(stderr, "[T::%s] used %.2f s\n\n", __func__, Get_T()-startTime);
+}
+void sort_one_paf_buffer_by_targetID(ma_hit_t_alloc *x){
+    if (x->length<LINEAR_BF_BREAKEVEN_POINT) return;
+    ma_hit_t *buf = x->buffer;
+    radix_sort_pafbuffer_sort(x->buffer, x->buffer+x->length);
+    x->buffer_sorted_by_tn = 1;
 }
 
 
@@ -30419,7 +30438,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // topo pre clean
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             int acc = 0;
-            for (int i=0; i<5; i++){
+            for (int i=0; i<10; i++){
                 if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }                
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;}
                 
@@ -30489,7 +30508,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", cleanID); cleanID++;}
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
 
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // resolve complex bubble

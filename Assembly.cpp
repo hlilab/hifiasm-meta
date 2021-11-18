@@ -268,6 +268,8 @@ inline void push_cigar(Compressed_Cigar_record* records, long long ID, Cigar_rec
 
 void push_overlaps(ma_hit_t_alloc* paf, overlap_region_alloc* overlap_list, int flag, All_reads* R_INF, int if_reverse)
 {
+    // flag==1 for R_INF.paf
+    // flag==2 for R_INF.reverse_paf
     long long i = 0, xLen, yLen;
 	int32_t size = 0;
     ma_hit_t tmp;
@@ -1045,14 +1047,14 @@ void ha_overlap_and_correct(int round)
         r_out = 1;
     }
 
-    if(asm_opt.required_read_name) init_Debug_reads(&R_INF_FLAG, asm_opt.required_read_name); // for debugging only
+    if(asm_opt.required_read_name) init_Debug_reads(&R_INF_FLAG, asm_opt.required_read_name);
 	// overlap and correct reads
 	CALLOC(b, asm_opt.thread_num);
 	for (i = 0; i < asm_opt.thread_num; ++i)
 		b[i] = ha_ovec_init(0, (round == asm_opt.number_of_round - 1));
 
 	int has_read;
-	if (round!=0 || R_INF.is_all_in_mem)  // TODO: --meta?
+	if (round!=0 || R_INF.is_all_in_mem)
 		has_read = 1;
 	else
 		has_read = 0;
@@ -2148,13 +2150,6 @@ int hamt_assemble(void)
 		}
 		if (asm_opt.flag & HA_F_WRITE_EC) Output_corrected_reads();
 
-		// // overlap between corrected reads
-        // fprintf(stderr, "\n\n[M::%s] final overlap\n", __func__);
-        // hamt_existed_ov = (hamt_ov_t**)calloc(asm_opt.thread_num, sizeof(hamt_ov_t*));
-        // for (int i=0; i<asm_opt.thread_num; i++){
-        //     hamt_existed_ov[i] = hamt_ov_init();
-        // }
-        // R_INF.hamt_existed_ov = hamt_existed_ov;
 
 		ha_opt_reset_to_round(&asm_opt, asm_opt.number_of_round);
         hamt_ovecinfo_init();
@@ -2172,9 +2167,7 @@ int hamt_assemble(void)
             fclose(asm_opt.fp_relevant_reads);
         }
 
-        // hamt_migrate_existed_ov();
 
-        // hamt_ovecinfo_debugdump(&asm_opt);  // TODO: bit flag
         hamt_ovecinfo_write_to_disk(&asm_opt);
 		fprintf(stderr, "[M::%s::%.3f*%.2f@%.3fGB] ==> found overlaps for the final round\n", __func__, yak_realtime(),
 				yak_cpu_usage(), yak_peakrss_in_gb());

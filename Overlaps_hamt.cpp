@@ -13,7 +13,7 @@
 #define HAMT_MAX(x, y) ((x >= y)?(x):(y))  // same
 #define HAMT_MIN(x, y) ((x <= y)?(x):(y))  // same
 #define HAMT_DIFF(x, y) ((HAMT_MAX((x), (y))) - (HAMT_MIN((x), (y))))  // it's in Correct.h but don't want to include so
-
+#define UTG_LEN(ug, vu) ((ug)->u.a[(vu)>>1].len)  // vu has the direction bit
 
 KDQ_INIT(uint64_t)
 KDQ_INIT(uint32_t)
@@ -4372,6 +4372,7 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
     // NOTE: won't treat multi-target tips
     int verbose = 0;
     double startTime = Get_T();
+    int ignore_by_length = 0, ignore_by_target = 0, spared = 0;
 
     asg_t *auxsg = ug->g;
     uint32_t vu, wu, nv;
@@ -4380,6 +4381,7 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
     for (vu=0; vu<auxsg->n_seq*2; vu++){
         if (base_label>=0 && auxsg->seq_vis[vu>>1]!=base_label) {continue;}
         if (ug->u.a[vu>>1].len>100000){  // tip not short
+            ignore_by_length++;
             continue;
         }
 
@@ -4394,35 +4396,24 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
         // (note) this intentionally spares all multi-leaf tips; let other rountines try them.
         nv = asg_arc_n(auxsg, vu);
         av = asg_arc_a(auxsg, vu);
-        int need_to_spare = 0;
         for (uint32_t i=0; i<nv; i++){
             if (av[i].del){continue;}
-            // if (base_label>=0 && auxsg->seq_vis[av[i].v>>1]!=base_label) {continue;}  // note: do not do this
             wu = av[i].v;
-            if (hamt_asgarc_util_countNoneTipSuc(auxsg, wu^1, base_label)==0){
+            // if (hamt_asgarc_util_countNoneTipSuc(auxsg, wu^1, base_label)==0){
+            if (hamt_asgarc_util_countSuc(auxsg, wu^1, 0, 0, base_label)==1){
                 if (verbose){
                     fprintf(stderr, "[debug::%s] spared an arc for tip utg%.6d (target utg%.6d)\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
                 }
+                spared++;
             }else{  // cut
                 hamt_ug_arc_del(sg, ug, vu, wu, 1);
                 nb_cut++;
-                need_to_spare = 1;
                 if (verbose){
                     fprintf(stderr, "[debug::%s] cut tip: utg%.6d \n", __func__, (int)(vu>>1)+1);
                 }
             }
         }
-        // if (!is_hard_drop && !need_to_spare){
-        //     hamt_ug_utg_softdel(sg, ug, vu, alt_label);
-        // }
         #endif
-        
-        // sancheck+cut: don't touch the tip if it has more than one outgoing arc,
-        //               regardless of what the targets look like.
-        //               We might want to check up on these tips later or something.
-        if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)>1) continue;
-        hamt_asgarc_util_get_the_one_target(auxsg, vu, &wu, 0, 0, base_label);
-        hamt_ug_arc_del(sg, ug, vu, wu, 1);
 
 
     }
@@ -4432,7 +4423,8 @@ int hamt_ugasg_cut_shortTips(asg_t *sg, ma_ug_t *ug, int base_label, int alt_lab
         asg_cleanup(auxsg);
     }
     if (VERBOSE){
-        fprintf(stderr, "[M::%s] cut %d unitig tigs.\n", __func__, nb_cut);
+        fprintf(stderr, "[M::%s] cut %d unitig tigs; ignored not short %d , bifur %d, spared %d.\n", 
+                            __func__, nb_cut, ignore_by_length, ignore_by_target, spared);
     }
     return nb_cut;
 }
@@ -4879,7 +4871,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
     int nb_nodes_visited = 0;
     vu = v0;
 
-    if (verbose) {fprintf(stderr, "[debug::%s] check vu utg%.6d\n", __func__, (int)(v0>>1)+1);}
+    if (verbose) {fprintf(stderr, "[debug::%s] check vu utg%.6d dir %d\n", __func__, (int)(v0>>1)+1, (int)(v0&1));}
 
     // basic topo checks, requiring vu to be a articulation-vertex-like vertex
     // (note that to this point, we should have no trivial tips.)
@@ -4979,7 +4971,7 @@ int hamt_ug_check_complexBubble(asg_t *sg, ma_ug_t *ug, int max_size, uint32_t v
         nb_rounds++;
         if (nb_rounds>1000){
             fprintf(stderr, "debug break: more than 1000 round\n");
-            exit(1);
+            break;
         }
         stacku32_reset(&stack);  // holds color info of the current round
         int vu_not_passing;
@@ -6145,7 +6137,7 @@ int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label){
     int cov0, cov1, cov2, diffa, diffb;
     int total = 0;
 
-    for (v1=0; v1<auxsg->n_seq; v1++){
+    for (v1=0; v1<auxsg->n_seq*2; v1++){
         if (hamt_asgarc_util_countSuc(auxsg, v1, 0, 0, base_label)!=2 || 
             hamt_asgarc_util_countPre(auxsg, v1, 0, 0, base_label)!=2
             ){
@@ -6221,7 +6213,6 @@ int hamt_ug_pop_terminalSmallTip(asg_t *sg, ma_ug_t *ug, int base_label, int alt
     //    if all targets of a unitig are tips (*tips that's only connect to this one unitig!)
     //    keep only the longest one
     // NOTE
-    //    doesn't care about haplotype, just arbitrarily take the longest one.
     //    Name says "small" but isn't doing length check; in meta they just appeared to be all rather short.
     int verbose = 0;
 
@@ -8583,7 +8574,7 @@ int hamt_ug_cleanup_almost_circular(asg_t *sg, ma_ug_t *ug, int base_label){
     asg_arc_t *av;
 
     // drop tips only
-    for (vu=0; vu<auxsg->n_seq; vu++){
+    for (vu=0; vu<auxsg->n_seq*2; vu++){
         checksout = 0;
         nv = asg_arc_n(auxsg, vu);
         av = asg_arc_a(auxsg, vu);
@@ -9413,7 +9404,7 @@ int hamt_ug_popLooseTangles(asg_t *sg, ma_ug_t *ug, int threshold_min_handle_len
 //     //      without doing graph layout.
 
 // }
-int hamt_ug_popLooseTangles_v2(asg_t *sg, ma_ug_t *ug, int max_step){
+int hamt_ug_popLooseTangles_v2(asg_t *sg, ma_ug_t *ug, int max_step){  //TODO
     // FUNC
     //      Improved hamt_ug_popLooseTangles, no longer need the steps to be "synced".
     //      The flow:
@@ -9425,7 +9416,7 @@ int hamt_ug_popLooseTangles_v2(asg_t *sg, ma_ug_t *ug, int max_step){
     // RETURN
     //     number of spots treated
     int ret = 0, nb_treated=0;
-    int verbose = 1;
+    int verbose = 0;
 
     asg_t *auxsg = ug->g;
     uint32_t nv, vu, wu;

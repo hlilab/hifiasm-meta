@@ -174,7 +174,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_mode_low_cov = 0;
     asm_opt->write_new_graph_bins = 0;
     asm_opt->gc_superbubble_tig_max_length = 100000;
-    asm_opt->gc_tangle_max_tig = 200;
+    asm_opt->gc_tangle_max_tig = 200;  // set to -1 to disable the limit
     asm_opt->is_aggressive = 0; 
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable

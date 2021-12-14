@@ -2103,6 +2103,7 @@ void ma_hit_flt(ma_hit_t_alloc* sources, long long n_read, ma_sub_t *coverage_cu
 void ma_hit_sub(int min_dp, ma_hit_t_alloc* sources, long long n_read, uint64_t* readLen, 
 long long mini_overlap_length, ma_sub_t** coverage_cut)
 {
+    // min_dp is defaulted to zero (cli: `min_overlap_coverage`)
     double startTime = Get_T();
 
     (*coverage_cut) = (ma_sub_t*)malloc(sizeof(ma_sub_t)*n_read);
@@ -11913,7 +11914,7 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, uint8_t* r_flag)
     for (k = 0; k < u->n; k++)
     {
         rId = u->a[k]>>33;
-        R_bases += (coverage_cut[rId].e - coverage_cut[rId].s);
+        R_bases += (coverage_cut[rId].e - coverage_cut[rId].s);  // if asm_opt.min_overlap_coverage is default (zero), this simply is the length of the read.
         for (j = 0; j < (uint64_t)(sources[rId].length); j++)
         {
             h = &(sources[rId].buffer[j]);
@@ -30300,9 +30301,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asg_cut_tip(sg, asm_opt.max_short_tip);
     
-    ///drop_inexact_edegs_at_bubbles(sg, bubble_dist);
-    ///debug_info_of_specfic_node("m54329U_190827_173812/166332272/ccs", sg, "beg");
-    
     if(clean_round > 0)
     {
         double cut_step;
@@ -30329,27 +30327,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 i, drop_ratio);
             }
 
-            ///just topological clean
-            // pre_clean(sources, coverage_cut, sg, bubble_dist);
-            hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);
+            hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // pre_clean(sources, coverage_cut, sg, bubble_dist);
             
-            ///asg_arc_del_orthology(sg, reverse_sources, drop_ratio, asm_opt.max_short_tip);
-            // asg_arc_del_orthology_multiple_way(sg, reverse_sources, drop_ratio, asm_opt.max_short_tip);
-            // asg_cut_tip(sg, asm_opt.max_short_tip);
             /****************************may have bugs********************************/
-
             asg_arc_identify_simple_bubbles_multi(sg, 1);
-            //reomve edge between two chromesomes
-            //this node must be a single read
             asg_arc_del_false_node_meta(sg, asm_opt.max_short_tip);
             asg_cut_tip(sg, asm_opt.max_short_tip);
-            /****************************may have bugs********************************/
-            /****************************may have bugs********************************/
 
-            ///asg_arc_identify_simple_bubbles_multi(sg, 1);
             asg_arc_identify_simple_bubbles_multi(sg, 0);
-            ///asg_arc_del_short_diploid_unclean_exact(sg, drop_ratio, sources);
-
             asg_arc_del_short_diploid_by_exact(sg, asm_opt.max_short_tip, sources);
             asg_cut_tip(sg, asm_opt.max_short_tip);
             /****************************may have bugs********************************/
@@ -30372,13 +30357,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         }
     }
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "\n\n**********final clean**********\n");
-    }
 
-    // pre_clean(sources, coverage_cut, sg, bubble_dist);
-    hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);
+    hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // pre_clean(sources, coverage_cut, sg, bubble_dist);
 
     asg_arc_del_short_diploi_by_suspect_edge(sg, asm_opt.max_short_tip);
     asg_cut_tip(sg, asm_opt.max_short_tip);
@@ -30396,9 +30376,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
 
-    // if (asm_opt.mode_coasm){
-    //     hamt_asg_arc_del_intersample_branching(sg, coverage_cut, sources, ruIndex);
-    // }
 
 
     if ((asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.write_new_graph_bins)
@@ -30439,11 +30416,16 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             int acc = 0;
             for (int i=0; i<10; i++){
-                if (VERBOSE){ fprintf(stderr, "> round %d\n", i); }                
-                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_cln", cleanID); cleanID++;}
+                if (VERBOSE){ fprintf(stderr, "> hamt round %d\n", i); }                
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnA", cleanID);}
                 
                 acc = hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnB", cleanID);}
+
+                acc += hamt_ug_drop_redundant_nodes(sg, hamt_ug, 100000, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnC", cleanID); cleanID++;}
 
                 if (asm_opt.is_aggressive){
                     acc += hamt_ug_drop_transitive(sg, hamt_ug, 100000, 0);
@@ -30493,8 +30475,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // topo
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_drop_redundant_nodes(sg, hamt_ug, 100000, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2", cleanID); cleanID++;}
 
+            hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 100000, 0, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2-brute", cleanID); cleanID++;}
             
 
             // more topo cleaning
@@ -30507,7 +30494,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", cleanID); cleanID++;}
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
-
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_drop_redundant_nodes(sg, hamt_ug, 100000, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 100000, 0, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // resolve complex bubble
@@ -30522,6 +30512,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 nb_complex_bubble_cut += hamt_ug_resolve_small_multileaf_with_covcut(sg, hamt_ug, 75000, 2, 0);
                 nb_complex_bubble_cut += hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                
+                hamt_ug_drop_redundant_nodes(sg, hamt_ug, 200000, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveCmplx_before-brute", cleanID); cleanID++;}
+                hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 200000, 0, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+               
                 if (nb_complex_bubble_cut==0){
                     fprintf(stderr, "[M::%s] leave complex bubble popping (round %d)\n", __func__, round_resolve);
                     break;
@@ -30545,7 +30543,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 nb_tangle_cut += hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 50000, 0);
                 nb_tangle_cut += hamt_ug_covcut_falseVertexLoop(sg, hamt_ug, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_after", cleanID);cleanID++;}
+
+                hamt_ug_drop_redundant_nodes(sg, hamt_ug, 200000, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before-brute", cleanID); cleanID++;}
+                hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 200000, 0, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+
                 if (nb_tangle_cut==0){
                     if (VERBOSE) {fprintf(stderr, "debug, early termination of tangle pop (round %d)\n", round_resolve);}
                     break;
@@ -30566,8 +30571,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_treatBifurcation_hapCovCut(sg, hamt_ug, 0.7, 0.5, reverse_sources, 0, 1);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "midHapCovCut", cleanID);cleanID++;}
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
-            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             hamt_ug_try_circularize(sg, hamt_ug, sources, reverse_sources, ruIndex, coverage_cut, 1000000);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
@@ -30582,11 +30585,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIFagg", cleanID); cleanID++;}
-            // hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(sg, hamt_ug, 0, sources, reverse_sources);
-            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-
-            // hamt_debug_dump(sg, hamt_ug, sources, reverse_sources);
-            // if (asm_opt.write_debug_gfa) {hamt_debug_get_diploid_info_about_all_branchings(hamt_ug, reverse_sources);}
 
             hamt_ug_pop_tinyFlatCircles(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);

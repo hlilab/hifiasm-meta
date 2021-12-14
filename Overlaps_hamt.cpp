@@ -645,6 +645,24 @@ static inline void hamt_ug_utg_softdel(asg_t *sg, ma_ug_t *ug, uint32_t vu, int 
     
 }
 
+static inline void hamt_ug_remove_a_unitig(asg_t *sg, ma_ug_t *ug, uint32_t vu, int put_to_alt){
+    // given vu, drop all of its arcs and move it to the alt graph (optional if put_to_alt)
+    asg_t *auxsg = ug->g;
+    uint32_t nv = asg_arc_n(auxsg, vu);
+    asg_arc_t *av = asg_arc_a(auxsg, vu);
+    for (int i=0; i<nv; i++){
+        if (!av[i].del) hamt_ug_arc_del(sg, ug, vu, av[i].v, 1);
+    }
+    nv = asg_arc_n(auxsg, vu^1);
+    av = asg_arc_a(auxsg, vu^1);
+    for (int i=0; i<nv; i++){
+        if (!av[i].del) hamt_ug_arc_del(sg, ug, vu^1, av[i].v, 1);
+    }
+    if (put_to_alt){
+        hamt_ug_utg_softdel(sg, ug, vu, 1);
+    }
+}
+
 int hamt_ug_arc_del_between(asg_t *sg, ma_ug_t *ug, uint32_t start, uint32_t end, int del, int label){
     // treat every arc between vu and wu
     // NOTE
@@ -988,6 +1006,7 @@ void asg_get_subgraph_DFSfinishTimes(asg_t *sg, stacku32_t *vertices, stacku32_t
 
     // cleanup
     free(color);
+    stacku32_destroy(&stack);
     stacku64_destroy(&finishing_time);
 }
 
@@ -1069,11 +1088,9 @@ void hamt_check_diploid_report(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, ma_hit_t
                               float *ratio1, float *ratio2)
 {
     // FUNC
-    //      debug version of hamt_check_diploid, report stuff instead of return 0 or 1
-    // RETURN
-    //     -1 if no hit at all
-    //     1 if yes
-    //     0 if no
+    //      Debug version of hamt_check_diploid.
+    //      The denominator of ratio1 and ratio2 is min(len(vu1), len(vu2)).
+    //       (see also: `hamt_check_diploid_report2`)
     int verbose = 0;
 
     asg_t *auxsg = ug->g;
@@ -1119,6 +1136,52 @@ void hamt_check_diploid_report(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, ma_hit_t
     
     *ratio1 = (float)cnt_hit / ug->u.a[vu_short>>1].n;
     *ratio2 = (float)v.n / ug->u.a[vu_long>>1].n;
+    vecu32_destroy(&v);
+}
+void hamt_check_diploid_report2(ma_ug_t *ug, uint32_t vu1, uint32_t vu2, ma_hit_t_alloc *reverse_sources,
+                              float *ratio1, float *ratio2)
+{
+    // FUNC
+    //      Debug version of hamt_check_diploid.
+    //      The denominator of ratio1 and ratio2 is: len(vu1).
+    //       (use `hamt_check_diploid_report` to use min(len(vu1), len(vu2))).
+    int verbose = 0;
+
+    asg_t *auxsg = ug->g;
+    uint32_t vu_short, vu_long;
+    uint32_t qn, qn2, tn;
+    int nb_targets;
+    int found, cnt_hit=0;
+    vecu32_t v;
+    vecu32_init(&v);
+
+    for (int i=0; i<ug->u.a[vu1>>1].n; i++){  // iterate over reads in the first query unitig
+        qn = ug->u.a[vu1>>1].a[i]>>33;
+
+        // check if there's any read in the other unitig that targets the read 
+        found = 0;
+        for (int j=0; j<ug->u.a[vu2>>1].n; j++){  // iterate over reads in the other unitig
+            qn2 = ug->u.a[vu2>>1].a[j]>>33;
+            nb_targets = reverse_sources[qn2].length;
+            for (int i_target=0; i_target<nb_targets; i_target++) {  // check all existed inter-haplotype targets of this read
+                if (reverse_sources[qn2].buffer[i_target].tn == qn){
+                    found = 1;
+                    if (!vecu32_is_in_vec(&v, qn2)){
+                        vecu32_push(&v, qn2);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // update stats
+        if (found){
+            cnt_hit++;
+        }
+    }
+    
+    *ratio1 = (float)cnt_hit / ug->u.a[vu1>>1].n;
+    *ratio2 = (float)v.n / ug->u.a[vu1>>1].n;
     vecu32_destroy(&v);
 }
 
@@ -1522,7 +1585,7 @@ finish:
 }
 int hamt_ug_check_if_arc_strongly_bonded_bothdir(ma_ug_t *ug, uint32_t handle, uint32_t end, 
                                          uint8_t *forbidden_buffer, int max_step){
-    int verbose = 1;
+    int verbose = 0;
     int ret1 = hamt_ug_check_if_arc_strongly_bonded(ug, handle, end, forbidden_buffer, max_step);
     int ret2 = hamt_ug_check_if_arc_strongly_bonded(ug, end^1, handle^1, forbidden_buffer, max_step);
     if (verbose) {fprintf(stderr, "[debug::%s] handle %.6d end %.6d , 1st dir is_strong=%d, 2nd=%d\n", 
@@ -2281,9 +2344,6 @@ int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0,
     // NOTE
     //    Directions are: v0->(stuff in between)<-w0
     int verbose = 0;
-    // if (((v0>>1)+1) == 1374){
-    //     verbose = 2;
-    // }
     if (verbose){
         fprintf(stderr, "[debug::%s] utg%.6d vs utg%.6d\n", __func__, (int)(v0>>1)+1, (int)(w0>>1)+1);
     }
@@ -2377,7 +2437,7 @@ int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0,
         vecu32_push(&buf_source, vu>>1);
         color[vu] = 2;
 
-        if (nb_visited>max_visited){  // search span too big, assume failure
+        if ((max_visited>0) && (nb_visited>max_visited) ){  // search span too big, assume failure
             if  (verbose){fprintf(stderr, "[debug::%s]     search span too big (source)\n", __func__);}
             ret = 0;
             goto finish;
@@ -5185,7 +5245,10 @@ int hamt_ug_pop_subgraph(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t end0,
     if (vertices.n<=1) {
         stacku32_destroy(&vertices);
         stacku32_destroy(&finishing_times);
+        stacku32_destroy(&DFSstack);
+        stacku32_destroy(&alt_buf);
         free(packed);
+        free(color);
 
         return 0;
     }
@@ -5326,9 +5389,11 @@ int hamt_ug_pop_subgraph(asg_t *sg, ma_ug_t *ug, uint32_t start0, uint32_t end0,
 
     stacku32_destroy(&vertices);
     stacku32_destroy(&finishing_times);
+    stacku32_destroy(&DFSstack);
     stacku32_destroy(&alt_buf);
     free(packed);
     free(scores); free(pis);
+    free(color);
 
     return nb_cut;
 }
@@ -5936,6 +6001,336 @@ int hamt_ug_drop_transitive(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_
         if (ret1+ret2==2)break;
     }
 
+    return ret;
+}
+
+
+int hamt_ug_drop_redundant_nodes(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_label){
+    // FUNC
+    //     We remove a node `v` if:
+    //      1) there's at least one node `w` that has all predecessors of v
+    //      2) also all sucessors of v
+    //      3) and that all sucessors of v shall not have backward branchings that's not covered by remaining...(TODO)
+    //     It is hard to correctly check 3) if there's a tangle. We just examine the simplest case.
+    //     Implementation is handle-based, this function might need to be called multiple times.
+    // RETURN
+    //     # of nodes dropped.
+    int total = 0;
+    int verbose = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t nv, nw; 
+    asg_arc_t *av, *aw;
+    stacku32_t targets, will_be_covered;
+    stacku32_init(&targets);
+    stacku32_init(&will_be_covered);
+    // pack target counts and unitig ID for sorting
+    // note: maybe we can use uint32_t (since # unitigs is much smaller than # reads in regular datasets, 
+    //       and # reads is less than 1<<28 instead of 32 in the current implementation).
+    //       using u64 because it's simpler and either way it doesn't matter.
+    stacku64_t buf_for_sort;  
+    stacku64_init(&buf_for_sort); 
+
+    int ret = 1, iter=0;
+    while (ret && iter<50){
+        ret = 0;
+        for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+            if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)<=1) continue;
+            nv = asg_arc_n(auxsg, vu);
+            av = asg_arc_a(auxsg, vu);
+            int i=0; 
+            stacku32_reset(&targets);
+            stacku32_reset(&will_be_covered);
+            stacku64_reset(&buf_for_sort);
+            for (i=0; i<nv; i++){
+                if (av[i].del) continue;
+                nw = asg_arc_n(auxsg, av[i].v);
+                aw = asg_arc_a(auxsg, av[i].v);
+                if (hamt_asgarc_util_countPre(auxsg, av[i].v, 0, 0, base_label)>1) {
+                    // backward bifur, we won't drop this unitig, so all its targets will be reacheable.
+                    for (int j=0; j<nw; j++){
+                        if (aw[j].del) continue;
+                        stacku32_push(&will_be_covered, aw[j].v);
+                    }
+                }else{
+                    // collect targets. Don't treat tips differently.
+                    for (int j=0; j<nw; j++){
+                        if (aw[j].del) continue;
+                        if (!stack32_is_in_stack(&targets, aw[j].v)) stacku32_push(&targets, aw[j].v);
+                    }
+                    // put the current unitig into popping queue 
+                    stacku64_push(&buf_for_sort, (((uint64_t)(hamt_asgarc_util_countSuc(auxsg, av[i].v, 0, 0, base_label)))<<32) | av[i].v);
+                }
+            }
+            // attach a del bit: some targets do not need to be covered, as their origins won't be popped.
+            int left = 0;
+            for (i=0; i<targets.n; i++){
+                if (stack32_is_in_stack(&will_be_covered, targets.a[i])){
+                    targets.a[i] = (targets.a[i]<<1) | 1;  // ok to no cover this entry
+                }else{
+                    targets.a[i] = (targets.a[i]<<1) | 0;
+                    left++;
+                }
+            }
+            if (buf_for_sort.n==0) continue;  // nothing to consider to be dropped
+            
+            // Sort. 
+            radix_sort_ovhamt64(buf_for_sort.a, buf_for_sort.a+buf_for_sort.n);
+
+            // Instead of solving a set covering problem, we simply check from the origin unitigs with (roughly) the most
+            //  target counts, retain until all targets are covered.
+            // "Roughly" because we do not care about some targets, but counting did not consider this. Doesn't matter too much.
+            for (i=buf_for_sort.n-1; i>=0; i--){
+                uint32_t wu = (uint32_t) buf_for_sort.a[i];
+                if (left<=0){  // all covered, drop encountered origin unitig
+                    if (left<0) {
+                        fprintf(stderr, "[E::%s] minus leftover (continue anyway)\n", __func__);
+                    }
+                    if (ug->u.a[vu>>1].len>size_limit_bp) continue;
+                    asg_arc_t *tmp = asg_arc_a(auxsg, wu);
+                    for (int ii=0; ii<asg_arc_n(auxsg, wu); ii++){
+                        hamt_ug_arc_del(sg, ug, wu, tmp[ii].v, 1);
+                    }
+                    tmp = asg_arc_a(auxsg, wu^1);
+                    for (int ii=0; ii<asg_arc_n(auxsg, wu^1); ii++){
+                        hamt_ug_arc_del(sg, ug, wu^1, tmp[ii].v, 1);
+                    }
+                    hamt_ug_utg_softdel(sg, ug, wu, 1);
+                    ret++;
+                    if (verbose) {
+                        fprintf(stderr, "[debug::%s] handle utg%.6d drop %.6d\n", __func__, 
+                                            (int)(vu>>1)+1, (int)(wu>>1)+1);
+                    }
+                }else{
+                    nw = asg_arc_n(auxsg, wu);
+                    aw = asg_arc_a(auxsg, wu);
+                    for (int j=0; j<nw; j++){
+                        if (aw[j].del) continue;
+                        int idx = stacku32_index_value(&targets, aw[j].v<<1);
+                        if (idx!=-1){
+                            left--;
+                            targets.a[idx] |=1;
+                        }
+                    }
+                }
+            }
+        }
+        total+=ret;
+        iter++;
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+        if (VERBOSE){fprintf(stderr, "[M::%s]    iter %d dropped %d\n", __func__, iter, ret);}
+    }
+
+    stacku32_destroy(&targets);
+    stacku32_destroy(&will_be_covered);
+    stacku64_destroy(&buf_for_sort);
+
+    if (VERBOSE){fprintf(stderr, "[M::%s] dropped %d\n", __func__, total);}
+    return ret;
+}
+int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_label, int verbose){
+    // FUNC
+    //    Instead of checking locally, this function finds all "equivalent" or "sub-squivalent" unitig pairs.
+    //    "Equivalent" means having identical set of predecessors and identical targets (directional).
+    //    "Sub-equivalent" means unitigA has subsets of unitigB's predecessors and targets (directional),
+    //      where we can drop A for almost no loss.
+    // RET
+    //    # of treatments
+    int ret = 1, total = 0, iter=0;
+    // int verbose = 0;
+    float max_diff_ratio = 5;  // do no treat a pair if one of the unitig is significantly longer than the other one.
+
+    asg_t *auxsg = ug->g;
+    uint32_t nv;
+    asg_arc_t *av;
+    stacku32_t *h;
+    stacku32_t candidates;
+    stacku32_init(&candidates);
+
+    stacku32_t *buf = (stacku32_t*)malloc(sizeof(stacku32_t) * auxsg->n_seq*2);
+    for (uint32_t i=0; i<auxsg->n_seq*2; i++){
+        stacku32_init(&buf[i]);
+    }
+
+
+    while (ret && iter<50){
+        ret = 0;
+        for (uint32_t i=0; i<auxsg->n_seq*2; i++){
+            stacku32_reset(&buf[i]);
+        }   
+        // Collect predecessors and targets. Do not treat tips differently when they are predecessors/targets.
+        // "Packing" in the stack is:
+        //       {0,1}      |  predecessors....  | targets... | nb_predecessors | nb_targets
+        //  ^^1 if deleted                      
+        //  (directions of the predecessors are: pre -> unitig -> targets.)
+        for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+            h = &buf[vu];
+            int cnt1=0, cnt2=0;
+
+            // ignore tips or unconnected unitigs
+            if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)==0 || 
+                hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)==0){
+                    stacku32_push(h, (uint32_t)1);
+                    continue;  
+            }
+
+            // all green, collect info
+            stacku32_push(h, (uint32_t)0);
+
+            nv = asg_arc_n(auxsg, vu^1);
+            av = asg_arc_a(auxsg, vu^1);
+            for (int i=0; i<nv; i++){
+                if (av[i].del) continue;
+                stacku32_push(h, av[i].v^1);
+                cnt1++;
+            }
+
+            nv = asg_arc_n(auxsg, vu);
+            av = asg_arc_a(auxsg, vu);
+            for (int i=0; i<nv; i++){
+                if (av[i].del) continue;
+                stacku32_push(h, av[i].v);
+                cnt2++;
+            }
+            
+            stacku32_push(h, (uint32_t)cnt1);
+            stacku32_push(h, (uint32_t)cnt2);
+        }
+
+
+        // Compare. When there's a hit that fufills all requirements, 
+        //   we keep the one with higher coverage.
+        // The requirements: (sub)equivalence, max length, max length diff ratio.
+        for (uint32_t vu=0; vu<auxsg->n_seq*2-1; vu++){
+            if (buf[vu].a[0]) continue;  // vu is not considered, or has been removed
+            // collect candidates            
+            stacku32_reset(&candidates);
+            //   (dir 1)
+            nv = asg_arc_n(auxsg, vu^1);
+            av = asg_arc_a(auxsg, vu^1);
+            for (int i=0; i<nv; i++){
+                if (av[i].del) continue;
+                if ((av[i].v>>1)==(vu>>1)) continue;
+                int nw = asg_arc_n(auxsg, av[i].v^1);
+                asg_arc_t *aw = asg_arc_a(auxsg, av[i].v^1);
+                for (int j=0; j<nw; j++){
+                    if (aw[j].del) continue;
+                    if ((aw[j].v>>1)==(vu>>1)) continue;
+                    if (!stack32_is_in_stack(&candidates, aw[j].v)) stacku32_push(&candidates, aw[j].v);
+                }
+            }
+            //   (dir 2)
+            nv = asg_arc_n(auxsg, vu);
+            av = asg_arc_a(auxsg, vu);
+            for (int i=0; i<nv; i++){
+                if (av[i].del) continue;
+                if ((av[i].v>>1)==(vu>>1)) continue;
+                int nw = asg_arc_n(auxsg, av[i].v^1);
+                asg_arc_t *aw = asg_arc_a(auxsg, av[i].v^1);
+                for (int j=0; j<nw; j++){
+                    if (aw[j].del) continue;
+                    if ((aw[j].v>>1)==(vu>>1)) continue;
+                    if (!stack32_is_in_stack(&candidates, aw[j].v^1)) stacku32_push(&candidates, aw[j].v^1);
+                }
+            }
+
+            for (int i_wu=0; i_wu<candidates.n; i_wu++){
+                uint32_t wu = candidates.a[i_wu];
+                if ((vu>>1)==(wu>>1)) continue;   // skip, self comparison
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] check utg%.6d (dir %d) and utg%.6d (dir %d)\n", 
+                                __func__, (int)(vu>>1)+1, (int)(vu&1),
+                                        (int)(wu>>1)+1, (int)(wu&1));
+                }
+
+                
+                float len_diff_ratio = ((float)ug->u.a[vu>>1].len)/((float)ug->u.a[wu>>1].len);
+                len_diff_ratio = len_diff_ratio<1? 1/len_diff_ratio : len_diff_ratio;
+                if (len_diff_ratio>max_diff_ratio) continue;  // skip, length difference is too large
+                if (verbose){fprintf(stderr, "[debug::%s]     length ratio ok\n", __func__);}
+
+                if (ug->u.a[vu>>1].len>size_limit_bp || ug->u.a[wu>>1].len>size_limit_bp) continue;  // skip, one of the unitigs is too large
+                if (verbose){fprintf(stderr, "[debug::%s]     max length ok\n", __func__);}
+
+                int n_pre_vu = buf[vu].a[buf[vu].n-2];
+                int n_suc_vu = buf[vu].a[buf[vu].n-1];
+                int n_pre_wu = buf[wu].a[buf[wu].n-2];
+                int n_suc_wu = buf[wu].a[buf[wu].n-1];
+                int n_pre_min, n_suc_min;  // lengths of the smaller buffers
+                int n_pre_max, n_suc_max;  // lengths of the larger buffers
+                uint32_t the_larger, the_smaller;
+
+                if (n_pre_vu>=n_pre_wu && n_suc_vu>=n_suc_wu){
+                    n_pre_max = n_pre_vu;
+                    n_suc_max = n_suc_vu;
+                    n_pre_min = n_pre_wu;
+                    n_suc_min = n_suc_wu;
+                    the_larger = vu;
+                    the_smaller = wu;
+                }else if (n_pre_vu<=n_pre_wu && n_suc_vu<=n_suc_wu){
+                    n_pre_max = n_pre_wu;
+                    n_suc_max = n_suc_wu;
+                    n_pre_min = n_pre_vu;
+                    n_suc_min = n_suc_vu;
+                    the_larger = wu;
+                    the_smaller = vu;
+                }else{  // can't be a hit
+                    continue;
+                }
+                if (verbose){fprintf(stderr, "[debug::%s]     suc/tar sizes ok\n", __func__);}
+                
+                
+                // expect all entries in the smaller buffer to be found in the other larger or equal sized buffer
+                int passed = 1;
+                for (int n=0; n<n_pre_min; n++){
+                    if (!stack32_is_in_stack_givenrange(&buf[the_larger], buf[the_smaller].a[1+n], 1, 1+n_pre_max)){
+                        passed = 0;
+                        break;
+                    }
+                }
+                if (!passed) continue;
+                if (verbose){fprintf(stderr, "[debug::%s]     suc ok\n", __func__);}
+                for (int n=0; n<n_suc_min; n++){
+                    if (!stack32_is_in_stack_givenrange(&buf[the_larger], buf[the_smaller].a[1+n_pre_min+n], 1+n_pre_max, 1+n_pre_max+n_suc_max)){
+                        passed = 0;
+                        break;
+                    }
+                }
+                if (!passed) continue;
+                if (verbose){fprintf(stderr, "[debug::%s]     tar ok\n", __func__);}
+
+                if (passed){  // try to drop one of the unitig 
+                    uint32_t drop = ug->utg_coverage[vu>>1]<ug->utg_coverage[wu>>1]? vu : wu;
+                    hamt_ug_remove_a_unitig(sg, ug, drop, 1);
+                    buf[drop].a[0] = 1;
+                    ret++;
+                    if (verbose) {fprintf(stderr, "[debug::%s]     all green, drop utg%.6d\n", __func__, (int)(drop>>1)+1);}
+
+                    // leave the inner loop if we decided to drop vu (which is the handle given by the outer loop)
+                    // note/TODO: this is arbitrarily dependent on the order of checking. 
+                    //            To do better, maybe we can check all pairs and log the decisions,
+                    //             then find a set of cuts that maximizes the per base coverage after cutting.
+                    if (drop==vu) break;  
+                }
+            }
+        }
+
+        iter++;
+        total+=ret;
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+        if (VERBOSE || verbose) {fprintf(stderr, "[debug::%s] > iter %d, treated %d\n", __func__, iter, ret);}
+    }
+
+    // clean up
+    for (uint32_t i=0; i<auxsg->n_seq*2; i++){
+        stacku32_destroy(&buf[i]);
+    }
+    free(buf);
+    stacku32_destroy(&candidates);
+    if (VERBOSE || verbose) {
+        fprintf(stderr, "[M::%s] treated %d\n", __func__, ret);
+    } 
     return ret;
 }
 
@@ -8172,16 +8567,6 @@ finish:
     free(color);
     return ret;
 }
-int hamt_ug_popTangles_v2(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink, 
-                       uint32_t *buf_blacklist,  // redundant but kept to be consistent with v1 interface
-                       int base_label, int alt_label){
-    // NOTE
-    //     direction is source->...<-sink  // v1 interface consistency
-    // RETURN
-    //     number of arcs dropped
-    int ret = hamt_ug_pop_subgraph(sg, ug, source, sink^1, base_label, alt_label);
-    return ret;
-}
 
 int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, 
                            int base_label, int alt_label){
@@ -8209,15 +8594,14 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
         has_long_tig = 0;
         subgraph_size = non_tip_tigs = 0;
         for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
-            // if (vu&1){continue;}  // only need to check  for one direction
-            if (ug->u.a[vu>>1].len>500000) {has_long_tig = 1;}
             if (ug->u.a[vu>>1].subg_label==idx_subgraph){
+                if (ug->u.a[vu>>1].len>70000) {has_long_tig = 1;}  // expecting at least one handle
                 subgraph_size++;
                 vecu32_push(&buf, vu);
-            }
-            if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 &&
-                hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=0){
-                    non_tip_tigs++;
+                if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, base_label)!=0 &&
+                    hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=0){
+                        non_tip_tigs++;
+                }
             }
         }
         if (subgraph_size<2 || non_tip_tigs<2 || !has_long_tig){
@@ -8239,10 +8623,6 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                     fprintf(stderr, "[debug::%s] check source %.6d sink %.6d \n", __func__, 
                                             (int)(source>>1)+1, (int)(sink>>1)+1);
                 }
-
-                // // debug
-                // if (((source>>1)+1)!=1374) {continue;}
-                // if (((sink>>1)+1)!=2694) {continue;}
 
                 // (note: must check label, since hamt_ug_arc_flip_between is used and it only flip labels for simplicity)
                 if (base_label>=0 && auxsg->seq_vis[source>>1]!=base_label) {continue;}
@@ -8674,83 +9054,6 @@ int hamt_ug_rescue_bifurTip(asg_t *sg, ma_ug_t *ug, int base_label,
     return cnt;
 }
 
-// DO NOT USE (maybe)
-int hamt_asg_arc_del_intersample_branching(asg_t *sg,
-                    const ma_sub_t* coverage_cut,
-                    ma_hit_t_alloc* sources, R_to_U* ruIndex){
-    // FUNC
-    //     To be called after transitive reduction and basic asg cleaning routines.
-    //     For example, if we see a branching at segment A (sample X) whose child segments are 
-    //       B (sample X) and C (sample Y), we might want to favor B and discard A-C connection.
-    // NOTE
-    //     Will generate a temp ug.
-    // RET
-    //     Number of arcs dropped.
-
-    assert(asm_opt.mode_coasm);
-    if (!R_INF.coasm_sampleID){
-        fprintf(stderr, "[E::%s] co-assembly, sample info hasn't been loaded?\n", __func__);
-        exit(1);
-    }
-
-    int ret = 0;
-    int verbose = 0;
-    double startTime = Get_T();
-    ma_ug_t *ug = ma_ug_gen(sg);
-    asg_t *auxsg = ug->g;
-
-    uint32_t nv, wu; 
-    asg_arc_t *av;
-    uint32_t handle, target[2], target_v[2];
-
-    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
-        if (hamt_asgarc_util_countNoneTipSuc(auxsg, vu, -1)!=2){continue;}
-        if (ug->utg_coverage[vu>>1]>10) {continue;}
-        handle = ug->u.a[vu>>1].end;  // seqID, with direction bit
-        
-        nv = asg_arc_n(auxsg, vu);
-        av = asg_arc_a(auxsg, vu);
-        int san_i = 0;
-        for (uint32_t i=0; i<nv; i++){
-            if (av[i].del) {continue;}
-            wu = av[i].v;
-            if (hamt_asgarc_util_isTip(auxsg, wu, 0, 0, -1)) {continue;}
-            target[san_i] = ug->u.a[wu>>1].start;
-            target_v[san_i] = wu;
-            san_i++;
-        }
-        if (san_i!=2){
-            fprintf(stderr, "[E::%s] should not happen, san_i is %d\n", __func__, san_i);
-            exit(1);
-        }
-
-        // check sampleIDs of the segments
-        if (R_INF.coasm_sampleID[target[0]>>1]==R_INF.coasm_sampleID[target[1]>>1]){
-            continue;
-        }
-        if (R_INF.coasm_sampleID[handle>>1]!=R_INF.coasm_sampleID[target[0]>>1] &&
-            R_INF.coasm_sampleID[handle>>1]!=R_INF.coasm_sampleID[target[1]>>1]){
-            continue;
-        }
-        if (R_INF.coasm_sampleID[handle>>1]==R_INF.coasm_sampleID[target[0]>>1]){
-            hamt_ug_arc_del(sg, ug, vu, target_v[1], 1);
-        }else{
-            hamt_ug_arc_del(sg, ug, vu, target_v[0], 1);
-        }
-        ret+=1;
-    }
-    if (ret){
-        asg_cleanup(sg);
-        // asg_cleanup(auxsg);  // no need
-    }
-
-    hamt_ug_destroy(ug);
-    // (clean up sg)
-    if (verbose){
-        fprintf(stderr, "[debug::%s] treated %d spots, used %.2f s.\n", __func__, ret, Get_T()-startTime);
-    }
-    return ret;
-}
 
 int hamt_ug_cut_very_short_multi_tip(asg_t *sg, ma_ug_t *ug, int nb_threshold){
     // FUNC
@@ -8882,93 +9185,6 @@ int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, m
     fprintf(stderr, "[M::%s] cut %d\n", __func__, ret);
     return ret;
 }
-
-
-// int hamt_ug_drop_worse_ovlp_at_bifur(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources){
-//     // NOTE
-//     //      Was written during r43->r44, dropped because worse empirical performance and 
-//     //       potentail overfitting.            
-//     // FUNC
-//     //     For example, given a->b (inexact) and a->c (exact), 
-//     //      where a has 18x coverage, b 34x, c 16x,
-//     //      we might want to drop a->b.
-//     // RETURN
-//     //     Number of arcs dropped.
-//     int ret = 0;
-//     asg_t *auxsg = ug->g;
-//     ma_hit_t *h;
-
-//     uint32_t vu, nv, wu, v, w;
-//     asg_arc_t *av;
-//     int sancheck;
-//     int is_exact;
-//     uint32_t targets[5];
-//     int covs[5];
-//     int ovlp_lengths[5];
-//     int exact_status[5];
-
-//     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
-//         if (hamt_asgarc_util_countNoneDanglingTipSuc(auxsg, vu, 0)!=2){continue;}
-//         nv = asg_arc_n(auxsg, vu);
-//         av = asg_arc_a(auxsg, vu);
-        
-//         sancheck = 0;
-//         is_exact = 0;
-//         for (int i=0; i<nv; i++){
-//             if (av[i].del) continue;
-//             wu = av[i].v;
-//             if (hamt_asgarc_util_countSuc(auxsg, wu, 0, 0, 0)==0 && 
-//                 hamt_asgarc_util_countPre(auxsg, wu, 0, 0, 0)==1) continue;  // is a tip with only the vu as its neighbor
-
-//             if ((vu&1)==0){
-//                 v = ug->u.a[vu>>1].end^1;
-//             }else{
-//                 v = ug->u.a[vu>>1].start^1;
-//             }
-//             if ((wu&1)==0){
-//                 w = ug->u.a[wu>>1].start;
-//             }else{
-//                 w = ug->u.a[wu>>1].end;
-//             }
-
-//             h = get_specific_overlap_handle(sources, v>>1, w>>1);
-//             if (!h) continue;  // ERROR
-//             if (h->el) is_exact++;
-            
-//             targets[sancheck] = wu;
-//             covs[sancheck] = HAMT_DIFF(ug->utg_coverage[wu>>1], ug->utg_coverage[vu>>1]);
-//             ovlp_lengths[sancheck] = (int)(h->te - h->ts);
-//             exact_status[sancheck] = (int)h->el;
-//             sancheck++;
-//             if (sancheck>2) break;
-//         }
-//         // assert(sancheck==2);
-//         if (sancheck!=2) continue; // ERROR
-        
-//         if (is_exact!=1) continue;  // either both are inexact, or both are exact. Don't try to treat these.
-//         if (HAMT_MIN(covs[0], covs[1])>10) continue;  // one of the target contig shall have similar coverage to the query contig
-//         if ((float)HAMT_MAX(covs[0], covs[1])/HAMT_MIN(covs[0], covs[1])<5) continue;  // ... and the other target does not.
-
-//         // if we reach here, drop the worse one
-//         if (exact_status[0]==0) {
-//             wu = targets[1];
-//         }else{
-//             wu = targets[0];
-//         }
-//         hamt_ug_arc_del(sg, ug, vu, wu, 1);
-//         ret++;
-        
-//     }
-
-
-//     fprintf(stderr, "[M::%s] dropped %d\n", __func__, ret);
-//     return ret;
-// }
-
-
-
-
-
 
 
 int hamt_ug_3mer_cut_with_coverage(asg_t *sg, ma_ug_t *ug, int threshold_l){
@@ -9592,3 +9808,499 @@ finish:
     fprintf(stderr, "[M::%s] treated %d spots (%d unitigs)\n", __func__, ret, nb_treated);
     return ret;
 }
+
+void hamt_dump_haplotig_pairs(ma_ug_t *ug, 
+                              ma_hit_t_alloc * sources, ma_hit_t_alloc *reverse_sources, 
+                              char *asm_prefix){
+    // FUNC
+    //     Experimental; bin splitting assistance.
+    //     Wrapper around "hamt_check_diploid_report2" (despite the name there's no diploid assumption).
+    //     Write to tsv file: tigname1 tigname2 $hap_ratio
+    char *output_name = (char*)malloc(strlen(asm_prefix)+30);
+    char *utg_name = (char*)malloc(50);
+    char *utg_name2 = (char*)malloc(50);
+    sprintf(output_name, "%s.haplotigpairs.tsv", asm_prefix);
+    FILE *fp = fopen(output_name, "w");
+    assert(fp);
+
+    asg_t *auxsg = ug->g;
+    uint32_t vu, wu;
+    float ratio[4];
+    ma_utg_t *p;
+    for (vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1) continue;  // only need to check one direction
+        for (wu=0; wu<auxsg->n_seq*2; wu++){  // yes check all pairs.
+            if (wu&1) continue;
+            p = &ug->u.a[vu>>1];
+            sprintf(utg_name, "tig%.6d%c", (vu>>1) + 1, "lc"[p->circ]);
+            p = &ug->u.a[wu>>1];
+            sprintf(utg_name2, "tig%.6d%c", (wu>>1) + 1, "lc"[p->circ]);
+
+            hamt_check_diploid_report2(ug, vu, wu, sources, &ratio[0], &ratio[1]);
+            hamt_check_diploid_report2(ug, vu, wu, reverse_sources, &ratio[2], &ratio[3]);
+            if (ratio[0]<0.0001 && ratio[1]<0.0001 && ratio[2]<0.0001 && ratio[3]<0.0001){
+                continue;  // all (very close to) zero, no need to print.
+            }
+            fprintf(fp, "%s\t%d\t%s\t%d\t\%.4f\t%.4f\t%.4f\t%.4f\n", 
+                    utg_name, (int)ug->u.a[vu>>1].len, utg_name2, (int)ug->u.a[wu>>1].len, 
+                    ratio[0], ratio[1], ratio[2], ratio[3]);
+            
+        }
+    }
+
+    fclose(fp);
+    free(output_name);
+    free(utg_name); free(utg_name2);
+}
+
+int hamt_dump_path_coverage_with_haplotype_info_core(ma_ug_t *ug, asg_t *read_g, uint32_t vu, uint32_t wu, 
+                                                      ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, 
+                                                      R_to_U* ruIndex,
+                                                      const ma_sub_t* coverage_cut,
+                                                      uint64_t *buf, int buf_len, 
+                                                      uint8_t *flag){
+    // NOTE
+    //     vu and wu both have the direction bit.
+    //     `buf`: caller is responsible for allocating buf to length of at least utg_len(vu)+utg_len(wu)-overlapLength
+    //     `flag`: caller is responsible to allocate to length of # reads. 
+    //     (for the regular coverage est, see `get_ug_coverage`)
+    // NOTE ON BIAS
+    //     The estimations for ends, i.e. the start of vu and the end of wu, will be worse 
+    //      than the middle segments. 
+    // FUNC
+    //     Given two connected unitigs/contigs vu and wu, 
+    //      collected base-level infomation of cis- and trans- overlaps.
+    //     Takes containments into consideration.
+    //     For rescued/ditched/altered overlaps (e.g. hamt's containment treatment),
+    //      their information is not retained, therefore this function will not account for that.
+    // STORE RESULT
+    //     `buf` is a packed counter. Each slot is a base. The packing is:
+    //       cnt_het_total | cnt_hom_total | cnt_het | cnt_hom
+    // RETURN
+    //     0    fatal error (e.g. vu-wu arc not found)
+    //     1    ok
+    int verbose = 0;
+    int san_not_el=0;
+
+    asg_t *auxsg = ug->g;
+    asg_arc_t ug_arc;
+    if (!get_arc(auxsg, vu, wu, &ug_arc)){
+        return 0;
+    }
+    // int buf_len = ug->u.a[vu>>1].len+ug->u.a[wu>>1].len-ug_arc.ol;
+    assert (flag);
+    assert (buf);
+    memset(buf, 0, sizeof(uint64_t)*(buf_len) );
+    memset(flag, 0, read_g->n_seq);
+
+    ma_hit_t_alloc *the_source;
+    int shift, offset_read, offset_tig;
+    uint32_t is_unitig;
+    uint32_t rId, rId_tn;
+    uint8_t rev;
+    ma_hit_t *h;
+    ma_utg_t *utg_vu = &ug->u.a[vu>>1];
+    if (ug->u.a[vu>>1].n==0 || ug->u.a[wu>>1].n==0) return 0;  // sancheck empty unitig (shouldn't happen)
+    
+    // count within the unitigs
+    for (int which_utg=0; which_utg<=1; which_utg++){
+        if (which_utg==0) {
+            utg_vu = &ug->u.a[vu>>1];
+            offset_tig = 0;
+        }else {
+            utg_vu = &ug->u.a[wu>>1];
+            offset_tig = ug->u.a[vu>>1].len - ug_arc.ol;
+            fprintf(stderr, "offset_tig is %d, vu len %d, ol %d\n", (int)offset_tig, (int)(ug->u.a[vu>>1].len), (int)(ug_arc.ol));
+        }
+
+        for (int which=0; which<=1; which++){
+            if (which==0) {
+                the_source = sources;
+                shift = 0;
+            }
+            else {
+                the_source = reverse_sources;
+                shift = 16;
+            }
+            
+            offset_read = 0;  // start position of read
+            for (int k=0; k<utg_vu->n; k++){
+                rId = utg_vu->a[k]>>33;
+                
+                // base covered by this read
+                if (which==0){ 
+                    flag[rId] = 1;
+                    for (int i=0; i<coverage_cut[rId].e-coverage_cut[rId].s; i++){
+                        // fprintf(stderr, "try to use %d\n", (int)(i+offset_tig+offset_read));
+                        buf[i+offset_tig+offset_read] += ((uint64_t)2);  // 2 instead of 1 because i want a containment to count only as a half.
+                    }
+                }
+                
+                // also want to check if the current read contained any reads (that are now removed)
+                // (similar to get_ug_coverage but without the r_flag)
+                for (int i=0; i<the_source[rId].length; i++){
+                    h = &the_source[rId].buffer[i];
+                    if (h->el!=1) continue;
+                    rId_tn = Get_tn((*h));
+                    if (flag[rId_tn]) continue;
+                    flag[rId_tn] = 1;
+                    if (read_g->seq[rId_tn].del==1){
+                        get_R_to_U(ruIndex, rId_tn, &rId_tn, &is_unitig);
+                        if(rId_tn == (uint32_t)-1 || is_unitig == 1 || read_g->seq[rId_tn].del == 1) continue;
+                    }
+                    for (int i=Get_qs((*h)); i<Get_qe((*h)); i++){
+                        buf[i+offset_tig+offset_read] += ((uint64_t)1)<<shift;  // containment counted as a half.
+                    }
+                }
+                offset_read+=(uint32_t)utg_vu->a[k];  
+                // fprintf(stderr, "(1)offset_read is %d\n", (int)offset_read);
+            }
+        }
+        // end of: count within the unitigs
+
+        // fprintf(stderr, "-------------------\n");
+
+        // count outside of the unitigs
+        for (int which_utg=0; which_utg<=1; which_utg++){
+            if (which_utg==0) {
+                utg_vu = &ug->u.a[vu>>1];
+                offset_tig = 0;
+            }else {
+                utg_vu = &ug->u.a[wu>>1];
+                offset_tig = ug->u.a[vu>>1].len - ug_arc.ol;
+            }
+
+            for (int which=0; which<=1; which++){
+                if (which==0) {
+                    the_source = sources;
+                    shift = 0+32;
+                }
+                else {
+                    the_source = reverse_sources;
+                    shift = 16+32;
+                }
+                
+                offset_read = 0;  // start position of read
+                for (int k=0; k<utg_vu->n; k++){
+                    rev = (utg_vu->a[k]>>32) & 1;
+                    rId = utg_vu->a[k]>>33;
+                    for (int i=0; i<the_source[rId].length; i++){
+                        h = &the_source[rId].buffer[i];
+                        /*if (h->el!=1) continue;*/  // commented out to allow inexact
+                        rId_tn = Get_tn((*h));
+
+                        if (flag[rId_tn]) continue;  // target read is in the contig, or contained by reads of the contig, or has already been counted in this section.
+
+                        if (read_g->seq[rId_tn].del==1){
+                            get_R_to_U(ruIndex, rId_tn, &rId_tn, &is_unitig);
+                            if(rId_tn == (uint32_t)-1 || /*is_unitig == 1 ||*/ read_g->seq[rId_tn].del == 1) continue;  // allow the target read to be in other unitigs.
+                        }
+                        flag[rId_tn] = 1;
+                        
+                        // increment the counter: exact overlap
+                        for (uint32_t j=(uint32_t)h->qns; j<h->qe; j++){
+                            if (rev==0){
+                                buf[j+offset_tig+offset_read] += ((uint64_t)2)<<shift;
+                            }else{
+                                buf[offset_tig+offset_read+read_g->seq[rId].len-j] += ((uint64_t)2)<<shift;
+                            }
+                        }
+                        
+                        // if there's any overhang, grab them into the counter of het with half the score
+                        if ( ((uint32_t)h->qns==0 || h->qe>=read_g->seq[rId].len-1) && 
+                             (h->ts==0 || h->te>=read_g->seq[rId_tn].len-1) ) continue;
+                        for (int j=0; j<read_g->seq[rId_tn].len; j++){
+                            if (j>=h->ts && j<h->te) continue;  // is the matched part
+                            int tmp_offset;  // alignment block start position on the unitig (the position of qs if read is +, qe otherwise)
+                            int tmp_loc;  // base position
+                            if (rev==0){
+                                tmp_offset = offset_tig + offset_read + (uint32_t)h->qns;
+                            }else{
+                                tmp_offset = offset_tig + offset_read + (read_g->seq[rId].len-h->qe);
+                            }
+                            if (h->rev==0){
+                                tmp_loc = tmp_offset + j - h->ts;
+                            }else{
+                                tmp_loc = tmp_offset + h->te - j;
+                            }
+                            tmp_loc = tmp_loc>=0?  tmp_loc : 0;
+                            tmp_loc = tmp_loc<buf_len? tmp_loc : buf_len-1;
+                            // fprintf(stderr, "tmp_loc is %d\n", (int)(tmp_loc));
+                            buf[tmp_loc] += ((uint64_t)1)<<48;
+                        }
+                        san_not_el++;
+                        
+                    }
+                    offset_read+=(uint32_t)utg_vu->a[k]; 
+                    // fprintf(stderr, "(2)offset_read is %d\n", (int)offset_read);
+                }
+            }
+        }
+        // endof: count outside of the unitigs
+    }
+
+    if (verbose){
+        int san = 0;
+        for (int i=0; i<read_g->n_seq; i++){
+            if (flag[i]) san++;
+        }
+        fprintf(stderr, "[debug::%s] tigID vu %.6d wu %.6d, total reads considered %d (not el: %d), actual read counts were %d and %d\n", 
+                            __func__,
+                            (int)(vu>>1)+1, (int)(wu>>1)+1,
+                            san, san_not_el, 
+                            ug->u.a[vu>>1].n, ug->u.a[wu>>1].n);
+    }
+
+    return 1; // all ok
+}
+void hamt_dump_path_coverage_with_haplotype_info(ma_ug_t *ug, asg_t *read_g, 
+                              ma_hit_t_alloc * sources, ma_hit_t_alloc *reverse_sources, 
+                              R_to_U* ruIndex, const ma_sub_t* coverage_cut,
+                              char *asm_prefix){
+    // attempt of coverage estimation
+    // writes down base level counts.
+    char *output_name = (char*)malloc(strlen(asm_prefix)+30);
+    char *utg_name = (char*)malloc(50);
+    char *utg_name2 = (char*)malloc(50);
+    uint8_t *flag = (uint8_t*)malloc(read_g->n_seq);
+    int buf_m = 1000000, buf_n=0;
+    uint64_t *buf = (uint64_t*)malloc(buf_m*sizeof(uint64_t));
+
+    sprintf(output_name, "%s.hapcov.tsv", asm_prefix);
+    FILE *fp = fopen(output_name, "w");
+    assert (fp);
+
+    asg_t *auxsg = ug->g;
+    asg_arc_t *av;
+    int nv;
+    uint32_t vu, wu;
+    float ratio[4];
+    ma_utg_t *p;
+    int shift_masks[4] = {48, 32, 16, 0};
+
+    for (vu=0; vu<auxsg->n_seq*2; vu++){
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        if (nv==0) continue;
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            wu = av[i].v;
+            p = &ug->u.a[vu>>1];
+            sprintf(utg_name, "tig%.6d%c", (vu>>1) + 1, "lc"[p->circ]);
+            p = &ug->u.a[wu>>1];
+            sprintf(utg_name2, "tig%.6d%c", (wu>>1) + 1, "lc"[p->circ]);
+            // fprintf(stderr, "> vu %s wu %s\n", utg_name, utg_name2);
+
+            asg_arc_t ug_arc;
+            if (!get_arc(auxsg, vu, wu, &ug_arc)){
+                fprintf(stderr, "[E::%s] can't find wu %s (vu is %s)\n", __func__, utg_name2, utg_name);
+            }
+
+            if (vu==wu){
+                buf_n = ug->u.a[vu>>1].len * 2;
+                continue;  // won't choose to cut anyway, ignore it
+            }
+            else
+                buf_n = ug->u.a[vu>>1].len+ug->u.a[wu>>1].len-ug_arc.ol;
+
+            if (buf_n >buf_m){
+                fprintf(stderr, "[debug::%s] buf expands from %d to %d\n", __func__, buf_m, buf_n);
+                buf = (uint64_t*)realloc(buf, sizeof(uint64_t)*buf_n);
+                buf_m = buf_n;
+            }
+            if (!hamt_dump_path_coverage_with_haplotype_info_core(ug, read_g, vu, wu,
+                                                    sources, reverse_sources, 
+                                                    ruIndex, coverage_cut, buf, buf_n, flag)){
+                fprintf(stderr, "[E::%s] dump failed, ug1 %s ug2 %s\n", __func__, utg_name, utg_name2);
+                continue;
+            }
+            fprintf(fp, "%s\t%s", utg_name, utg_name2);
+            for (int i_mask=0; i_mask<4; i_mask++){
+                fprintf(fp, "\t");
+                for (int j=0; j<buf_n; j++){
+                    fprintf(fp, "%d,", (int) ((uint16_t) (buf[j] >> shift_masks[i_mask]) ) )  ;
+                }
+            }
+            fprintf(fp, "\n");
+        }
+    }
+
+
+    fclose(fp);
+    free(output_name);
+    free(utg_name); free(utg_name2);
+    free(flag);
+    free(buf);
+}
+
+
+void hamt_update_coverage(ma_ug_t *ug, asg_t *read_g, 
+                              ma_hit_t_alloc * sources, ma_hit_t_alloc *reverse_sources, 
+                              R_to_U* ruIndex, const ma_sub_t* coverage_cut,
+                              char *asm_prefix){
+    // FUNC
+    //     An expensive way to estimate coverage and coverage variances: not only count how many reads
+    //      are there in the contig, but also consider all their overlapping reads, including trans-overlaps,
+    //      at base level. 
+    //     Will also write a tsv file.
+    // NOTE
+    //     Doesn't align well enough with alignment-based estimation..
+    
+    char *utg_name = (char*)malloc(50);
+    char *output_name = (char*)malloc(strlen(asm_prefix)+30);
+    sprintf(output_name, "%s.hapcov_mean_and_variance.tsv", asm_prefix);
+    FILE *fp = fopen(output_name, "w");
+    assert (fp);
+    fprintf(fp, "contigName\tcontigLen\ttotalAvgDepth\t%s\t%s-var\n", asm_prefix, asm_prefix);
+
+    asg_t *auxsg = ug->g;
+    asg_arc_t *av;
+    uint32_t nv;
+    ma_utg_t *utg;
+    ma_hit_t *h;
+    uint32_t rId, rId_tn, is_unitig, uId, uId_tn;
+    uint8_t rev;  // if the read is on reverse strand of a unitig   
+    
+    
+    // mask of: which read could be used to estimate contig depth
+    //   - non-pctg-contig read and isolated reads can be double-counted between contigs (not within one contig)
+    //   - not-isolated reads that belong to the pctg (main assembly graph) will be only counted for its corresponding contig
+    uint8_t *ban = (uint8_t*)malloc(read_g->n_seq);
+    // init mask: collect reads that belong to the main assembly graph
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1) continue;  // only need one direction
+        if (hamt_asgarc_util_countPre(auxsg, vu, 0, 0, 0)==0 && hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)==0){
+            continue;  // contig is unconnected, allow its read to be counted in other contigs
+        }
+        utg = &ug->u.a[vu>>1];
+        for (int i=0; i<utg->n; i++){
+            ban[utg->a[i]>>33] = 2;
+        }
+    }
+
+    // count how many unitigs could a read overlap to
+    // If a free-floating read (:=does not belong to any connected contigs
+    //  in the primary assembly graph) have overlaps with more than one contigs,
+    //  we don't want it to be counted as weight 1 every time.
+    // Here implements not the best way, but better than ^ this: the weight
+    //  is 1/nb_target_contigs. 
+    uint8_t *targets = (uint8_t*)malloc(read_g->n_seq);
+    for (uint32_t i=0; i<read_g->n_seq; i++){
+        targets[i] = 1;
+    }
+    stacku32_t ru;
+    stacku32_init(&ru);
+    for (uint32_t i=0; i<sources->length; i++){
+        if (ban[i]==2) continue;  // read belong to a contig, won't be counted more than one time anyway
+        stacku32_reset(&ru);
+        rId = i;
+        get_R_to_U(ruIndex, rId, &uId, &is_unitig);
+        for (uint32_t j=0; j<sources[i].length; j++){
+            h = &sources[i].buffer[j];
+            rId_tn = Get_tn((*h));
+            get_R_to_U(ruIndex, rId_tn, &uId_tn, &is_unitig);
+            if(rId_tn == (uint32_t)-1 || is_unitig == 1 || read_g->seq[rId_tn].del == 1) continue;
+            if (uId_tn!=uId && !stack32_is_in_stack(&ru, uId_tn)){
+                targets[rId] = targets[rId]==255? 255 : targets[rId]+1;
+                stacku32_push(&ru, uId_tn);
+            }
+        }
+    }
+
+    // counter of per base depth
+    int counter_n = 0;
+    int counter_m = 5000000;
+    float *counter = (float*)calloc(counter_m, sizeof(float));
+    
+    float mean, variance;
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (vu&1) continue;  // only need one direction
+        if (ug->u.a[vu>>1].len>counter_m){
+            counter_m = ug->u.a[vu>>1].len;
+            counter = (float*)realloc(counter, sizeof(float)*counter_m);
+        }
+        counter_n = ug->u.a[vu>>1].len;
+        utg = &ug->u.a[vu>>1];
+
+        // reset mask and counter
+        for (int i=0; i<read_g->n_seq; i++){
+            if (ban[i]!=2) ban[i] = 0;
+        }
+        memset(counter, 0, sizeof(float)*counter_m);
+
+        // collect counts
+        int read_offset = 0;
+        for (int k=0; k<utg->n; k++){
+            rId = utg->a[k]>>33;
+            // count the current read
+            for (int idx=0; idx<coverage_cut[rId].e-coverage_cut[rId].s; idx++){
+                counter[read_offset+idx]+=1;
+            }
+
+            // count any read that was contained by the current read
+            for (int i=0; i<sources[rId].length; i++){
+                h = &sources[rId].buffer[i];
+                if (h->el!=1) continue;
+                rId_tn = Get_tn((*h));
+                if (ban[rId_tn]) continue;;
+                if (read_g->seq[rId_tn].del==1){
+                    get_R_to_U(ruIndex, rId_tn, &uId_tn, &is_unitig);
+                    if(uId_tn == (uint32_t)-1 || is_unitig == 1 || read_g->seq[uId_tn].del == 1) continue;
+                }
+                for (int j=Get_qs((*h)); j<Get_qe((*h)); j++){
+                    counter[read_offset+j]+= ((float)1)/targets[rId_tn];  // weighted
+                }
+                ban[rId_tn] = 1;
+            }
+
+            // count its overlapping reads
+            rev = (utg->a[k]>>32)&1;
+            for (int i=0; i<sources[rId].length; i++){
+                h = &sources[rId].buffer[i];
+                // if (h->el!=1) continue;  // do not allow inexact overlaps; comment out to allow.
+                rId_tn = Get_tn((*h));
+                if (ban[rId_tn]) continue;
+
+                for (uint32_t j=(uint32_t)h->qns; j<h->qe;j++){
+                    if (rev==0){
+                        counter[read_offset+j]+=((float)1)/targets[rId_tn];
+                    }else{
+                        counter[read_offset+read_g->seq[rId].len-j]+=((float)1)/targets[rId_tn];
+                    }
+                }
+                ban[rId_tn] = 1;
+            }
+
+            // update offset
+            read_offset += (uint32_t)utg->a[k];
+        }
+
+        // calculate mean
+        mean = 0;
+        for (int i=0; i<counter_n; i++){
+            mean += (counter[i]-mean)/(i+1);
+        }
+
+        // calculate std
+        variance = 0;
+        float tmp;
+        for (int i=0; i<counter_n; i++){
+            tmp = counter[i]-mean;
+            variance += tmp*tmp;
+        }
+        variance = variance/counter_n;
+
+        sprintf(utg_name, "s%d.ctg%.6d%c", (int)utg->subg_label, (vu>>1) + 1, "lc"[utg->circ]);
+        fprintf(fp, "%s\t%d\t%.3f\t%.3f\t%.3f\n", utg_name, ug->u.a[vu>>1].len,
+                                                    mean, mean, variance);
+    }
+
+
+    fclose(fp);
+    free(output_name);
+    free(utg_name);
+    free(ban);
+    free(counter);
+    free(targets); stacku32_destroy(&ru);
+}
+

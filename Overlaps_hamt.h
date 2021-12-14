@@ -69,6 +69,9 @@ int hamt_ug_resolve_small_multileaf_with_covcut(asg_t *sg, ma_ug_t *ug, int max_
 
 int hamt_ug_drop_transitive(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_label);
 
+int hamt_ug_drop_redundant_nodes(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_label);
+int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_limit_bp, int base_label, int verbose);
+
 // interface: pre-contig-gen cleaning
 void hamt_ug_prectgTopoClean(asg_t *sg, 
                             const ma_sub_t* coverage_cut, ma_hit_t_alloc* sources, R_to_U* ruIndex,
@@ -143,4 +146,20 @@ int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, m
 int hamt_ug_finalprune(asg_t *sg, ma_ug_t *ug);
 int hamt_ug_popLooseTangles(asg_t *sg, ma_ug_t *ug, int threshold_min_handle_length);
 int hamt_ug_popLooseTangles_v2(asg_t *sg, ma_ug_t *ug, int max_step);
+
+
+// binning experimental stuff
+
+void hamt_dump_path_coverage_with_haplotype_info(ma_ug_t *ug, asg_t *read_g, 
+                              ma_hit_t_alloc * sources, ma_hit_t_alloc *reverse_sources, 
+                              R_to_U* ruIndex, const ma_sub_t* coverage_cut,
+                              char *asm_prefix);
+void hamt_dump_haplotig_pairs(ma_ug_t *ug, 
+                              ma_hit_t_alloc * sources, ma_hit_t_alloc *reverse_sources, 
+                              char *asm_prefix);
+void hamt_update_coverage(ma_ug_t *ug, asg_t *read_g, 
+                              ma_hit_t_alloc * sources, ma_hit_t_alloc *reverse_sources, 
+                              R_to_U* ruIndex, const ma_sub_t* coverage_cut,
+                              char *asm_prefix);
+
 #endif // __OVERLAPS_HAMT__

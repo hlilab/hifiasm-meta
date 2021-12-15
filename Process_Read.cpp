@@ -98,7 +98,7 @@ void hamt_ovecinfo_write_to_disk(hifiasm_opt_t *opt){
 void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
     // NOTE
     //     all reads in mem and R_INF.OVEC_INF hasn't been initialized
-    fprintf(stderr, "[M::%s] loading ovecinfo bin file\n", __func__);
+    fprintf(stderr, "[M::%s] try loading ovecinfo bin file\n", __func__);
     double time = Get_T();
 
     int flag;
@@ -110,29 +110,45 @@ void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
     char *outname = (char*)malloc(strlen(opt->bin_base_name)+25);
     sprintf(outname, "%s.ovecinfo.bin", opt->bin_base_name);
     FILE *fp = fopen(outname, "r");
-    flag = fread(&total_reads, sizeof(uint64_t), 1, fp);
-    if (total_reads!=R_INF.total_reads){
-        fprintf(stderr, "ovecinfo read count != R_INF read count (%d vs %d), aborting\n",(int)total_reads, (int)R_INF.total_reads);
-        exit(1);
-    }
-    R_INF.OVEC_INF.n = R_INF.OVEC_INF.m = total_reads;
-    flag = fread(b, sizeof(int), total_reads, fp);
-    for (int i=0; i<total_reads; i++){
-        R_INF.OVEC_INF.a[i].n = b[i];
-		R_INF.OVEC_INF.a[i].m = b[i];
-        R_INF.OVEC_INF.a[i].tn = (uint32_t*)malloc(sizeof(uint32_t)*b[i]);
-        R_INF.OVEC_INF.a[i].is_match = (uint8_t*)malloc(sizeof(uint8_t)*b[i]);
-    }
-    for (int i=0; i<total_reads; i++){
-        for (int j=0; j<b[i]; j++){
-            flag = fread(&R_INF.OVEC_INF.a[i].tn[j], sizeof(uint32_t), 1, fp);
-            flag = fread(&R_INF.OVEC_INF.a[i].is_match[j], sizeof(uint8_t), 1, fp);
-        }
-    }
-    fclose(fp);
-	free(outname);
-	free(b);
-    fprintf(stderr, "[M::%s] loaded; used %.1f s\n\n", __func__, Get_T()-time);
+	if (!fp){
+		if (opt->use_ha_bin){
+			fprintf(stderr, "[M::%s]   => ha bins, will use dummy\n", __func__);
+			R_INF.OVEC_INF.n = R_INF.OVEC_INF.m = R_INF.total_reads;
+			for (int i=0; i<R_INF.total_reads; i++){
+				R_INF.OVEC_INF.a[i].n = 0;
+				R_INF.OVEC_INF.a[i].m = 1;
+				R_INF.OVEC_INF.a[i].tn = (uint32_t*)malloc(sizeof(uint32_t)*1);
+				R_INF.OVEC_INF.a[i].is_match = (uint8_t*)malloc(1);
+			}
+		}else{
+			fprintf(stderr, "using hamt bin files but ovecinfo bin missing? aborting\n");	
+			exit(1);
+		}
+	}else{
+		flag = fread(&total_reads, sizeof(uint64_t), 1, fp);
+		if (total_reads!=R_INF.total_reads){
+			fprintf(stderr, "ovecinfo read count != R_INF read count (%d vs %d), aborting\n",(int)total_reads, (int)R_INF.total_reads);
+			exit(1);
+		}
+		R_INF.OVEC_INF.n = R_INF.OVEC_INF.m = total_reads;
+		flag = fread(b, sizeof(int), total_reads, fp);
+		for (int i=0; i<total_reads; i++){
+			R_INF.OVEC_INF.a[i].n = b[i];
+			R_INF.OVEC_INF.a[i].m = b[i];
+			R_INF.OVEC_INF.a[i].tn = (uint32_t*)malloc(sizeof(uint32_t)*b[i]);
+			R_INF.OVEC_INF.a[i].is_match = (uint8_t*)malloc(sizeof(uint8_t)*b[i]);
+		}
+		for (int i=0; i<total_reads; i++){
+			for (int j=0; j<b[i]; j++){
+				flag = fread(&R_INF.OVEC_INF.a[i].tn[j], sizeof(uint32_t), 1, fp);
+				flag = fread(&R_INF.OVEC_INF.a[i].is_match[j], sizeof(uint8_t), 1, fp);
+			}
+		}
+		fclose(fp);
+		free(outname);
+		free(b);
+		fprintf(stderr, "[M::%s] loaded; used %.1f s\n\n", __func__, Get_T()-time);
+	}
 }
 
 

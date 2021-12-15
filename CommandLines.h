@@ -96,6 +96,7 @@ typedef struct {
     int lowq_thre_3;
     int write_debug_gfa;
     int write_new_graph_bins;
+    int use_ha_bin;  // 
 
     int is_final_round;
     int is_mode_low_cov;

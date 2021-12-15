@@ -48,6 +48,7 @@ static ko_longopt_t long_options[] = {
     { "gc-sb-max", ko_no_argument, 418},  // graph cleaning, max unitig length in superbubbles
     { "force-rs", ko_no_argument, 419},  // aka force-preovec, better named
     { "probe-gfa", ko_no_argument, 420},
+    { "use-ha-bin", ko_no_argument, 421}, // use hifiasm bin files - will ignore hamt-specific files and use placeholders.
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -176,6 +177,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->gc_superbubble_tig_max_length = 100000;
     asm_opt->gc_tangle_max_tig = 200;  // set to -1 to disable the limit
     asm_opt->is_aggressive = 0; 
+    asm_opt->use_ha_bin = 0;
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable
 }
@@ -538,6 +540,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         }
         else if (c == 418) {asm_opt->gc_superbubble_tig_max_length = atoi(opt.arg);}
         else if (c == 420) {asm_opt->do_probe_gfa = 1;}
+        else if (c == 421) {asm_opt->use_ha_bin = 1; fprintf(stderr, "[M::%s] use hifiasm bin files\n", __func__);}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

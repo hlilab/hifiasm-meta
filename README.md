@@ -10,6 +10,9 @@ cd hifiasm-meta && make
 hifiasm_meta -t32 -o asm reads.fq.gz 2>asm.log
 hifiasm_meta -t32 --force-rs -o asm reads.fq.gz 2>asm.log  # if the dataset has high redundancy
 ```
+A test dataset and the assembled results are available at [zenodo](https://zenodo.org/record/5908204). 
+This is downsampled from SRR13128014 (zymoBIOMICS D6331 mock community), containing (only the) 5 E.coli strains.
+Hifiasm-meta r57 takes roughly 5 minutes and a peak memory of 18GB. 
 
 ## About this fork
 
@@ -59,7 +62,7 @@ See also README\_ha.md, the stable hifiasm doc.
 ```
 
 
-## Preliminary results
+## Preliminary results (r49)
 
 
 We evaluated hifiasm-meta on the following public datasets:

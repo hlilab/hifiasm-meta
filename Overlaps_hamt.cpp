@@ -10403,7 +10403,7 @@ int* hamt_asggraph_scc(asg_t *g, int *n_scc){
     return ret;
 }
 
-int hamt_ug_scc_test(int *labels, uint32_t v, uint32_t w){
+int hamt_ug_scc_test(int *labels, uint32_t v, uint32_t w, int strict){
     // FUNC
     //    Given SCC info from the aux graph of a bidirected graph, 
     //     test if the two vertices are strongly connected.
@@ -10415,13 +10415,20 @@ int hamt_ug_scc_test(int *labels, uint32_t v, uint32_t w){
 
     int label0, stat1, stat2;
 
-    label0 = labels[v<<1];
-    stat1 = labels[(w<<1)| 0]==label0;
-    stat2 = labels[(w<<1)| 1]==label0;
-    if ( (stat1 && (!stat2)) || (stat2 && (!stat1)) ){
-        return 1;
+    if (strict){
+        label0 = labels[v<<1];
+        stat1 = labels[(w<<1)| 0]==label0;
+        stat2 = labels[(w<<1)| 1]==label0;
+        if ( (stat1 && (!stat2)) || (stat2 && (!stat1)) ){
+            return 1;
+        }
+        return 0;
+    }else{
+        return (labels[v<<1]==labels[w<<1] || 
+                labels[v<<1]==labels[(w<<1) |1] ||
+                labels[(v<<1) |1]==labels[w<<1] ||
+                labels[(v<<1) |1]==labels[(w<<1) |1]);
     }
-    return 0;
 }
 int hamt_ug_scc_count(ma_ug_t *ug, int *labels, uint32_t vu){
     // FUNC
@@ -10430,7 +10437,7 @@ int hamt_ug_scc_count(ma_ug_t *ug, int *labels, uint32_t vu){
     asg_t *auxsg = ug->g;
     for (uint32_t wu=0; wu<auxsg->n_seq*2; wu++){
         if ((wu>>1)==(vu>>1)) continue;
-        if (hamt_ug_scc_test(labels, vu>>1, wu>>1)){
+        if (hamt_ug_scc_test(labels, vu>>1, wu>>1, 0)){
             ret++;
         }
     }
@@ -10449,7 +10456,7 @@ void hamt_utg_scc_testing(ma_ug_t *ug, int *labels){
         for (uint32_t wu=vu; wu<ug->g->n_seq*2; wu++){
             if (wu&1) continue;
             if (wu==vu) continue;
-            if (hamt_ug_scc_test(labels, vu>>1, wu>>1))
+            if (hamt_ug_scc_test(labels, vu>>1, wu>>1, 0))
                 fprintf(stderr, "SCC\ttig%.6d\ttig%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
         }
     }
@@ -10489,7 +10496,7 @@ int hamt_ug_get_all_elementary_circuits_circuit(ma_ug_t *ug, int *sgscc_labels,
         wu = av[i].v;
         if ((wu>>1)<(root>>1)) continue;  // root has to be the smallest vertex
         if (verbose) {fprintf(stderr, "[debug::%s]  check wu=utg%.6d\n", __func__, (int)(wu>>1)+1);}
-        if (!hamt_ug_scc_test(sgscc_labels, vu>>1, wu>>1)) {
+        if (!hamt_ug_scc_test(sgscc_labels, vu>>1, wu>>1, 0)) {
             if (verbose) fprintf(stderr, "[debug::%s]    vu-wu not SCC, skip wu\n", __func__);
             continue;
         } 
@@ -10615,13 +10622,16 @@ void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
 }
 
 // opportunistic elementary circuits: 
-//   - seed from long contigs
+//   - seed from long contigs (TODO)
 //   - global soft block:  don't extend if one try uses too many "used" contigs
+//   - DFS stepping favors "unused" white contig first
 int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root, 
                                                          int *scclables, double *weights, uint8_t *color0,
                                                          int min_length, int max_length,
-                                                         int max_weight){
+                                                         int max_weight,
+                                                         stacku32_t *report_stack){
     int ret=0;
+    int verbose = 0;
     asg_t *g = ug->g;
     uint32_t nv, vu, wu;
     asg_arc_t *av;
@@ -10645,6 +10655,7 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
     total_weight += weights[root>>1];
     color[root] = 1;
     while (stacku32_pop(&s, &vu)){
+        if (verbose) {fprintf(stderr, "[debug::%s] pop %.6d\n", __func__, (int)(vu>>1)+1);}
         if (color[vu]==2) continue;
 
         nv = asg_arc_n(g, vu);
@@ -10662,56 +10673,69 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
                     ret = 1;
                     stacku32_push(&s, vu);
 
-                    // // one more try: truncate 25%, 50% and 75% and try again, can we find a smaller circle?
-                    stacku32_reset(&sb);
-                    stacku32_copyover(&s, &sb);
-                    for (float r=0.25; r<=0.75; r+=0.25){
-                        n_drop=s.n/4;
-                        if (n_drop==0) break;
-                        for(int j=0; j<n_drop; j++){
-                            stacku32_pop(&s, &wu);
-                            color[wu] = 2;
-                        }
-                        hamt_asg_get_one_cycle_with_constraint(ug, root, scclables, weights, color0, min_length, max_length, max_weight);
-                    }
-                    stacku32_reset(&s);
-                    stacku32_copyover(&sb, &s);
+                    // // // one more try: truncate 25%, 50% and 75% and try again, can we find a smaller circle?
+                    // if (verbose) {
+                    //     fprintf(stderr, "[debug::%s] truncation try:::\n", __func__);
+                    // }
+                    // stacku32_reset(&sb);
+                    // stacku32_copyover(&s, &sb);
+                    // for (float r=0.25; r<=0.75; r+=0.25){
+                    //     if (verbose) {fprintf(stderr, "[debug::%s] truncation try::: r=%f\n", __func__, r);}
+                    //     n_drop=s.n/4;
+                    //     if (n_drop==0) break;
+                    //     for(int j=0; j<n_drop; j++){
+                    //         stacku32_pop(&s, &wu);
+                    //         color[wu] = 2;
+                    //     }
+                    //     hamt_asg_get_one_cycle_with_constraint(ug, root, scclables, weights, color0, 
+                    //                                             min_length, max_length, max_weight,
+                    //                                             report_stack);
+                    // }
+                    // stacku32_reset(&s);
+                    // stacku32_copyover(&sb, &s);
 
                     // report...
                     fprintf(stderr, "[debug::%s] cycle(root=utg%.6d), total length=%d:\n", __func__, (int)(root>>1)+1, total_length);
+                    stacku32_push(report_stack, s.n);
                     for (int j=0; j<s.n; j++){
                         fprintf(stderr, "[debug::%s]         utg%.6d%c\n", __func__, (int)(s.a[j]>>1)+1, "+-"[s.a[j]&1]);
+                        stacku32_push(report_stack, s.a[j]);
                     }
                     // update weights
                     for (int j=0; j<s.n; j++){
-                        weights[s.a[j]>>1] += log10( (double) (ug->u.a[s.a[j]>>1].len) );
+                        // weights[s.a[j]>>1] += log10( (double) (ug->u.a[s.a[j]>>1].len) );
+                        weights[s.a[j]>>1] ++;
                     }
                     goto finish;
                 }
             }
-            if (!hamt_ug_scc_test(scclables, vu>>1, wu>>1)) continue;
+            if (!hamt_ug_scc_test(scclables, vu>>1, wu>>1, 0)) continue;
             if (color[wu]) continue;
             
             // extra constraints: check length
-            if (total_length+ug->u.a[wu>>1].len > max_length || total_weight+weights[wu>>1] > max_weight) {
+            if (/*total_length+ug->u.a[wu>>1].len > max_length ||*/ total_weight+weights[wu>>1] > max_weight) {
                 // instead kill this search and continue DFS,
                 // drop the last 1/4 of the DFS stack (marking them as visited)
                 // Will not mark child nodes of these dropped nodes as visited, though.
+                if (verbose) {fprintf(stderr, "[debug::%s] ======weight constraint failed, chop and retry\n", __func__);}
                 if (s.n<4) goto finish;
                 n_drop = s.n/4;
                 exhausted = 1;
                 for (i_d=0; i_d<n_drop; i_d++){
                     stacku32_pop(&s, &wu);
                     color[wu] = 2;
+                    total_weight -= weights[wu>>1];
                 }
+                if (verbose) {fprintf(stderr, "[debug::%s] ======search head now: %.6d\n", __func__, (int)(s.a[s.n-1]>>1)+1);}
                 break;  // leave the push loop
             }
 
             // (the regular white node push)
+            if (verbose) {fprintf(stderr, "[debug::%s]   put back %.6d, push %.6d\n", __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);}
             exhausted = 0;
             stacku32_push(&s, vu);
             stacku32_push(&s, wu);
-            total_length += ug->u.a[wu>>1].len;
+            total_length += ug->u.a[wu>>1].len;  // TODO: should minus overlap length! But it's expensive to get. Maybe just arbitrarily minus 8k or something.
             total_weight += weights[wu>>1];
             color[wu] = 1;
             break;
@@ -10719,7 +10743,7 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
         }
         if (exhausted) {
             color[vu] = 2;
-            total_length -= ug->u.a[vu>>1].len;
+            total_length -= ug->u.a[vu>>1].len;  // TODO: same, shouldn't be the whole unitig length
             total_weight -= weights[vu>>1];
         }
     }
@@ -10733,16 +10757,151 @@ finish:
     return ret;
 
 }
+int hamt_ug_sum_lengths_of_unitigs(uint32_t *a, int n, ma_ug_t *ug){
+    // FUNC
+    //     Given an array of unitig IDs (has direction but will ignore), 
+    //      return the total length.
+    int ret = 0;
+    for (int i=0; i<n; i++){
+        ret += ug->u.a[a[i]>>1].len;
+    } 
+    return ret;
+}
+void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s, ma_ug_t *ug){
+    // FUNC
+    //     Given a stack consists of found paths, drop paths that are too similar to 
+    //      others (by checking unitig ID or haplotig status).
+    //     WILL modify s in-place.
+    int verbose = 1;
+
+    int of1=0, of2=0, of1idx=0, of2idx=1;
+    int hits=0, hits_len=0;  // count duplications
+    int ll1, ll2;  // total unitig/contig lengths in path1 and path2, for checking duplication ratio in base pairs
+    uint32_t l1, l2;
+    int stat;
+    if (s->n==0){
+        fprintf(stderr, "[W::%s] empty stack\n", __func__);
+        return ;
+    }
+    of2 = s->a[0]+1;
+
+    stacku32_t cmp;
+    stacku32_init(&cmp);
+
+    // get length
+    uint8_t *color;
+    {
+        int l=0;
+        while (of1<s->n){
+            l++;
+            of1+=s->a[of1]+1;
+        }
+        color = (uint8_t*)calloc(l, 1);
+    }
+    of1 = 0;
+
+    while (of1<s->n){
+        // collect path1
+        l1 = s->a[of1];
+        if (color[of1idx]){  // path masked by a previous search, no need to check for more matches.
+            of1idx++;
+            of1+=l1+1;
+            continue;
+        }
+        stacku32_reset(&cmp);
+        for (int i=0; i<l1; i++){
+            stacku32_push(&cmp, s->a[of1+1+i]);
+        }
+        ll1 = hamt_ug_sum_lengths_of_unitigs(cmp.a, l1, ug);
+        
+        of2 = of1+1+l1;
+        of2idx = of1idx+1;
+
+        while (of2<s->n){
+            // collect path2
+            l2 = s->a[of2];
+            ll2 = hamt_ug_sum_lengths_of_unitigs(&s->a[of2+1], l2, ug);
+            hits_len = hits = 0;
+            for (int j=0; j<l2; j++){
+                uint32_t wu = s->a[of2+1+j];
+                stat = stacku32_index_value(&cmp, wu);
+                if (stat>=0){
+                    hits++;
+                    hits_len += ug->u.a[wu>>1].len;
+                }else{// otherwise, check if it's a haplotig pair
+                    for (int i=0; i<l1; i++){
+                        stat = hamt_check_diploid(ug, cmp.a[i], wu, 0.5, R_INF.reverse_paf);
+                        if (stat>0){
+                            hits++;
+                            hits_len += ug->u.a[wu>>1].len;
+                        }
+                    }
+                }
+            }
+
+            // do we want to mask path2?
+            if ((float)hits/(float)(l1>l2? l2 : l1) > 0.5 ||
+                 (float)hits_len/(float)(ll1>ll2? ll2 : ll1) > 0.5 ){
+                color[of2idx] = 1;
+            }
+            if (verbose){
+                fprintf(stderr, "[debug::%s] dropping=%c: ", __func__, "NY"[color[of2idx]]);
+                for (int i=0; i<l2; i++){
+                    fprintf(stderr, "%.6d, ", (int)(s->a[of2+1+i]>>1)+1);
+                }
+                fprintf(stderr, "\n[debug::%s]   base: ", __func__);
+                for (int i=0 ;i<cmp.n; i++){
+                    fprintf(stderr, "%.6d, ", (int)(cmp.a[i]>>1)+1);
+                }
+                fprintf(stderr, "\nhits=%d, hits_len=%d, ll1=%d, ll2=%d\n", hits, hits_len, ll1, ll2);
+            }
+
+            // step
+            of2+=l2+1;
+            of2idx++;
+        }
+        of1 += l1+1;
+        of1idx++;
+    }
+
+    stacku32_reset(&cmp);
+    for (of1=of1idx=0; of1<s->n; of1idx++){
+        l1 = s->a[of1];
+        if (!color[of1idx]){
+            stacku32_push(&cmp, (uint32_t)l1);
+            for (int i=0; i<l1; i++){
+                stacku32_push(&cmp, s->a[of1+1+i]);
+            }
+        }
+        of1+=l1+1;
+    }
+    // overwrite
+    stacku32_reset(s);
+    stacku32_copyover(&cmp, s);
+
+    free(color);
+    stacku32_destroy(&cmp);
+}
 void hamt_ug_opportunistic_elementary_circuits(ma_ug_t *ug){
     fprintf(stderr, ">>>\n");
     asg_t *auxsg = ug->g;
     int n_scc0;
     int *labels = hamt_asggraph_scc(auxsg, &n_scc0);
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        // if (vu&1) continue;
+        fprintf(stderr, "SCCdump\tctg%.6d%c\t%d\n", (int)(vu>>1)+1, "+-"[vu&1], labels[vu]);
+    }
     
     int total_report = 0, prev_total_report=-1;
     int ret = 0;
     double *weights = (double*)calloc(auxsg->n_seq, sizeof(double));
     uint8_t *color = (uint8_t*)malloc(auxsg->n_seq*2);
+    stacku32_t report_stack;
+    stacku32_init(&report_stack);
+
+    // stuff used to skip some searches
+    uint8_t *used = (uint8_t*)calloc(auxsg->n_seq, 1);  // if a vertex has been used in a cycle, never use it as root
+    int idx=0;
 
     int *scc_counts = (int*)calloc(auxsg->n_seq, sizeof(int));
     for (uint32_t i=0; i<auxsg->n_seq*2; i++){
@@ -10755,12 +10914,41 @@ void hamt_ug_opportunistic_elementary_circuits(ma_ug_t *ug){
         for (uint32_t root=0; root<auxsg->n_seq*2; root++){
             if (root&1) continue;
             if (scc_counts[root>>1]==0) continue;  // vertex is on its own.
-            
+            if (used[root>>1]) continue; // vertex is already in a cycle
+
+            // fprintf(stderr, "[debug::%s]root=%.6d, scc conut=%d\n", __func__, (int)(root>>1)+1, scc_counts[root>>1]);
+
             memset(color, 0, sizeof(uint8_t)*auxsg->n_seq*2);
+            
             ret = hamt_asg_get_one_cycle_with_constraint(ug, root, labels, weights, color, 
-                                                        1000000, 6000000, 50);
-            if (ret) total_report+=1;
+                                                        1000000, 6000000, 100, &report_stack);
+            if (ret) { // found a new cycle
+                total_report+=1;
+                // udpate mask
+                int tmpi=0, tmpl;
+                uint32_t *tmpa = &report_stack.a[idx];
+                while (tmpi<report_stack.n-idx){
+                    tmpl = tmpa[tmpi];
+                    for (int i=tmpi; i<tmpl; i++){
+                        used[tmpa[i+1]>>1] = 1;
+                    }
+                    tmpi+=tmpl+1;
+                }
+            }
         }
     }
+
+    hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(&report_stack, ug);
+    int of=0, l=0, ofidx=0;
+    while (of<report_stack.n){
+        l = report_stack.a[of];
+        fprintf(stderr, "[debug::%s] ===circ%d:\n", __func__, ofidx+1);
+        for (int i=0; i<l; i++){
+            fprintf(stderr, "[debug::%s]   utg%.6d%c\n", __func__, (int)(report_stack.a[of+1+i]>>1)+1, "+-"[report_stack.a[of+1+i]&1]);
+        }
+        of = of+1+l;
+        ofidx++;
+    }
     free(labels);
+    stacku32_destroy(&report_stack);
 }

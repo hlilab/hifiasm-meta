@@ -10695,7 +10695,7 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
                     // stacku32_copyover(&sb, &s);
 
                     // report...
-                    fprintf(stderr, "[debug::%s] cycle(root=utg%.6d), total length=%d:\n", __func__, (int)(root>>1)+1, total_length);
+                    fprintf(stderr, "[debug::%s] cycle(root=utg%.6d), unitigs' total length=%d:\n", __func__, (int)(root>>1)+1, total_length);
                     stacku32_push(report_stack, s.n);
                     for (int j=0; j<s.n; j++){
                         fprintf(stderr, "[debug::%s]         utg%.6d%c\n", __func__, (int)(s.a[j]>>1)+1, "+-"[s.a[j]&1]);
@@ -10757,22 +10757,64 @@ finish:
     return ret;
 
 }
-int hamt_ug_sum_lengths_of_unitigs(uint32_t *a, int n, ma_ug_t *ug){
+int hamt_ug_sum_lengths_of_unitigs(uint32_t *a, int n, ma_ug_t *ug, int is_path, int is_circ){
     // FUNC
     //     Given an array of unitig IDs (has direction but will ignore), 
-    //      return the total length.
+    //      return a rough estimation of path length if it's a path,
+    //      sum of lengths otherwise.
+    //     If input is a path, the array is expected to be in order.
+    // PAR
+    //     a - array of length n, containing unitig IDs (with the direction bit)
     int ret = 0;
     for (int i=0; i<n; i++){
         ret += ug->u.a[a[i]>>1].len;
-    } 
+    }
+    if (is_path){  // minus overlap lengths
+        uint32_t nv, vu, wu;
+        asg_arc_t *av;
+        asg_t *auxsg = ug->g;
+        for (int j, i=0; i<n-1; i++){
+            vu = a[i];
+            wu = a[i+1];
+            nv = asg_arc_n(auxsg, vu);
+            av = asg_arc_a(auxsg, vu);
+            for (j=0; j<nv; j++){
+                if (av[j].v!=wu) continue;
+                ret-=(uint32_t)av[j].ul;
+                break;
+            }
+            if (j==nv){
+                fprintf(stderr, "[E::%s] looking for overlap, not found (linear); continue anyway\n", __func__);
+            }
+        }
+        if (is_circ){
+            vu = a[n-1];
+            wu = a[0];
+            nv = asg_arc_n(auxsg, vu);
+            av = asg_arc_a(auxsg, vu);
+            int j;
+            for (j=0; j<nv; j++){
+                if (av[j].v!=wu) continue;
+                ret-=(uint32_t)av[j].ul;
+                break;
+            }
+            if (j==nv){
+                fprintf(stderr, "[E::%s] looking for overlap, not found (circ link %.6d -> %.6d); continue anyway\n", 
+                        __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
+            }
+        }
+    }
     return ret;
 }
 void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s, ma_ug_t *ug){
     // FUNC
     //     Given a stack consists of found paths, drop paths that are too similar to 
     //      others (by checking unitig ID or haplotig status).
-    //     WILL modify s in-place.
-    int verbose = 1;
+    //     WILL modify `s` in-place.
+    // NOTE
+    //     `s` is filled like so: array length1, value1, value2...., array length2, value1, value2, ... 
+    //     Long contig is always preferred over path-finding.  
+    int verbose = 0;
 
     int of1=0, of2=0, of1idx=0, of2idx=1;
     int hits=0, hits_len=0;  // count duplications
@@ -10788,19 +10830,38 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
     stacku32_t cmp;
     stacku32_init(&cmp);
 
-    // get length
+    // get number of paths in the stack, and length of each path
     uint8_t *color;
+    // uint64_t *pathlengths;
     {
         int l=0;
         while (of1<s->n){
             l++;
             of1+=s->a[of1]+1;
         }
-        color = (uint8_t*)calloc(l, 1);
+        color = (uint8_t*)calloc(l, 1);  // makr whether a path has been deleted
+        // pathlengths = (uint64_t*)calloc(l, sizeof(uint64_t));
+        // of1 = 0;
+        // int i=0; 
+        // while (of1<s->n){
+        //     stacku32_reset(&cmp);
+        //     l1 = s->a[of1];
+        //     for (int i=0; i<l1; i++){
+        //         stacku32_push(&cmp, s->a[of1+1+i]);
+        //     }
+        //     pathlengths[i++] = ((uint64_t)hamt_ug_sum_lengths_of_unitigs(cmp.a, l1, ug, 1, 1))<<32 | (uint32_t)i;
+        // }
+        // radix_sort_ovhamt64(pathlengths, pathlengths+l);
     }
-    of1 = 0;
 
+
+    
+    uint32_t maxl1, maxl2;  // length of the longest contig of path
+    of1 = 0;
     while (of1<s->n){
+        maxl1 = 0;
+        maxl2 = 0;
+
         // collect path1
         l1 = s->a[of1];
         if (color[of1idx]){  // path masked by a previous search, no need to check for more matches.
@@ -10811,16 +10872,44 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
         stacku32_reset(&cmp);
         for (int i=0; i<l1; i++){
             stacku32_push(&cmp, s->a[of1+1+i]);
+            maxl1 = maxl1>s->a[of1+1+i]? maxl1 : s->a[of1+1+i];
         }
-        ll1 = hamt_ug_sum_lengths_of_unitigs(cmp.a, l1, ug);
+        ll1 = hamt_ug_sum_lengths_of_unitigs(cmp.a, l1, ug, 1, 1);
+        if (ll1>8000000 || ll1<1000000) {  // path too large or too small
+            color[of1idx] = 1;
+            if (verbose){
+                fprintf(stderr, "[debug::%s] dropping1=%c (size;%d)\n", __func__, of1idx, ll1);
+            }
+            continue;
+        }
         
         of2 = of1+1+l1;
         of2idx = of1idx+1;
 
         while (of2<s->n){
-            // collect path2
             l2 = s->a[of2];
-            ll2 = hamt_ug_sum_lengths_of_unitigs(&s->a[of2+1], l2, ug);
+            for (int i=0; i<l2; i++) {
+                maxl2 = maxl2>s->a[of2+1+i]? maxl2 : s->a[of2+1+i];
+            }
+            
+            // collect path2
+            ll2 = hamt_ug_sum_lengths_of_unitigs(&s->a[of2+1], l2, ug, 1, 1);
+            if (ll2>8000000 || ll2<1000000){  // path too large
+                color[of2idx] = 1;
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] dropping2=%c (size;%d)\n", __func__, of2idx, ll2);
+                }
+                continue;
+            }
+            // (do nothing if both paths have long contigs)
+            if (maxl1>300000 && maxl2>300000 && (maxl1!=maxl2)) {
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] at %c, did not check %d (size)\n", 
+                        __func__, of1idx, of2idx);
+                }
+                continue;
+            }
+            // guess similarity: path 2 compared to path 1
             hits_len = hits = 0;
             for (int j=0; j<l2; j++){
                 uint32_t wu = s->a[of2+1+j];
@@ -10839,10 +10928,14 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
                 }
             }
 
-            // do we want to mask path2?
-            if ((float)hits/(float)(l1>l2? l2 : l1) > 0.5 ||
+            // do we want to mask path2? Or path1?
+            if ( /*(float)hits/(float)(l1>l2? l2 : l1) > 0.5 ||*/
                  (float)hits_len/(float)(ll1>ll2? ll2 : ll1) > 0.5 ){
-                color[of2idx] = 1;
+                if (!(maxl2>300000 && maxl1<300000)) {
+                    color[of2idx] = 1;
+                    // self note: don't leave the loop here to remove the most duplicates.
+                    //            You can leave and (thus randomly) let some cycles survive, though. 
+                }
             }
             if (verbose){
                 fprintf(stderr, "[debug::%s] dropping=%c: ", __func__, "NY"[color[of2idx]]);

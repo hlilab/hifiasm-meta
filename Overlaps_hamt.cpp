@@ -10798,10 +10798,10 @@ int hamt_ug_sum_lengths_of_unitigs(uint32_t *a, int n, ma_ug_t *ug, int is_path,
                 ret-=(uint32_t)av[j].ul;
                 break;
             }
-            if (j==nv){
-                fprintf(stderr, "[E::%s] looking for overlap, not found (circ link %.6d -> %.6d); continue anyway\n", 
-                        __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
-            }
+            // if (j==nv){
+            //     fprintf(stderr, "[E::%s] looking for overlap, not found (circ link %.6d -> %.6d); continue anyway\n", 
+            //             __func__, (int)(vu>>1)+1, (int)(wu>>1)+1);
+            // }
         }
     }
     return ret;

@@ -30395,6 +30395,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
 
+
             // topo pre clean
             if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
             int acc = 0;
@@ -30405,6 +30406,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 acc = hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnB", cleanID);}
+// hamt_ug_get_all_elementary_circuits(hamt_ug);
+//             exit(0);
+                // hamt_ug_opportunistic_elementary_circuits(hamt_ug);
+                // exit(0);
 
                 acc += hamt_ug_drop_redundant_nodes(sg, hamt_ug, 100000, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
@@ -30424,6 +30429,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 }   
             }
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;}
+
+            
 
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_utg", "utg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, -1);
@@ -30615,6 +30622,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             output_contig_graph_alternative(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
         }else{
+            // hamt_ug_get_all_elementary_circuits(hamt_ug);
+            // exit(0);
+            hamt_ug_opportunistic_elementary_circuits(hamt_ug);
+
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 0);
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "a_ctg", "ctg",

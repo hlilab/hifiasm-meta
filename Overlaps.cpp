@@ -193,9 +193,6 @@ uint64_t* source_index, long long listLen)
         
         add_ma_hit_t_alloc(dest_paf, &ele);
     }
-    if (asm_opt.get_specific_overlap_is_use_bf){
-        sort_one_paf_buffer_by_targetID(dest_paf);
-    }
 }
 
 void ma_ug_destroy(ma_ug_t *ug)
@@ -401,15 +398,6 @@ void destory_ma_hit_t_alloc(ma_hit_t_alloc* x, long long total_reads)
 
 void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element)
 {
-    // NOTE
-    //     Although we can choose to maintain sorting order when inserting,
-    //      given that 1) we might want to have different sort order under
-    //      different context, and 2) there might be a breakeven value
-    //      that we will choose no sorting for short buffers,
-    //     I choose to store sorting state.
-    //      To split read and write access, the sorting will be performed 
-    //      after calls of this function if needed. This way the code won't accidentally
-    //      break hifiasm's call of add_ma_hit_t_alloc.
 	if (x->length + 1 > x->size) {
 		x->size = x->length + 1;
 		kroundup32(x->size);
@@ -418,33 +406,46 @@ void add_ma_hit_t_alloc(ma_hit_t_alloc* x, ma_hit_t* element)
     int qn = (int)(element->qns>>32);
     int tn = (int)(element->tn);
 	x->buffer[x->length++] = *element;
-    x->buffer_sorted_by_qns = 0;
-    x->buffer_sorted_by_tn = 0;
 }
 
 long long get_specific_overlap_binarysearch(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn){
-	if (x->length==0) return -1;
-    assert(x->buffer_sorted_by_tn);
-    // if (!x->buffer_sorted_by_tn) {  // note: order is maintained by sorting after each `add_ma_hit_t_alloc`
-    //     radix_sort_hit_tn(x->buffer, x->buffer+x->length);
-    //     x->buffer_sorted_by_tn = 1;
-    // }
-	
-	int low=0, high=x->length-1, idx;
-    if (tn<x->buffer[0].tn || tn>x->buffer[high].tn) return -1; 
-
-    while (low<=high){
-        idx = (high-low)/2 + low;
-        if (tn<x->buffer[idx].tn){
-            high = idx-1;
-        }else if (tn>x->buffer[idx].tn){
-            low = idx+1;
+	// NOTE
+    //     Internal of get_specific_overlap, do not use directly.
+    
+    if (x->length==0) return -1;
+    
+    // the regulary binary search
+	int low=0, high=x->buffer_sorted_by_tn, mid;
+    int dbg_cnt = 0;
+    while (low<high){
+        mid = (high+low)/2;
+        assert ((uint32_t)(x->buffer[mid].qns>>32) == qn);  // debug - should be guaranteed but why does ha to check this?
+        if (tn<=x->buffer[mid].tn){
+            high = mid;
         }else{
-            assert( ((uint32_t)(x->buffer[idx].qns>>32)) == qn  );
-            return idx;
+            low = mid+1;
+        }
+        dbg_cnt++;
+        if (dbg_cnt>10000){
+            fprintf(stderr, "[E::%s] probably infinite loop; array traceback:\n", __func__);
+            for (int i=0; i<x->buffer_sorted_by_tn; i++){
+                fprintf(stderr, "%d ", (int)x->buffer[i].tn);
+            }
+            fprintf(stderr, "\n");
+            fflush(stderr);
+            exit(1);
         }
     }
-    return -1;
+    if (x->buffer[high].tn!=tn) {
+        if (x->length-1>x->buffer_sorted_by_tn){  // linear search the unsorted portion, if any
+            for (int i=x->buffer_sorted_by_tn+1; i<x->length; i++){
+                if (x->buffer[i].tn==tn)  return i;
+            }
+        }
+        return -1;
+    }else{
+        return high;
+    }
 }
 long long get_specific_overlap_linearsearch(ma_hit_t_alloc* x, uint32_t qn, uint32_t tn)
 {
@@ -881,7 +882,6 @@ static void hamt_normalize_ma_hit_t_single_side_advance_worker(void *data, long 
     uint64_t *is_hard_add_buf = d->is_hard_add_buf[tid];
     uint64_t *buf_n = &d->n[tid];
     uint64_t *buf_m = &d->m[tid];
-    // fprintf(stderr, "start: tid %d, n %d m%d\n", tid, (int)(*buf_n), (int)(*buf_m));fflush(stderr);
 
     long long i = (long long) i_r; 
     long long j, index;
@@ -971,8 +971,7 @@ void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long l
     
     int batch_size = n_cpu*64;
     long long nb_batch =  n_read/((long long)batch_size)+1;
-    uint64_t sancheckA = 0;
-    uint64_t sancheckB = 0;
+    uint64_t sancheckA = 0, sancheckB = 0;
     
 
     // init data
@@ -1031,7 +1030,6 @@ void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long l
         if (asm_opt.get_specific_overlap_is_use_bf){  // get_specific_overlap might use binary search so we have to sort
             sort_paf_buffers_by_targetID(sources, n_read);
         }
-
     }
 
     // cleanup
@@ -2108,7 +2106,8 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
 
     (*coverage_cut) = (ma_sub_t*)malloc(sizeof(ma_sub_t)*n_read);
 
-	uint64_t i, j, n_remained = 0;
+	uint64_t i, j;
+    int n_remained = 0, n_deleted = 0;
 	kvec_t(uint32_t) b = {0,0,0};
 
 	///all overlaps in vector a has been sorted by qns
@@ -2200,15 +2199,14 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
             (*coverage_cut)[i].s = (*coverage_cut)[i].e = 0;
 
             (*coverage_cut)[i].del = 1;
+            n_deleted++;
         }
 	}
 
 	free(b.a);
-    if(VERBOSE >= 1)
-    {   
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime); 
-        fflush(stderr);
-    }
+    
+    fprintf(stderr, "[M::%s] used %0.2f s, remained %d, deleted %d\n\n", __func__, 
+                Get_T()-startTime, n_remained, n_deleted); fflush(stderr);
 }
 
 
@@ -29913,12 +29911,14 @@ typedef struct{
 }pafbuffer_sort_tn_aux_t;
 static void sort_paf_buffers_by_targetID_worker(void *data, long i_read, int tid){  // callback for kt_for
     pafbuffer_sort_tn_aux_t *aux = (pafbuffer_sort_tn_aux_t*)data;
-    if (aux->x[i_read].buffer_sorted_by_tn) return;
     uint32_t buf_l = aux->x[i_read].length;
-    if (buf_l<LINEAR_BF_BREAKEVEN_POINT) return;
+
+    if (buf_l<LINEAR_BF_BREAKEVEN_POINT) return;  // will use linear search
+    if (aux->x[i_read].buffer_sorted_by_tn==(buf_l-1)) return;  // already sorted
+
     ma_hit_t *buf = aux->x[i_read].buffer;
     radix_sort_pafbuffer_sort(buf, buf+buf_l);
-    aux->x[i_read].buffer_sorted_by_tn = 1;
+    aux->x[i_read].buffer_sorted_by_tn = buf_l-1;
     return;
 }
 void sort_paf_buffers_by_targetID(ma_hit_t_alloc *source, long long n_read){
@@ -29940,6 +29940,39 @@ void sort_one_paf_buffer_by_targetID(ma_hit_t_alloc *x){
     ma_hit_t *buf = x->buffer;
     radix_sort_pafbuffer_sort(x->buffer, x->buffer+x->length);
     x->buffer_sorted_by_tn = 1;
+}
+void reset_paf_buffers_sorting_marks_targetID(ma_hit_t_alloc* sources, long long n_read){
+    for (long long i=0; i<n_read; i++){
+        sources[i].buffer_sorted_by_tn = 0;
+    }
+}
+
+
+#define mahit_qns_key(a) ((a).qns)
+KRADIX_SORT_INIT(pafbuffer_sort_qns, ma_hit_t, mahit_qns_key, member_size(ma_hit_t, qns))
+typedef struct{
+    long long n_read;
+    ma_hit_t_alloc *x;
+    int is_ignore_breakeven;
+}pafbuffer_sort_qns_aux_t;
+static void sort_paf_buffers_by_qns_worker(void *data, long i_read, int tid){  // callback for kt_for
+    pafbuffer_sort_qns_aux_t *aux = (pafbuffer_sort_qns_aux_t*)data;
+    uint32_t buf_l = aux->x[i_read].length;
+    if (aux->is_ignore_breakeven && buf_l<LINEAR_BF_BREAKEVEN_POINT) return;  //  linear search was used, order is fine
+
+    ma_hit_t *buf = aux->x[i_read].buffer;
+    radix_sort_pafbuffer_sort_qns(buf, buf+buf_l);
+}
+void sort_paf_buffers_by_qns(ma_hit_t_alloc *source, long long n_read, int is_ignore_breakeven_threshold){
+    // FUNC
+    //     Used to restore the ordering (key is qns) after binary search.
+    double startTime = Get_T();
+    int n_cpu = asm_opt.thread_num;
+    pafbuffer_sort_qns_aux_t aux;
+    aux.x = source;
+    aux.n_read = n_read;
+    aux.is_ignore_breakeven = is_ignore_breakeven_threshold;
+    kt_for(n_cpu, sort_paf_buffers_by_qns_worker, &aux, n_read);
 }
 
 
@@ -30204,21 +30237,19 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     fprintf(stderr, "[M::%s] no debug gfa\n", __func__);
 
     renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
+    reset_paf_buffers_sorting_marks_targetID(sources, n_read);
+    reset_paf_buffers_sorting_marks_targetID(reverse_sources, n_read);
 
-    asm_opt.get_specific_overlap_is_use_bf = 0; /////sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    
-    // normalize_ma_hit_t_single_side_advance(sources, n_read);
-    // normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
+    asm_opt.get_specific_overlap_is_use_bf = 1; 
+    sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
     hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
     hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
     
     memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
 
-
+    asm_opt.get_specific_overlap_is_use_bf = 0; 
+    sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
     clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // threaded
-    asm_opt.get_specific_overlap_is_use_bf = 0;
-
-
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     
     asm_opt.get_specific_overlap_is_use_bf = 0; //////sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);

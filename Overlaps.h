@@ -72,7 +72,11 @@ typedef struct {
 	// NOTE for the following:
 	//     This is for hamt routines only. Hifiasm might maintain sorted buffers,
 	//      remember that they will not be aware of these.
-	uint8_t buffer_sorted_by_tn:1, buffer_sorted_by_qns:1;  // hamt; TODO: maybe just use a mask?
+	// 0 if buffer is empty or not sorted; INT is the index that everything before this slot is sorted .
+	//   e.g. [0,1,2,3,4,2,3] will get marked by 4
+	//   This is introduced to compensate multithreading with insertions 
+	uint32_t buffer_sorted_by_tn;  
+	uint32_t buffer_sorted_by_qns;
 } ma_hit_t_alloc;
 
 

@@ -6202,7 +6202,7 @@ int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_lim
         //   we keep the one with higher coverage.
         // The requirements: (sub)equivalence, max length, max length diff ratio.
         for (uint32_t vu=0; vu<auxsg->n_seq*2-1; vu++){
-            if (buf[vu].a[0]) continue;  // vu is not considered, or has been removed
+            if (buf[vu].a[0]) continue;  // vu is ignored or has been removed
             // collect candidates            
             stacku32_reset(&candidates);
             //   (dir 1)
@@ -6236,6 +6236,7 @@ int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_lim
 
             for (int i_wu=0; i_wu<candidates.n; i_wu++){
                 uint32_t wu = candidates.a[i_wu];
+                if (buf[wu].a[0]) continue;
                 if ((vu>>1)==(wu>>1)) continue;   // skip, self comparison
                 if (verbose){
                     fprintf(stderr, "[debug::%s] check utg%.6d (dir %d) and utg%.6d (dir %d)\n", 

@@ -12040,16 +12040,6 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
 	uint32_t i, j, l;
 	char name[32];
 
-    // // GFA comment lines
-    // fprintf(fp, "#");
-    // for (int i=0; i<asm_argcv.ha_argc; i++){
-    //     fprintf(fp, " %s", asm_argcv.ha_argv[i]);
-    // }
-    // fprintf(fp, "\n");
-    // fprintf(fp, "# Hifiasm code base version: %s\n",  HA_VERSION);
-    // fprintf(fp, "# Hifiasm_meta version: %s\n", HAMT_VERSION);
-
-
 	for (i = 0; i < ug->u.n; ++i) { // the Segment lines in GFA
 		ma_utg_t *p = &ug->u.a[i];
         if(p->m == 0) continue;
@@ -30622,10 +30612,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             output_contig_graph_alternative(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
         }else{
-            // hamt_ug_get_all_elementary_circuits(hamt_ug);
-            // exit(0);
-            hamt_ug_opportunistic_elementary_circuits(hamt_ug);
-
+            // contig graph
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 0);
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "a_ctg", "ctg",
@@ -30633,6 +30620,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
                 hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
             }
+            
+            // path finding-based circle rescue
+            kvec_asg_arc_t_warp new_rtg_edges;
+            kv_init(new_rtg_edges.a);
+            ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
+                      sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
+            hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug);
+            kv_destroy(new_rtg_edges.a);
 
 
             // post pctg fixes (trinucleotide profiles etc)

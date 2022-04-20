@@ -54,6 +54,14 @@ float cosine_similarity(float *a, float *b, int l){
 
 }
 
+char seqcmp(char n){
+    if (n=='A') return 'T';
+    if (n=='T') return 'A';
+    if (n=='C') return 'G';
+    if (n=='G') return 'C';
+    return n;
+}
+
 //////////////////////////////////////////////////////////////////////
 //                        debug functions                           //
 //////////////////////////////////////////////////////////////////////
@@ -10272,11 +10280,15 @@ void hamt_update_coverage(ma_ug_t *ug, asg_t *read_g,
     free(targets); stacku32_destroy(&ru);
 }
 
+// FUNC
+//    Given a string or aux graph, label the vertices using
+//     DFSs similar to that of (mono-)directional graph SCC finding.
+//    To test if a pair of vertices are in the same SCC,
+//     use `hamt_ug_scc_test`.
+// RET
+//    An array of scc labels (length of n_vertices*2).
+//    Store number of SCCs in the n_scc.
 int* hamt_asggraph_scc(asg_t *g, int *n_scc){
-    // FUNC
-    //    Given a string/aux graph, identify its strongly connected componets.
-    // RET
-    //    An array of scc labels (length of n_vertices*2).
     int verbose = 0;
     int *ret = (int*)malloc(sizeof(int)*g->n_seq*2);
     for (int i=0; i<g->n_seq*2; i++){
@@ -10462,8 +10474,9 @@ void hamt_utg_scc_testing(ma_ug_t *ug, int *labels){
     }
 }
 
-
+#if 0
 // ref: Donald B. Johnson (1975) Finding all the elementary circuits of a directed graph
+// Helper function.
 void hamt_ug_get_all_elementary_circuits_unblock(uint32_t vu, uint8_t *blocked, stacku32_t *B){
     // FUNC
     //     Helper routine to handle unblocking. 
@@ -10475,12 +10488,13 @@ void hamt_ug_get_all_elementary_circuits_unblock(uint32_t vu, uint8_t *blocked, 
     }
     stacku32_reset(&B[vu]);
 }
+
+// ref: Donald B. Johnson (1975) Finding all the elementary circuits of a directed graph
+// Enumerate _all_ elemetary circuits.
 int hamt_ug_get_all_elementary_circuits_circuit(ma_ug_t *ug, int *sgscc_labels,
                                                 uint32_t root, uint32_t vu, 
                                                 stacku32_t *stack, uint8_t *blocked, stacku32_t *B,
                                                 stacku32_t *for_dump){
-    // FUNC
-    //     Recursively explore and report circuits. 
     int is_found = 0;
     int verbose = 0;
     asg_t *auxsg = ug->g;
@@ -10560,9 +10574,10 @@ int hamt_ug_get_all_elementary_circuits_circuit(ma_ug_t *ug, int *sgscc_labels,
     assert(tmp==vu);
     return is_found;
 }
+
+// Enumerate _all_ elementary circuits.
+// SCC and use Johnson's method
 void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
-    // FUNC - experimental
-    //     SCC and use Johnson's method
     int verbose = 1;
     asg_t *auxsg = ug->g;
     int n_scc0;
@@ -10620,6 +10635,8 @@ void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
     }
     free(B);
 }
+#endif
+
 
 // opportunistic elementary circuits: 
 //   - seed from long contigs (TODO)
@@ -10631,7 +10648,8 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
                                                          int max_weight,
                                                          stacku32_t *report_stack){
     int ret=0;
-    int verbose = 0;
+    int verbose = 0;  // print DFS debug info
+    int is_print_found = 0;  // print out the cycle
     asg_t *g = ug->g;
     uint32_t nv, vu, wu;
     asg_arc_t *av;
@@ -10694,17 +10712,17 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
                     // stacku32_reset(&s);
                     // stacku32_copyover(&sb, &s);
 
-                    // report...
-                    fprintf(stderr, "[debug::%s] cycle(root=utg%.6d), unitigs' total length=%d:\n", __func__, (int)(root>>1)+1, total_length);
+                    // push the circuit
+                    if (is_print_found) fprintf(stderr, "[debug::%s] cycle(root=utg%.6d), unitigs' total length=%d:\n", __func__, (int)(root>>1)+1, total_length);
                     stacku32_push(report_stack, s.n);
                     for (int j=0; j<s.n; j++){
-                        fprintf(stderr, "[debug::%s]         utg%.6d%c\n", __func__, (int)(s.a[j]>>1)+1, "+-"[s.a[j]&1]);
+                        if (is_print_found) fprintf(stderr, "[debug::%s]         utg%.6d%c\n", __func__, (int)(s.a[j]>>1)+1, "+-"[s.a[j]&1]);
                         stacku32_push(report_stack, s.a[j]);
                     }
                     // update weights
                     for (int j=0; j<s.n; j++){
-                        // weights[s.a[j]>>1] += log10( (double) (ug->u.a[s.a[j]>>1].len) );
-                        weights[s.a[j]>>1] ++;
+                        // weights[s.a[j]>>1] += log10( (double) (ug->u.a[s.a[j]>>1].len) );  // length-dependent weight
+                        weights[s.a[j]>>1] ++;  // a simple weight
                     }
                     goto finish;
                 }
@@ -10975,11 +10993,110 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
     free(color);
     stacku32_destroy(&cmp);
 }
-void hamt_ug_opportunistic_elementary_circuits(ma_ug_t *ug){
-    fprintf(stderr, ">>>\n");
+
+// FUNC
+//     Given a list of unitig/contig IDs, write the path's sequence in fasta format.
+//     Will not check whether the path is valid; caller is responsible.
+// PAR
+//     idx is used for naming the resulting contig.
+//     s is the start index. e is the end index (non-inclusive).
+void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ, 
+                                int pathID, FILE *fp){
+    int verbose = 0;
+    asg_t *auxsg = ug->g;
+    ma_utg_t *p;
+    char *seq = (char*)malloc(1000000); assert(seq);
+    int seq_m = 1000000;
+    char *s;
+    int i, j, j2=0, i2;
+
+    uint32_t vu, wu;
+    asg_arc_t *arc;
+    asg_arc_t *av;
+    uint32_t nv;
+    int arclen=0, arclen_last;
+
+    fprintf(fp, ">rc.%d", pathID);
+    for (i=0; i<l; i++){
+        fprintf(fp, " ctg%.6d%c", (int)(r[i]>>1)+1, "-+"[r[i]&1]);
+    }
+    fprintf(fp, "\n");
+    
+    if (verbose) fprintf(stderr, "[debug::%s] start, cnt=%d\n", __func__, l);
+    for (i=0; i<l; i++){
+        vu = r[i];
+        wu = r[i==l-1? 0 : i+1];
+
+        p = &ug->u.a[vu>>1];
+        if (vu&1){  // reverse strand
+            if (p->len>=seq_m){
+                seq_m = p->len+1;
+                seq = (char*)realloc(seq, seq_m); assert(seq);
+            }
+            for (j=p->len-1, j2=0; j>=0; j--){
+                seq[j2] = seqcmp(p->s[j]);
+                j2++;
+            }
+            seq[j2] = '\0';
+            s = seq;
+            if (verbose) fprintf(stderr, "[debug::%s]   - %d ctg %.6d, rev, arclen %d, seqlen %d\n", 
+                                __func__, i, (int)(vu>>1)+1, arclen, p->len);
+        }else{
+            s = p->s;
+            if (verbose) fprintf(stderr, "[debug::%s]   - %d ctg %.6d, ori, arclen %d, seqlen %d\n", 
+                                __func__, i, (int)(vu>>1)+1, arclen, p->len);
+        }
+
+        // write seq (if it's not the last one)
+        if (i!=l-1)
+            fprintf(fp, "%s", s+arclen);
+        else
+            arclen_last = arclen;
+        
+        // update arc length 
+        av = asg_arc_a(auxsg, vu);
+        nv = asg_arc_n(auxsg, vu);
+        for (j=0; j<nv; j++){
+            if (av[j].v==wu){
+                arc = &av[j];
+                break;
+            }
+        }
+        assert(j<nv);
+        arclen = (int)arc->ol;
+
+        // write the last contig: it is truncated on both ends 
+        if (i==l-1)  
+            fprintf(fp, "%.*s\n", (int)(p->len-arclen_last-arclen), p->s+arclen_last);
+    }
+    free(seq);
+}
+
+
+// FUNC
+//     Report deduplicated elementary circuits from a given unitig graph.
+//     This function does not try to enumerate all combinations
+//      as there are too many; instead it tries to get as many different circuits
+//      as possible, then deduplicate using read overlapping information.
+// PRE-CONDITION NOTE
+//     Unitig graph's sequence must be collected.   
+void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
+    double time = Get_T();
+    int is_print_found = 0;  // 0 to print, 1 to write a p_ctg2 file.
+    FILE *fp = 0;
+    char *fname = (char*)malloc(strlen(asm_opt.output_file_name)+50);
+    if (!is_print_found){
+        sprintf(fname, "%s.rescue.fa", asm_opt.output_file_name);
+        fp = fopen(fname, "w");
+        assert(fp);
+    }
+    
     asg_t *auxsg = ug->g;
     int n_scc0;
     int *labels = hamt_asggraph_scc(auxsg, &n_scc0);
+    // (debug print: output SCC label - note that testing if a pair of vertices are
+    //  in the same SCC is not simply comparing their labels.)
+    // fprintf(stderr, ">>>\n");
     // for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
     //     // if (vu&1) continue;
     //     fprintf(stderr, "SCCdump\tctg%.6d%c\t%d\n", (int)(vu>>1)+1, "+-"[vu&1], labels[vu]);
@@ -11009,8 +11126,6 @@ void hamt_ug_opportunistic_elementary_circuits(ma_ug_t *ug){
             if (scc_counts[root>>1]==0) continue;  // vertex is on its own.
             if (used[root>>1]) continue; // vertex is already in a cycle
 
-            // fprintf(stderr, "[debug::%s]root=%.6d, scc conut=%d\n", __func__, (int)(root>>1)+1, scc_counts[root>>1]);
-
             memset(color, 0, sizeof(uint8_t)*auxsg->n_seq*2);
             
             ret = hamt_asg_get_one_cycle_with_constraint(ug, root, labels, weights, color, 
@@ -11030,18 +11145,29 @@ void hamt_ug_opportunistic_elementary_circuits(ma_ug_t *ug){
             }
         }
     }
-
+    fprintf(stderr, "[M::%s] collected %d circuits, used %.2fs\n", __func__, total_report, Get_T()-time);
+    
+    time = Get_T();
     hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(&report_stack, ug);
     int of=0, l=0, ofidx=0;
     while (of<report_stack.n){
         l = report_stack.a[of];
-        fprintf(stderr, "[debug::%s] ===circ%d:\n", __func__, ofidx+1);
-        for (int i=0; i<l; i++){
-            fprintf(stderr, "[debug::%s]   utg%.6d%c\n", __func__, (int)(report_stack.a[of+1+i]>>1)+1, "+-"[report_stack.a[of+1+i]&1]);
+        if (is_print_found){
+            fprintf(stderr, "[debug::%s] ===circ%d:\n", __func__, ofidx+1);
+            for (int i=0; i<l; i++){
+                fprintf(stderr, "[debug::%s]   utg%.6d%c\n", __func__, 
+                        (int)(report_stack.a[of+1+i]>>1)+1, "+-"[report_stack.a[of+1+i]&1]);
+            }
+        }else{
+            hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
         }
         of = of+1+l;
         ofidx++;
     }
+    fprintf(stderr, "[M::%s] deduplicated, %d circuits remained, used %.2fs\n", __func__, ofidx, Get_T()-time);
+
+    if (fp) fclose(fp);
+    free(fname);
     free(labels);
     free(weights);
     free(color);

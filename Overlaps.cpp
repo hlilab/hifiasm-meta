@@ -1047,7 +1047,8 @@ void hamt_normalize_ma_hit_t_single_side_advance(ma_hit_t_alloc* sources, long l
 
     if(VERBOSE >= 0)
     {
-        fprintf(stderr, "[M::%s] takes %0.2fs, typeA %" PRIu64 " B %" PRIu64 "\n\n", __func__, Get_T()-startTime, sancheckA, sancheckB);
+        fprintf(stderr, "[M::%s] typeA %" PRIu64 " B %" PRIu64 ", used %.1fs\n\n", 
+                        __func__, sancheckA, sancheckB, Get_T()-startTime);
         fflush(stderr);
     }
 }
@@ -2084,11 +2085,9 @@ void ma_hit_flt(ma_hit_t_alloc* sources, long long n_read, ma_sub_t *coverage_cu
         }
     }
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] takes %0.2f s, typeA %d , typeB %d\n\n", __func__, Get_T()-startTime, nb_treatedA, nb_treatedB);
-        fflush(stderr);
-    }
+    fprintf(stderr, "[M::%s] typeA %d , typeB %d, used %.1fs\n", 
+                    __func__, nb_treatedA, nb_treatedB, Get_T()-startTime);
+
 }
 
 
@@ -2205,8 +2204,8 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
 
 	free(b.a);
     
-    fprintf(stderr, "[M::%s] used %0.2f s, remained %d, deleted %d\n\n", __func__, 
-                Get_T()-startTime, n_remained, n_deleted); fflush(stderr);
+    fprintf(stderr, "[M::%s] remained %d, deleted %d, used %.1fs\n", __func__, 
+                n_remained, n_deleted, Get_T()-startTime);
 }
 
 
@@ -2983,11 +2982,8 @@ ma_sub_t* coverage_cut, float shift_rate)
     free(b_q.a);
     free(b_t.a);
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] takes %0.2f s, n_simple_remove: %lld, n_complex_remove: %lld/%lld\n\n", 
-        __func__, Get_T()-startTime, n_simple_remove, n_complex_remove_real, n_complex_remove);
-    }
+    fprintf(stderr, "[M::%s] n_simple_remove: %lld, n_complex_remove: %lld/%lld, used %.1f\n", 
+        __func__, n_simple_remove, n_complex_remove_real, n_complex_remove, Get_T()-startTime);
 }
 
 int hamt_hit_contained_nested_containment(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, 
@@ -3706,9 +3702,8 @@ void hamt_hit_contained_multi(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_s
     kt_for(asm_opt.thread_num, hamt_hit_contained_worker, &aux, (long)n_read);
     // kt_for(1, hamt_hit_contained_worker, &aux, (long)n_read);
 
-    if (VERBOSE){
-        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \n\n", __func__, Get_T()-startTime, aux.counter);
-    }
+    fprintf(stderr, "[M::%s] treated roughly %d spots, used %.1fs\n", 
+        __func__, aux.counter, Get_T()-startTime);
 }
 
 void hamt_hit_contained_drop_singleton_multi(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_sources, long long n_read, uint64_t *readLen,
@@ -3727,9 +3722,9 @@ void hamt_hit_contained_drop_singleton_multi(ma_hit_t_alloc* sources, ma_hit_t_a
     kt_for(asm_opt.thread_num, hamt_hit_contained_drop_singleton_worker_v2, &aux, (long)n_read);
     // kt_for(1, hamt_hit_contained_drop_singleton_worker_v2, &aux, (long)n_read);
 
-    if (VERBOSE){
-        fprintf(stderr, "[M::%s] done, takes %0.2f s, treated roughly %d spots; \n\n", __func__, Get_T()-startTime, aux.counter);
-    }
+    fprintf(stderr, "[M::%s] treated roughly %d spots, used %.1fs\n", 
+                __func__, aux.counter, Get_T()-startTime);
+
 
 }
 
@@ -3882,10 +3877,7 @@ long long mini_overlap_length, ma_sub_t** coverage_cut)
         }
     }
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] takes %0.2f s, typeA %d , typeB %d\n\n", __func__, Get_T()-startTime, nb_treatedA, nb_treatedB);
-    }
+    fprintf(stderr, "[M::%s] typeA %d , typeB %d, used %.1f\n", __func__, nb_treatedA, nb_treatedB,  Get_T()-startTime);
     
 }
 
@@ -4093,7 +4085,7 @@ int max_hang, int min_ovlp)
 
     if(VERBOSE >= 1)
     {
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
+        fprintf(stderr, "[M::%s] used %.1f s\n", __func__, Get_T()-startTime);
     }
 
 	return g;
@@ -5791,10 +5783,8 @@ int asg_arc_identify_simple_bubbles_multi(asg_t *g, int check_cross)
     }
 
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] dropped total of %lld, used %.1fs\n", 
+                    __func__, bub_nodes+cross_nodes, Get_T()-startTime);
     return bub_nodes+cross_nodes;
 }
 
@@ -6254,12 +6244,6 @@ int asg_arc_del_single_node_directly(asg_t *g, long long longLen_thres, ma_hit_t
 		asg_symm(g);
 	}
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %d small bubbles\n", __func__, n_reduced);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
-
     return n_reduced;
 }
 
@@ -6585,20 +6569,13 @@ int asg_arc_del_trans(asg_t *g, int fuzz)
 	}
 	free(mark);
 
-    if(VERBOSE >= 1)
-    {
-	    fprintf(stderr, "[M::%s] transitively reduced %d arcs\n", __func__, n_reduced);
-    }
-
 	if (n_reduced) {
 		asg_cleanup(g);
 		asg_symm(g);
 	}
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] reduced %d arcs, used %.1fs\n", 
+                    __func__, n_reduced, Get_T()-startTime);
 	return n_reduced;
 }
 
@@ -6649,11 +6626,9 @@ int asg_cut_tip(asg_t *g, int max_ext)
 	}
 	free(a.a);
 	if (cnt > 0) asg_cleanup(g);
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] cut %d tips\n", __func__, cnt);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    
+    fprintf(stderr, "[M::%s] cut %d tips, used %.1f s\n", 
+                    __func__, cnt, Get_T()-startTime);
 	return cnt;
 }
 
@@ -8228,11 +8203,8 @@ ma_hit_t_alloc* reverse_sources, long long min_edge_length, R_to_U* ruIndex)
     asg_cleanup(g);
     asg_symm(g);
 	
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %d short overlaps\n", __func__, n_short);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] removed %d short overlaps, used %.1fs\n", 
+                    __func__, n_short, Get_T()-startTime);
 
 	return n_short;
 }
@@ -8426,11 +8398,8 @@ int if_skip_bubble, int if_drop, int if_check_hap, R_to_U* ruIndex)
 		asg_symm(g);
 	}
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %lld short overlaps\n", __func__, n_cut);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] removed %lld short overlaps, used %.1f\n", 
+                    __func__, n_cut, Get_T()-startTime);
 	return n_cut;
 }
 
@@ -9069,11 +9038,8 @@ ma_hit_t_alloc* reverse_sources, long long miniedgeLen, R_to_U* ruIndex)
 		asg_symm(g);
 	}
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %u false overlaps\n", __func__, n_cut);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] removed %u false overlaps, used %.1fs\n", 
+                    __func__, n_cut, Get_T()-startTime);
 	return n_cut;
 }
 
@@ -9814,11 +9780,7 @@ ma_hit_t_alloc* reverse_sources, long long miniedgeLen)
 		asg_symm(g);
 	}
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %d false overlaps\n", __func__, n_cut);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] removed %d false overlaps, used %.1fs\n", __func__, n_cut, Get_T()-startTime);
 	return n_cut;
 }
 
@@ -9948,11 +9910,8 @@ int asg_arc_del_short_diploid_by_exact(asg_t *g, int max_ext, ma_hit_t_alloc* so
 		asg_symm(g);
 	}
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %lld inexact overlaps\n", __func__, n_cut);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] removed %lld inexact overlaps, used %.1fs\n", 
+                    __func__, n_cut, Get_T()-startTime);
 	return n_cut;
 }
 
@@ -10189,11 +10148,9 @@ int asg_arc_del_short_diploi_by_suspect_edge(asg_t *g, int max_ext)
 		asg_cleanup(g);
 		asg_symm(g);
 	}
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %lld suspect overlaps\n", __func__, n_cut);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    
+    fprintf(stderr, "[M::%s] removed %lld suspect overlaps, used %.1fs\n", 
+                    __func__, n_cut, Get_T()-startTime);
 	return n_cut;
 }
 
@@ -10508,11 +10465,8 @@ int asg_arc_del_false_node_meta(asg_t *g, int max_ext)
 		asg_symm(g);
 	}
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %lld single nodes\n", __func__, n_cut);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] removed %lld single nodes, used %.1f\n", 
+                    __func__, n_cut, Get_T()-startTime);
 	return n_cut;
 }
 
@@ -12204,11 +12158,9 @@ void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_source
 
     if(VERBOSE >= 0)
     {
-        fprintf(stderr, "[M::%s] takes %0.2f s, treated %d\n\n", __func__, Get_T()-startTime, nb_treated);
+        fprintf(stderr, "[M::%s] treated %d, used %.1fs\n", __func__, nb_treated, Get_T()-startTime);
         fflush(stderr);
     }
-
-    // nothing was inserted, don't need to maintain sorting order
 }
     
 typedef struct {
@@ -17764,12 +17716,8 @@ ma_hit_t_alloc* reverse_sources, R_to_U* ruIndex)
         asg_symm(g);
     }
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %d triangular overlaps\n", 
-        __func__, n_reduced);
-        fprintf(stderr, "[M::%s] takes %0.2f s\n\n", __func__, Get_T()-startTime);
-    }
+    fprintf(stderr, "[M::%s] removed %d triangular overlaps, used %.1fs\n", 
+                    __func__, n_reduced, Get_T()-startTime);
     return n_reduced;
 }
 
@@ -18100,6 +18048,7 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
     //      (v can have more than 2 predecessors)
     // (hamt note) RETURN
     //    total number of arcs cut
+    double startTime = Get_T();
     uint32_t v, w, n_vtx = g->n_seq * 2, n_reduced = 0, convex, flag;
     long long ll/**, coverage**/;
     asg_arc_t *aw;
@@ -18182,11 +18131,8 @@ long long asg_arc_del_simple_circle_untig(ma_hit_t_alloc* sources, ma_sub_t* cov
     free(b.b.a);
     destory_C_graph(&cg);
 
-    if(VERBOSE >= 1)
-    {
-        fprintf(stderr, "[M::%s] removed %d self-circles\n", 
-        __func__, n_reduced);
-    }
+    fprintf(stderr, "[M::%s] removed %d self-circles, used %.1fs\n", 
+                    __func__, n_reduced, Get_T()-startTime);
 
     return n_reduced;
 }
@@ -29923,7 +29869,7 @@ void sort_paf_buffers_by_targetID(ma_hit_t_alloc *source, long long n_read){
 
     kt_for(n_cpu, sort_paf_buffers_by_targetID_worker, &aux, n_read);
 
-    // fprintf(stderr, "[T::%s] used %.2f s\n\n", __func__, Get_T()-startTime);
+    // fprintf(stderr, "[T::%s] used %.2f s\n", __func__, Get_T()-startTime);
 }
 void sort_one_paf_buffer_by_targetID(ma_hit_t_alloc *x){
     if (x->length<LINEAR_BF_BREAKEVEN_POINT) return;
@@ -30274,6 +30220,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asg_cut_tip(sg, asm_opt.max_short_tip);
     
+    fprintf(stderr, "[M::%s] ====== initial clean ======\n", __func__);
     if(clean_round > 0)
     {
         double cut_step;
@@ -30294,11 +30241,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 drop_ratio = max_ovlp_drop_ratio;
             }
 
-            if(VERBOSE >= 1)
-            {
-                fprintf(stderr, "\n\n**********%d-th round drop: drop_ratio = %f**********\n", 
-                i, drop_ratio);
-            }
+            fprintf(stderr, "\n\n**********%d-th round drop: drop_ratio = %f**********\n", 
+                            i, drop_ratio);
 
             hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // pre_clean(sources, coverage_cut, sg, bubble_dist);
             
@@ -30330,6 +30274,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         }
     }
 
+    fprintf(stderr, "\n\n********** last round **********\n");
 
     hamt_asgarc_drop_tips_and_bubbles(sources, sg, 3, -1);  // pre_clean(sources, coverage_cut, sg, bubble_dist);
 
@@ -30349,7 +30294,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
 
-
+    fprintf(stderr, "\n\n********** checkpoint: r_utg **********\n");
 
     if ((asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.write_new_graph_bins)
     {
@@ -30378,6 +30323,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
         // clean up ug
         {
+            double time;
             hamt_asg_reset_seq_label(sg, 0);
 
             int cleanID = 0;
@@ -30387,19 +30333,24 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
 
             // topo pre clean
-            if (VERBOSE){ fprintf(stderr, ">>> hamt ug cleaning :: topo preclean <<<\n"); }
+            fprintf(stderr, "[M::%s] ======= preclean =======\n", __func__);
             int acc = 0;
             for (int i=0; i<10; i++){
-                if (VERBOSE){ fprintf(stderr, "> hamt round %d\n", i); }                
+                time = Get_T();
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnA", cleanID);}
                 
                 acc = hamt_ug_basic_topoclean(sg, hamt_ug, 0, 1, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnB", cleanID);}
-// hamt_ug_get_all_elementary_circuits(hamt_ug);
-//             exit(0);
-                // hamt_ug_opportunistic_elementary_circuits(hamt_ug);
-                // exit(0);
+
+                // {  // debug
+                //     kvec_asg_arc_t_warp new_rtg_edges;
+                //     kv_init(new_rtg_edges.a);
+                //     ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
+                //       sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
+                //     hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug);
+                //     exit(0);
+                // }
 
                 acc += hamt_ug_drop_redundant_nodes(sg, hamt_ug, 100000, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
@@ -30412,19 +30363,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
                 acc += hamt_ug_cut_very_short_multi_tip(sg, hamt_ug, 4);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-
-                if (acc==0){
-                    if (VERBOSE) {fprintf(stderr, ">> topo cleaning early termination, round %d\n", i);}
-                    break;
-                }   
+                fprintf(stderr, "[M::%s] round %d, dropped %d, used %.1fs\n", __func__, i, acc, Get_T()-time);
+                if (acc==0) break;
             }
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_initTopo_cln", cleanID); cleanID++;}
 
             
-
+            fprintf(stderr, "\n\n********** checkpoint: p_utg **********\n\n");
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_utg", "utg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, -1);
 
+            time = Get_T();
             // cut dangling circles and inversion links
             hamt_circle_cleaning(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
@@ -30435,16 +30384,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_rescueBifurTip", cleanID); cleanID++;}
 
-            // ////////////////////
-            // hamt_clean_shared_seq(sg, hamt_ug, 0, 1, 0);
-            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_shared_cln", cleanID); cleanID++;}
-
-            // hamt_circle_cleaning(sg, hamt_ug, 0);
-            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
-            ///////////////
-
             hamt_ug_drop_shorter_ovlp(sg, hamt_ug, sources, reverse_sources);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
@@ -30452,7 +30391,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_covcutDFS_cln", cleanID); cleanID++;}
 
+            fprintf(stderr, "\n\n[M::%s] time check #1, %.1fs\n", __func__, Get_T()-time);
+
             // topo
+            time = Get_T();
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_drop_redundant_nodes(sg, hamt_ug, 100000, 0);
@@ -30462,15 +30404,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 100000, 0, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2-brute", cleanID); cleanID++;}
-            
+            fprintf(stderr, "\n\n[M::%s] time check #2, %.1fs\n", __func__, Get_T()-time);
 
             // more topo cleaning
+            time = Get_T();
             hamt_ug_prectgTopoClean(sg, coverage_cut, sources, ruIndex, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_TOPO2_and_prectg", cleanID); cleanID++;}
             hamt_ug_oneutgCircleCut(sg, hamt_ug, 0);
-
-            // one more round of basic topo cleaning
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "TOPO3_before", cleanID); cleanID++;}
             hamt_ug_basic_topoclean_simple(sg, hamt_ug, 0, 1, 0);
@@ -30479,12 +30420,15 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 100000, 0, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            fprintf(stderr, "\n\n[M::%s] time check #3, %.1fs\n", __func__, Get_T()-time);
 
             // resolve complex bubble
+            fprintf(stderr, "\n\n[M::%s] ======= complex bubbles =======\n", __func__);
             int nb_complex_bubble_cut;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
+                time = Get_T();
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveCmplx_before", cleanID); cleanID++;}
-                if (VERBOSE) fprintf(stderr, "[debug::%s] >>> complex bubble popping %d\n", __func__, round_resolve );
+                
                 nb_complex_bubble_cut = hamt_ug_prectg_resolve_complex_bubble(sg, hamt_ug, 0, 1, 0, asm_opt.gc_superbubble_tig_max_length);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips(sg, hamt_ug, 5, 0);
                 nb_complex_bubble_cut += hamt_ug_drop_midsizeTips_aggressive(sg, hamt_ug, 0.7, 0);
@@ -30500,109 +30444,146 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 200000, 0, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                
+                fprintf(stderr, "[M::%s] dropped %d, used %.1fs\n", __func__, nb_complex_bubble_cut, Get_T()-time);
+
                 if (nb_complex_bubble_cut==0){
-                    fprintf(stderr, "[M::%s] leave complex bubble popping (round %d)\n", __func__, round_resolve);
                     break;
                 }
             }
 
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamt_ug_oneutgCircleCut2(sg, hamt_ug, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamt_ug_oneutgCircleCut(sg, hamt_ug, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamt_ug_special_toploclean(sg, hamt_ug, 0, 1);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            fprintf(stderr, "\n\n[M::%s] ======= circle cut and topo cleans =======\n", __func__);
+            time = Get_T();
+            {
+                int tot=0;
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                tot += hamt_ug_oneutgCircleCut2(sg, hamt_ug, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                tot += hamt_ug_oneutgCircleCut(sg, hamt_ug, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                tot += hamt_ug_special_toploclean(sg, hamt_ug, 0, 1);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                fprintf(stderr, "[M::%s] treated %d, used %.1fs\n", __func__, tot, Get_T()-time);
+            }
 
             // resolve tangle
+            fprintf(stderr, "\n\n[M::%s] ======= tangles =======\n", __func__);
             int nb_tangle_cut, nb_tip;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
+                time = Get_T();
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
+                
+                time = Get_T();
                 nb_tangle_cut = hamt_ug_resolveTangles(sg, hamt_ug, 0, 1);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-                nb_tangle_cut += hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 50000, 0);
+                fprintf(stderr, "[M::%s] segment #1: %.1fs\n", __func__, Get_T()-time);
+
+                time = Get_T();
+                nb_tangle_cut = hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 50000, 0);
+                fprintf(stderr, "[M::%s] segment #2: %.1fs\n", __func__, Get_T()-time);
+                
+                time = Get_T();
                 nb_tangle_cut += hamt_ug_covcut_falseVertexLoop(sg, hamt_ug, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                fprintf(stderr, "[M::%s] segment #3: %.1fs\n", __func__, Get_T()-time);
 
+                time = Get_T();
                 hamt_ug_drop_redundant_nodes(sg, hamt_ug, 200000, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                fprintf(stderr, "[M::%s] segment #4: %.1fs\n", __func__, Get_T()-time);
 
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before-brute", cleanID); cleanID++;}
+                
+                time = Get_T();
                 hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 200000, 0, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                fprintf(stderr, "[M::%s] segment #5: %.1fs\n", __func__, Get_T()-time);
 
+                fprintf(stderr, "[M::%s] round %d, cut %d, used %.1fs\n", __func__, round_resolve, nb_tangle_cut, Get_T()-time);
                 if (nb_tangle_cut==0){
-                    if (VERBOSE) {fprintf(stderr, "debug, early termination of tangle pop (round %d)\n", round_resolve);}
                     break;
                 }
             }
+
             // rescues
-            hamt_ug_pop_simpleShortCut(sg, hamt_ug, 0, 1, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, ruIndex, coverage_cut, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterRescue", cleanID);cleanID++;}
-            hamt_ug_prectg_rescueShortCircuit_simpleAggressive(sg, hamt_ug, sources, reverse_sources, coverage_cut, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterRescue", cleanID);cleanID++;}
+            fprintf(stderr, "\n\n[M::%s] ======= rescues and coverage-based cut =======\n", __func__);
+            time = Get_T();
+            {
+                int tot=0;
+                tot += hamt_ug_pop_simpleShortCut(sg, hamt_ug, 0, 1, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                
+                tot += hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, ruIndex, coverage_cut, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterRescue", cleanID);cleanID++;}
+                
+                tot += hamt_ug_prectg_rescueShortCircuit_simpleAggressive(sg, hamt_ug, sources, reverse_sources, coverage_cut, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterRescue", cleanID);cleanID++;}
+                
+                fprintf(stderr, "[M::%s] treated %d, used %.1fs\n", __func__, tot, Get_T()-time);
+            }
 
             // hap cov cut
+            time = Get_T();
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeHapCovCut", cleanID);cleanID++;}
             hamt_ug_treatBifurcation_hapCovCut(sg, hamt_ug, 0.7, 0.5, reverse_sources, 0, 1);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "midHapCovCut", cleanID);cleanID++;}
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            fprintf(stderr, "[M::%s] time check #1: used %.1fs\n", __func__, Get_T()-time);
 
+            time = Get_T();
             hamt_ug_try_circularize(sg, hamt_ug, sources, reverse_sources, ruIndex, coverage_cut, 1000000);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            fprintf(stderr, "[M::%s] time check #2: used %.1fs\n", __func__, Get_T()-time);
 
+            time = Get_T();
             hamt_ugasg_cut_shortTips(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_cut_shortTips_arbitrary(sg, hamt_ug, 30000, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            fprintf(stderr, "[M::%s] time check #3: used %.1fs\n", __func__, Get_T()-time);
 
+            time = Get_T();
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIF", cleanID);cleanID++;}
             hamt_ug_resolve_fake_haplotype_bifurcation(sg, hamt_ug, 0, sources, reverse_sources);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "beforeBIFagg", cleanID); cleanID++;}
+            fprintf(stderr, "[M::%s] time check #4: used %.1fs\n", __func__, Get_T()-time);
 
+            time = Get_T();
             hamt_ug_pop_tinyFlatCircles(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterflatcircle", cleanID); cleanID++;}
+            fprintf(stderr, "[M::%s] time check #5: used %.1fs\n", __func__, Get_T()-time);
 
-
+            time = Get_T();
             hamt_ug_prectg_rescueShortCircuit(sg, sources, reverse_sources, ruIndex, coverage_cut, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterShortCircuit", cleanID); cleanID++;}
+            fprintf(stderr, "[M::%s] time check #6: used %.1fs\n", __func__, Get_T()-time);
 
+            time = Get_T();
             hamt_ug_pop_unevenInvertBubble(sg, hamt_ug, 0, 1);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "afterunevenInv", cleanID); cleanID++;}
+            fprintf(stderr, "[M::%s] time check #7: used %.1fs\n", __func__, Get_T()-time);
 
-            // final cleanup
+            time = Get_T();
             hamt_ug_cleanup_almost_circular(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_pop_simpleInvertBubble(sg, hamt_ug, 0, 1, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            fprintf(stderr, "[M::%s] time check #8: used %.1fs\n", __func__, Get_T()-time);
 
-            // 
+            time = Get_T();
             hamt_ug_try_circularize(sg, hamt_ug, sources, reverse_sources, ruIndex, coverage_cut, 1000000);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             hamt_ug_rescueLongUtg(sg, sources, reverse_sources, ruIndex, coverage_cut);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-
+            fprintf(stderr, "[M::%s] time check #9: used %.1fs\n", __func__, Get_T()-time);
         }  
 
-        #if 0
-        // (hifiasm's p_utg graph cleaning + generation checkpoint)
-        if (asm_opt.is_use_exp_graph_cleaning){
-            hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_utg", "utg",
-                                     sources, ruIndex, max_hang_length, mini_overlap_length, -1);
-        }else{
-            output_contig_graph_primary_pre(sg, coverage_cut, output_file_name, sources, reverse_sources, 
-                asm_opt.small_pop_bubble_size, asm_opt.max_short_tip, ruIndex, max_hang_length, mini_overlap_length);
-        }
-        #endif
+        fprintf(stderr, "\n\n********** checkpoint: p_ctg **********\n\n");
 
         // p_ctg and a_ctg
         if (!asm_opt.is_use_exp_graph_cleaning){
@@ -30621,6 +30602,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
             }
             
+            fprintf(stderr, "\n\n********** checkpoint: post-assembly **********\n\n");
+
             // path finding-based circle rescue
             kvec_asg_arc_t_warp new_rtg_edges;
             kv_init(new_rtg_edges.a);

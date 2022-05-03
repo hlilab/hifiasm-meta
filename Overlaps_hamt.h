@@ -76,9 +76,9 @@ int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_lim
 void hamt_ug_prectgTopoClean(asg_t *sg, 
                             const ma_sub_t* coverage_cut, ma_hit_t_alloc* sources, R_to_U* ruIndex,
                             int base_label, int alt_label, int is_hard_drop);
-void hamt_ug_prectg_rescueShortCircuit(asg_t *sg, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, R_to_U* ruIndex,
+int hamt_ug_prectg_rescueShortCircuit(asg_t *sg, ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, R_to_U* ruIndex,
                                         const ma_sub_t* coverage_cut, int base_label);
-void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug, 
+int hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug, 
                                                         ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
                                                         const ma_sub_t* coverage_cut, 
                                                         int base_label);

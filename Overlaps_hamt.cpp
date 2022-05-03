@@ -9,6 +9,7 @@
 #include "CommandLines.h" 
 #include "Overlaps_hamt.h"
 #include "ksort.h"
+#include "htab.h"
 
 #define HAMT_MAX(x, y) ((x >= y)?(x):(y))  // same
 #define HAMT_MIN(x, y) ((x <= y)?(x):(y))  // same
@@ -25,24 +26,6 @@ KRADIX_SORT_INIT(ovhamt32, uint32_t, uint32_t, 4)
 void hamt_ug_util_BFS_markSubgraph_trailing(ma_ug_t *ug_old, ma_ug_t *ug_new, int base_label);
 
 
-const unsigned char seq_nt4_table[256] = {
-	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  3, 3, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  3, 3, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-	4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4
-};
 float cosine_similarity(float *a, float *b, int l){
     float d=0, A=0, B=0;
     for (int i=0; i<l; i++){
@@ -3493,15 +3476,15 @@ int hamt_ug_pop_unevenInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int a
 void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int max_arcs, int max_length){
     double startTime = Get_T();
     uint32_t n_vtx = g->n_seq*2, v;
-    uint32_t n_del;
+    uint32_t n_del=0, n_del_tot=0;
     int pre, suc, l, ret;
 
     asg64_v a = {0,0,0};
+    int i_round;
     
-    for (int i_round=0; i_round<3; i_round++)
+    for (i_round=0; i_round<3; i_round++)
     {
         n_del = 0;
-
         // drop simple circles
         n_del += asg_arc_del_simple_circle_untig(NULL, NULL, g, 100, 0);
 
@@ -3517,19 +3500,15 @@ void hamt_asgarc_drop_tips_and_bubbles(ma_hit_t_alloc* sources, asg_t *g, int ma
             {break;}
         else{
             asg_cleanup(g);
-            if (VERBOSE>=1){
-                fprintf(stderr, "[M::%s] removed %d locations\n", __func__, n_del);
-                fprintf(stderr, "[M::%s] took %0.2f s\n\n", __func__, Get_T()-startTime);
-            }
         }
         
-        n_del = 0;
-        n_del = hamt_sg_pop_simpleInvertBubble(g);
-        if (VERBOSE>=1){
-            fprintf(stderr, "[M::%s] removed %d invert bubble on string graph\n", __func__, n_del);
-        }
+        n_del += hamt_sg_pop_simpleInvertBubble(g);
+        n_del_tot += n_del;
     }
     free(a.a);
+
+    fprintf(stderr, "[M::%s] did %d rounds, dropped %d spots, used %.1f s\n\n", 
+                        __func__, i_round, n_del_tot, Get_T()-startTime);
 
 }
 
@@ -7145,7 +7124,7 @@ void hamt_ug_prectgTopoClean(asg_t *sg,
 
 }
 
-void hamt_ug_prectg_rescueShortCircuit(asg_t *sg, 
+int hamt_ug_prectg_rescueShortCircuit(asg_t *sg, 
                                         ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources, R_to_U* ruIndex,
                                         const ma_sub_t* coverage_cut, int base_label){
     // exp
@@ -7159,7 +7138,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
     //    Only use after basic topo clean has been done, this function will only check very simple cases.
     //    Does several rounds of ug destroy-regen, also writes inter gfa if specified.
     int verbose = 0;
-    int nb_modified = 0;
+    int nb_modified = 0, nb_modified_tot=0;
     double startTime;
 
     uint32_t start, end, start_v, end_v;  // start and end are meant to be unitig IDs (with dir); start_v and end_v are vertex IDs
@@ -7282,6 +7261,7 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
             fprintf(stderr, "[M::%s] finished round %d, modified %d, used %.2f s\n", __func__, round, nb_modified, Get_T()-startTime);
         }
         // hamtdebug_output_unitig_graph_ug(ug, asm_opt.output_file_name, 210+round);
+        nb_modified_tot += nb_modified;
         if (nb_modified){
             free(sg->idx);
             sg->idx = 0;
@@ -7295,9 +7275,10 @@ void hamt_ug_prectg_rescueShortCircuit(asg_t *sg,
             break;
         }
     }
+    return nb_modified_tot;
 }
 
-void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug, 
+int hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug, 
                                                         ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
                                                         const ma_sub_t* coverage_cut, 
                                                         int base_label){
@@ -7371,7 +7352,7 @@ void hamt_ug_prectg_rescueShortCircuit_simpleAggressive(asg_t *sg, ma_ug_t *ug,
     if (VERBOSE){
         fprintf(stderr, "[M::%s] treated %d spots\n", __func__, nb_treat);
     }
-
+    return nb_treat;
 }
 
 void hamt_ug_rescueLongUtg(asg_t *sg, 
@@ -8544,11 +8525,16 @@ finish:
     return ret;
 }
 
+// FUNC
+//     Check all pairs of long unitigs/contigs.
+//     If they can form a pair of source and sink,
+//      try to find a path through.
+// NOTE
+//     Might be very slow given certain toplogy... 
+//     Also ASan can be 7x slower.
 int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, 
                            int base_label, int alt_label){
-    // FUNC
-    //    Check and pop tangles. Heuristic.
-
+    double startTime = Get_T();
     int nb_treated = 0, verbose = 0, max_label;
     int subgraph_size, non_tip_tigs;
     asg_t *auxsg = ug->g;
@@ -8643,9 +8629,7 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
         hamt_ug_cleanup_arc_by_labels(sg, ug);
     }
 
-    if (VERBOSE){
-        fprintf(stderr, "[M::%s] treated %d spots\n", __func__, nb_treated);
-    }
+    fprintf(stderr, "[M::%s] treated %d spots, used %.1fs\n", __func__, nb_treated, Get_T()-startTime);
     vecu32_destroy(&buf);
     free(treated);
     return nb_treated;
@@ -10638,13 +10622,113 @@ void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
 #endif
 
 
+// FUNC
+//     Given an array of unitig/contig IDs and the graph, 
+// RETURN
+//     Returns the sequence, its length stored in seq_l.
+char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, int *seq_l){
+    int verbose = 0;
+    int seq_m = 3000000, seq_n=0;
+    char *seq = (char*)malloc(seq_m); assert(seq);
+    int seqtmp_m = 1000000;
+    char *seqtmp = (char*)malloc(seq_m); assert(seqtmp);
+    
+    asg_t *auxsg = ug->g;
+    ma_utg_t *p;
+    char *s;
+    int i, j, j2;
+    uint32_t vu, wu;
+    asg_arc_t *arc=0;
+    asg_arc_t *av;
+    uint32_t nv;
+    int arclen=0, arclen_last=0;
+
+    if (verbose) fprintf(stderr, "[debug::%s] start, cnt=%d\n", __func__, l);
+    for (i=0; i<l; i++){
+        vu = r[i];
+        wu = r[i==l-1? 0 : i+1];
+
+        p = &ug->u.a[vu>>1];
+        if (vu&1){  // reverse strand
+            if (p->len>=seqtmp_m){
+                seqtmp_m = p->len+1;
+                seqtmp = (char*)realloc(seqtmp, seqtmp_m); assert(seqtmp);
+            }
+            for (j=p->len-1, j2=0; j>=0; j--){
+                seqtmp[j2] = seqcmp(p->s[j]);
+                j2++;
+            }
+            seqtmp[j2] = '\0';
+            s = seqtmp;
+            if (verbose) {fprintf(stderr, "[debug::%s]   - %d ctg %.6d, rev, arclen %d, seqlen %d, seq_n %d, seq_m%d\n", 
+                                __func__, i, (int)(vu>>1)+1, arclen, p->len, seq_n, seq_m); fflush(stderr);}
+        }else{
+            s = p->s;
+            if (verbose) {fprintf(stderr, "[debug::%s]   - %d ctg %.6d, ori, arclen %d, seqlen %d, seq_n %d, seq_m%d\n", 
+                                __func__, i, (int)(vu>>1)+1, arclen, p->len, seq_n, seq_m); fflush(stderr);}
+        }
+
+        // push the contig (if it's not the last one)
+        if (i!=l-1){
+            if (seq_n + p->len - arclen>=seq_m){
+                seq_m += p->len - arclen;
+                seq = (char*)realloc(seq, seq_m); assert(seq);
+            }
+            sprintf(seq+seq_n, "%.*s", (int)(p->len-arclen), s+arclen);
+            seq_n += p->len-arclen;
+        }
+        else
+            arclen_last = arclen;
+        
+        // update arc length 
+        av = asg_arc_a(auxsg, vu);
+        nv = asg_arc_n(auxsg, vu);
+        for (j=0; j<nv; j++){
+            if (av[j].v==wu){
+                arc = &av[j];
+                break;
+            }
+        }
+        if ((i==l-1 && is_circ) || i<l-1){  // must find the arc, unless it's the end of a non-circular path
+            assert(j<nv);
+            arclen = (int)arc->ol;
+        }else{
+            arclen = 0;
+        }
+
+        // push the last contig: it is truncated on both ends if path is circular,
+        //                       or, the collected sequence needs a truncation.
+        if (i==l-1){
+            if (seq_n + p->len - arclen - arclen_last>=seq_m){
+                seq_m += p->len - arclen - arclen_last;
+                seq = (char*)realloc(seq, seq_m); assert(seq);
+            }
+            if (p->len-arclen-arclen_last>=0){
+                if (verbose) {fprintf(stderr, "[debug::%s]   - last status: type add, len=%d, arclen=%d, arclen_last=%d\n", 
+                                                __func__, p->len, arclen, arclen_last); fflush(stderr);}
+                sprintf(seq+seq_n, "%.*s", (int)(p->len-arclen-arclen_last), s+arclen_last);
+                seq_n += p->len - arclen - arclen_last;
+            }else{
+                if (verbose) {fprintf(stderr, "[debug::%s]   - last status: type shrink, len=%d, arclen=%d, arclen_last=%d\n", 
+                                                __func__, p->len, arclen, arclen_last); fflush(stderr);}
+                seq_n -= arclen + arclen_last - p->len;
+            }
+        }
+    }
+
+    free(seqtmp);
+    *seq_l = seq_n;
+    return seq;
+}
+
+
 // opportunistic elementary circuits: 
 //   - seed from long contigs (TODO)
 //   - global soft block:  don't extend if one try uses too many "used" contigs
 //   - DFS stepping favors "unused" white contig first
 int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root, 
                                                          int *scclables, double *weights, uint8_t *color0,
-                                                         int min_length, int max_length,
+                                                         int min_length, 
                                                          int max_weight,
                                                          stacku32_t *report_stack){
     int ret=0;
@@ -10706,8 +10790,7 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
                     //         color[wu] = 2;
                     //     }
                     //     hamt_asg_get_one_cycle_with_constraint(ug, root, scclables, weights, color0, 
-                    //                                             min_length, max_length, max_weight,
-                    //                                             report_stack);
+                    //                                             min_length, max_weight, report_stack);
                     // }
                     // stacku32_reset(&s);
                     // stacku32_copyover(&sb, &s);
@@ -10732,8 +10815,8 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
             
             // extra constraints: check length
             if (/*total_length+ug->u.a[wu>>1].len > max_length ||*/ total_weight+weights[wu>>1] > max_weight) {
-                // instead kill this search and continue DFS,
-                // drop the last 1/4 of the DFS stack (marking them as visited)
+                // Instead of killing this search and continue DFS,
+                //   try to drop the last 1/4 of the DFS stack (marking them as visited) to force a retry.
                 // Will not mark child nodes of these dropped nodes as visited, though.
                 if (verbose) {fprintf(stderr, "[debug::%s] ======weight constraint failed, chop and retry\n", __func__);}
                 if (s.n<4) goto finish;
@@ -10824,16 +10907,21 @@ int hamt_ug_sum_lengths_of_unitigs(uint32_t *a, int n, ma_ug_t *ug, int is_path,
     }
     return ret;
 }
-void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s, ma_ug_t *ug){
-    // FUNC
-    //     Given a stack consists of found paths, drop paths that are too similar to 
-    //      others (by checking unitig ID or haplotig status).
-    //     WILL modify `s` in-place.
-    // NOTE
-    //     `s` is filled like so: array length1, value1, value2...., array length2, value1, value2, ... 
-    //     Long contig is always preferred over path-finding.  
-    int verbose = 0;
 
+
+// FUNC
+//     Given a stack consists of found paths, drop paths that are too similar to 
+    //     Given a stack consists of found paths, drop paths that are too similar to 
+//     Given a stack consists of found paths, drop paths that are too similar to 
+//      others (by checking unitig ID or haplotig status).
+//     WILL modify `s` in-place.
+// NOTE
+//     `s` is filled like so: array length1, value1, value2...., array length2, value1, value2, ... 
+//     Long contig is always preferred over path-finding.  
+    //     Long contig is always preferred over path-finding.  
+//     Long contig is always preferred over path-finding.  
+void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s, ma_ug_t *ug){
+    int verbose = 0;
     int of1=0, of2=0, of1idx=0, of2idx=1;
     int hits=0, hits_len=0;  // count duplications
     int ll1, ll2;  // total unitig/contig lengths in path1 and path2, for checking duplication ratio in base pairs
@@ -10852,7 +10940,7 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
     uint8_t *color;
     // uint64_t *pathlengths;
     {
-        int l=0;
+        int l=0;  // number of paths
         while (of1<s->n){
             l++;
             of1+=s->a[of1]+1;
@@ -10874,7 +10962,7 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
 
 
     
-    uint32_t maxl1, maxl2;  // length of the longest contig of path
+    uint32_t maxl1, maxl2;  // length of the longest contig of a path
     of1 = 0;
     while (of1<s->n){
         maxl1 = 0;
@@ -10994,6 +11082,132 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
     stacku32_destroy(&cmp);
 }
 
+
+// FUNC
+//     Bottom minhash-based sequence divergence estimation and deduplication.
+// RETURN
+//     Number of remaining paths.    
+int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku32_t *s, ma_ug_t *ug, 
+                                                                        int kmersize, int n_hash){
+    if (kmersize>31){
+        fprintf(stderr, "[W::%s] k (%d) too large, truncate to 31\n", __func__, kmersize);
+        kmersize = 31;
+    }
+    if (kmersize<3){
+        fprintf(stderr, "[W::%s] k (%d) too small, will use default instead.\n", __func__, kmersize);
+        kmersize = 21;
+    }
+
+    int verbose = 1;
+    int n_paths = 0, n_remains=0;
+    double time = Get_T();
+    double time0 = Get_T();
+    uint8_t *mask;  // marks whether a path has been deleted
+    
+    // get the number of paths in the stack
+    {
+        int offset = 0;
+        while (offset<s->n){
+            n_paths++;
+            offset += s->a[offset]+1;
+        }
+        mask = (uint8_t*)calloc(n_paths, 1); assert(mask);
+    }
+    if (verbose) fprintf(stderr, "[debug::%s] got %d paths\n", __func__, n_paths);
+
+    // collect sequences
+    int *seqs_ll = (int*)malloc(sizeof(int)*n_paths);  // sequences' lengths
+    char **seqs = (char**)malloc(sizeof(char*)*n_paths);
+    {
+        int offset=0, idx=0, l=0;
+        int seq_l;   
+        while (offset<s->n){
+            l = s->a[offset];
+            seqs[idx] = hamt_ug_get_path_sequence(ug, s->a+offset+1, l, 1, &seqs_ll[idx]);
+            offset += l+1;
+            idx++;
+        }
+    }
+
+    // sketch and pariwise
+    double **dists = hamt_minhash_mashdist(seqs, seqs_ll, n_paths, kmersize, n_hash);
+    fprintf(stderr, "[M::%s] collected mash distances for %d seqs, used %.1fs\n", 
+                    __func__, n_paths, Get_T()-time);
+    if (verbose) {
+        for (int i=0; i<n_paths; i++){
+            for (int j=i+1; j<n_paths; j++){
+                fprintf(stderr, "[debug::%s] %d\t%d\t%.6f\n", __func__, i, j, dists[i][j]);
+            }
+        }
+    }
+
+
+    // drop some
+    int n_skip_lengthdiff=0;
+    int n_skip_lengthabs=0;
+    for (int i=0; i<n_paths; i++){
+        if (mask[i]) continue;
+        if (seqs_ll[i]<1000000 || seqs_ll[i]>8000000){  // weird size, drop the candidate
+            mask[i] = 1;
+            n_skip_lengthdiff++;
+            continue;
+        }
+        for (int j=i+1; j<n_paths; j++){
+            if (mask[j]) continue;
+            if (seqs_ll[j]<1000000 || seqs_ll[j]>8000000){
+                mask[j] = 1;
+                n_skip_lengthdiff++;
+                continue;
+            }
+            // do nothing if large length difference between the two paths 
+            if ((seqs_ll[i]>seqs_ll[j]? seqs_ll[i]-seqs_ll[j] : seqs_ll[j]-seqs_ll[i])>1000000 ){
+                n_skip_lengthdiff++;
+                continue;
+            }
+            // check mash distance
+            if (dists[i][j]<0.03)
+                mask[j] = 1;
+        }
+    }
+
+    // collect the remaining paths
+    stacku32_t remain;
+    stacku32_init(&remain);
+    int of1, idx1, l1;
+    for (of1=0, idx1=0; of1<s->n; idx1++){
+        l1 = s->a[of1];
+        if (mask[idx1]){
+            of1 += l1+1;
+            continue;
+        }
+        for (int i=of1; i<of1+l1+1; i++){
+            stacku32_push(&remain, s->a[i]);
+        }
+        of1 += l1+1;
+        n_remains++;
+    }
+    stacku32_reset(s);
+    stacku32_copyover(&remain, s);
+
+    stacku32_destroy(&remain);
+    for (int i=0; i<n_paths; i++){
+        free(dists[i]);
+        free(seqs[i]);
+    }
+    free(dists);
+    free(seqs);
+    free(seqs_ll);
+    free(mask);
+
+    fprintf(stderr, "[M::%s] had %d paths, %d remained (%d dropped by length diff, %d by length abs)," 
+                    "used total %.1fs.\n", __func__, 
+                    n_paths, n_remains,
+                    n_skip_lengthdiff, n_skip_lengthabs, Get_T()-time0);
+    return n_remains;
+}
+
+
+
 // FUNC
 //     Given a list of unitig/contig IDs, write the path's sequence in fasta format.
 //     Will not check whether the path is valid; caller is responsible.
@@ -11002,13 +11216,9 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
 //     s is the start index. e is the end index (non-inclusive).
 void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ, 
                                 int pathID, FILE *fp){
-    int verbose = 0;
-    asg_t *auxsg = ug->g;
-    ma_utg_t *p;
-    char *seq = (char*)malloc(1000000); assert(seq);
-    int seq_m = 1000000;
-    char *s;
     int i, j, j2=0, i2;
+    int seq_l;
+    char *seq;
 
     uint32_t vu, wu;
     asg_arc_t *arc;
@@ -11022,53 +11232,8 @@ void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ,
     }
     fprintf(fp, "\n");
     
-    if (verbose) fprintf(stderr, "[debug::%s] start, cnt=%d\n", __func__, l);
-    for (i=0; i<l; i++){
-        vu = r[i];
-        wu = r[i==l-1? 0 : i+1];
-
-        p = &ug->u.a[vu>>1];
-        if (vu&1){  // reverse strand
-            if (p->len>=seq_m){
-                seq_m = p->len+1;
-                seq = (char*)realloc(seq, seq_m); assert(seq);
-            }
-            for (j=p->len-1, j2=0; j>=0; j--){
-                seq[j2] = seqcmp(p->s[j]);
-                j2++;
-            }
-            seq[j2] = '\0';
-            s = seq;
-            if (verbose) fprintf(stderr, "[debug::%s]   - %d ctg %.6d, rev, arclen %d, seqlen %d\n", 
-                                __func__, i, (int)(vu>>1)+1, arclen, p->len);
-        }else{
-            s = p->s;
-            if (verbose) fprintf(stderr, "[debug::%s]   - %d ctg %.6d, ori, arclen %d, seqlen %d\n", 
-                                __func__, i, (int)(vu>>1)+1, arclen, p->len);
-        }
-
-        // write seq (if it's not the last one)
-        if (i!=l-1)
-            fprintf(fp, "%s", s+arclen);
-        else
-            arclen_last = arclen;
-        
-        // update arc length 
-        av = asg_arc_a(auxsg, vu);
-        nv = asg_arc_n(auxsg, vu);
-        for (j=0; j<nv; j++){
-            if (av[j].v==wu){
-                arc = &av[j];
-                break;
-            }
-        }
-        assert(j<nv);
-        arclen = (int)arc->ol;
-
-        // write the last contig: it is truncated on both ends 
-        if (i==l-1)  
-            fprintf(fp, "%.*s\n", (int)(p->len-arclen_last-arclen), p->s+arclen_last);
-    }
+    seq = hamt_ug_get_path_sequence(ug, r, l, is_circ, &seq_l);
+    fprintf(fp, "%.*s\n", seq_l, seq);
     free(seq);
 }
 
@@ -11077,7 +11242,7 @@ void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ,
 //     Report deduplicated elementary circuits from a given unitig graph.
 //     This function does not try to enumerate all combinations
 //      as there are too many; instead it tries to get as many different circuits
-//      as possible, then deduplicate using read overlapping information.
+//      as possible, then deduplicate using read overlap information.
 // PRE-CONDITION NOTE
 //     Unitig graph's sequence must be collected.   
 void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
@@ -11085,11 +11250,6 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
     int is_print_found = 0;  // 0 to print, 1 to write a p_ctg2 file.
     FILE *fp = 0;
     char *fname = (char*)malloc(strlen(asm_opt.output_file_name)+50);
-    if (!is_print_found){
-        sprintf(fname, "%s.rescue.fa", asm_opt.output_file_name);
-        fp = fopen(fname, "w");
-        assert(fp);
-    }
     
     asg_t *auxsg = ug->g;
     int n_scc0;
@@ -11129,7 +11289,7 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
             memset(color, 0, sizeof(uint8_t)*auxsg->n_seq*2);
             
             ret = hamt_asg_get_one_cycle_with_constraint(ug, root, labels, weights, color, 
-                                                        1000000, 6000000, 100, &report_stack);
+                                                        1000000, 100, &report_stack);
             if (ret) { // found a new cycle
                 total_report+=1;
                 // udpate mask
@@ -11147,9 +11307,31 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
     }
     fprintf(stderr, "[M::%s] collected %d circuits, used %.2fs\n", __func__, total_report, Get_T()-time);
     
-    time = Get_T();
-    hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(&report_stack, ug);
     int of=0, l=0, ofidx=0;
+
+    // dump all found circuits, no deduplication
+    if (!is_print_found){
+        sprintf(fname, "%s.rescue.all.fa", asm_opt.output_file_name);
+        fp = fopen(fname, "w"); assert(fp);
+        while (of<report_stack.n){
+            l = report_stack.a[of];
+            hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
+            of = of+1+l;
+            ofidx++;
+        }
+        fclose(fp);
+    }
+
+    // deduplication and dump
+    // time = Get_T();
+    // hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(&report_stack, ug);
+    hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(&report_stack, ug, 21, 1000);
+    // fprintf(stderr, "time used: %.1fs\n", Get_T()-time);
+    of=0, l=0, ofidx=0;
+    if (!is_print_found){
+        sprintf(fname, "%s.rescue.fa", asm_opt.output_file_name);
+        fp = fopen(fname, "w"); assert(fp);
+    }
     while (of<report_stack.n){
         l = report_stack.a[of];
         if (is_print_found){
@@ -11164,7 +11346,6 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
         of = of+1+l;
         ofidx++;
     }
-    fprintf(stderr, "[M::%s] deduplicated, %d circuits remained, used %.2fs\n", __func__, ofidx, Get_T()-time);
 
     if (fp) fclose(fp);
     free(fname);

@@ -7,6 +7,9 @@
 #include "meta_util.h"
 
 //////////////////meta
+typedef kvec_t(uint64_t) vec_u64t;
+typedef kvec_t(vec_u64t) vec_u64v;
+
 void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage, int let_reset);
 int hamt_read_kmer_profile(hifiasm_opt_t *asm_opt, All_reads *rs);  // debug
 int hamt_printout_ha_count(hifiasm_opt_t *asm_opt, All_reads *rs);  // debug
@@ -17,7 +20,8 @@ void hamt_flt_no_read_selection(hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
 void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_reads *rs);  // exp
 
 void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs, int nb_to_keep);
-void hamt_load_coasm_label();
+
+double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, int seqs_n, int kmersize, int n_hash);
 ///////////////////////////////////
 
 typedef struct {

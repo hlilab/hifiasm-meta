@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 #include "kthread.h"
 #include "khashl.h"
 #include "kseq.h"
@@ -2723,26 +2724,126 @@ int load_pt_index(void **r_flt_tab, ha_pt_t **r_ha_idx, All_reads* r, hifiasm_op
 	free(gfa_name);
 	return 1;
 }
-void hamt_load_coasm_label(){
-	kseq_t *ks;
-	gzFile fp = 0;
-	R_INF.coasm_sampleID = (uint16_t*)realloc(R_INF.coasm_sampleID, sizeof(uint16_t)*R_INF.total_reads);
-	uint32_t i_read = 0;
-	for (uint16_t i=0; i<asm_opt.num_reads; i++){
-		if ((fp = gzopen(asm_opt.read_file_names[i], "r")) == 0) {
-			fprintf(stderr, "[E::%s] coasm label loading, but can't open file %s. Abort.\n", __func__, asm_opt.read_file_names[i]);
-			exit(1);
-		}
-		ks = kseq_init(fp);
-		while (kseq_read(ks) >= 0) {
-			R_INF.coasm_sampleID[i_read] = i;
-			i_read++;
-		}
 
-		kseq_destroy(ks);
-		gzclose(fp);
 
+// FUNC
+//     Collect kmers into a hashtable. No prefix or HPC.
+//     If `total` is present, store the number of inserted entries.
+yak_ct_t *hamt_ch_count_seq(char *s, int len, int k, int *total){
+	yak_ct_t *h = yak_ct_init();
+	int i, l, absent, tot=0;
+	uint64_t x[2], shift=(k-1)*2, mask=(1ULL<<k*2) - 1, hash;
+	khint_t key;
+	for (i=0,l=0,x[0]=0, x[1]=0; i<len; i++){
+		int c = seq_nt4_table[(uint8_t)s[i]];
+		if (c<4){
+			x[0] = (x[0] << 2 | c) & mask;                  // forward strand
+			x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;  // reverse strand
+			if (++l >= k) { // we find a k-mer
+				uint64_t y = x[0]<x[1]? x[0] : x[1];
+				hash = yak_hash64(y, mask);
+				yak_ct_put(h, hash, &absent);
+				if (absent) tot++;
+			}
+		}else l=0, x[0]=x[1]=0;
 	}
-	assert(i_read==R_INF.total_reads);
-	fprintf(stderr, "[M::%s] loaded coasm sample IDs.\n", __func__);
+	if (total) *total = tot;
+	return h;
+}
+
+
+// FUNC
+//     Collect bottom minhash sketch of a sequence.
+vec_u64t hamt_minhash_sketch_core(char *seq, int seq_l, int kmersize, int n_hash){
+	int h_size = 0, n=0, i;
+	yak_ct_t *h = hamt_ch_count_seq(seq, seq_l, kmersize, &h_size);
+	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*h_size);
+	vec_u64t ret; 
+	kv_init(ret);
+	kv_resize(uint64_t, ret, n_hash);
+
+	khint_t k;
+	uint64_t hash;
+	for (k=0; k<kh_end(h); k++){
+		if (kh_exist(h, k)){
+			hash = kh_key(h, k);
+			buf[n++] = hash;
+		}
+	}
+	radix_sort_hamt64(buf, buf+n);
+	for (i=0; i<n_hash; i++){
+		kv_push(uint64_t, ret, buf[i]);
+	}
+	
+	free(buf);
+	yak_ct_destroy(h);
+	return ret;
+}
+
+// FUNC
+//     mash distance: ANI estimation using Jaccard estimator. 
+//     See Ondov et al (2016) equation 4.
+double hamt_minhash_mashdist_core(vec_u64t *h1, vec_u64t *h2, int k, int n_hash, int *ret_share){
+	double jaccard, dist;
+	int tot=0, share=0, i1=0, i2=0, n=h1->n, which=1; 
+	assert(h1->n==h2->n);
+	while (i1<n && i2<n){
+		if (h1->a[i1]==h2->a[i2]){
+			share++;
+			i1++;
+			i2++;
+		}else if (h1->a[i1]>h2->a[i2]){
+			i2++;
+		}else{
+			i1++;
+		}
+		tot++;
+		if (tot==n_hash) break;
+	}
+	if (share==0) dist=1;
+	else if (share==n_hash) dist=+0;
+	else{
+		jaccard = (double)share/n_hash;
+		dist = -1.0/(double)k * log(2*jaccard/(1+jaccard));
+	}
+	if (ret_share) *ret_share = share;
+	return dist;
+}
+
+double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, int seqs_n, int kmersize, int n_hash){
+	vec_u64v sketches;
+	kv_init(sketches); kv_resize(vec_u64t, sketches, seqs_n);
+
+	double **ret = (double**)malloc(sizeof(double*)*seqs_n);
+	for (int i=0; i<seqs_n; i++){
+		ret[i] = (double*)malloc(sizeof(double)*seqs_n);
+	}
+
+	// sketch all
+	for (int i=0; i<seqs_n; i++){
+		kv_push(vec_u64t, sketches, hamt_minhash_sketch_core(
+									seqs[i], seqs_ll[i], kmersize, n_hash
+									));
+	}
+
+	// pairwise comparison
+	int n_shared = 0;
+	for (int i=0; i<seqs_n; i++){
+		for (int j=i+1; j<seqs_n; j++){
+			double dist = hamt_minhash_mashdist_core(&sketches.a[i],
+													 &sketches.a[j], kmersize, n_hash, &n_shared);
+			ret[i][j] = dist;
+			ret[j][i] = dist;
+			// fprintf(stderr, "shared\t%d\t%d\t%d\n", i, j, n_shared);
+		}
+		ret[i][i] = 0.0;
+	}
+
+	// cleanup
+	for (int i=0; i<seqs_n; i++){
+		kv_destroy(sketches.a[i]);
+	}
+	kv_destroy(sketches);
+
+	return ret;
 }

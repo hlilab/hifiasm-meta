@@ -2179,7 +2179,6 @@ int hamt_assemble(void)
 	}
 
     hist_readlength(&R_INF);
-    if (asm_opt.mode_coasm) hamt_load_coasm_label();
 
     build_string_graph_without_clean(asm_opt.min_overlap_coverage, R_INF.paf, R_INF.reverse_paf, 
         R_INF.total_reads, R_INF.read_length, asm_opt.min_overlap_Len, asm_opt.max_hang_Len, asm_opt.clean_round, 

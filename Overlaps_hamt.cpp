@@ -10726,6 +10726,9 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
 //   - seed from long contigs (TODO)
 //   - global soft block:  don't extend if one try uses too many "used" contigs
 //   - DFS stepping favors "unused" white contig first
+//   - unused contig contig gives a minus weight instead of zero,
+//     to encourage collecting any path that (somewhat) supersets 
+//     a shorter, established path.
 int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root, 
                                                          int *scclables, double *weights, uint8_t *color0,
                                                          int min_length, 
@@ -10754,7 +10757,7 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
     stacku64_init(&scoring);
     stacku32_push(&s, root);
     total_length += ug->u.a[root>>1].len;
-    total_weight += weights[root>>1];
+    total_weight += weights[root>>1]<1? -1 : weights[root>>1];
     color[root] = 1;
     while (stacku32_pop(&s, &vu)){
         if (verbose) {fprintf(stderr, "[debug::%s] pop %.6d\n", __func__, (int)(vu>>1)+1);}
@@ -10837,7 +10840,7 @@ int hamt_asg_get_one_cycle_with_constraint(ma_ug_t *ug, uint32_t root,
             stacku32_push(&s, vu);
             stacku32_push(&s, wu);
             total_length += ug->u.a[wu>>1].len;  // TODO: should minus overlap length! But it's expensive to get. Maybe just arbitrarily minus 8k or something.
-            total_weight += weights[wu>>1];
+            total_weight += weights[root>>1]<1? -1 : weights[wu>>1];
             color[wu] = 1;
             break;
             
@@ -11098,7 +11101,7 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
         kmersize = 21;
     }
 
-    int verbose = 1;
+    int verbose = 0;
     int n_paths = 0, n_remains=0;
     double time = Get_T();
     double time0 = Get_T();

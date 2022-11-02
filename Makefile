@@ -8,7 +8,7 @@ OBJS=		CommandLines.o Process_Read.o Assembly.o Hash_Table.o \
 			POA.o Correct.o Levenshtein_distance.o Overlaps.o Trio.o kthread.o Purge_Dups.o \
 			htab.o hist.o sketch.o anchor.o extract.o sys.o ksw2_extz2_sse.o \
 			meta_util.o meta_util_debug.o Overlaps_hamt.o
-EXE=		hifiasm_meta
+EXE=		hifiasm_meta_r63asan
 LIBS=		-lz -lpthread -lm
 
 ifneq ($(asan),)
@@ -53,7 +53,7 @@ Overlaps.o: Overlaps.h kvec.h kdq.h ksort.h Process_Read.h CommandLines.h
 Overlaps.o: Hash_Table.h htab.h meta_util.h Correct.h Levenshtein_distance.h
 Overlaps.o: POA.h Purge_Dups.h Overlaps_hamt.h kthread.h
 Overlaps_hamt.o: Overlaps.h kvec.h kdq.h Process_Read.h CommandLines.h
-Overlaps_hamt.o: Overlaps_hamt.h ksort.h
+Overlaps_hamt.o: Overlaps_hamt.h ksort.h htab.h
 POA.o: POA.h Hash_Table.h htab.h Process_Read.h Overlaps.h kvec.h kdq.h
 POA.o: CommandLines.h meta_util.h Correct.h Levenshtein_distance.h
 Process_Read.o: Process_Read.h Overlaps.h kvec.h kdq.h CommandLines.h

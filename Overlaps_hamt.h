@@ -168,6 +168,7 @@ void hamt_update_coverage(ma_ug_t *ug, asg_t *read_g,
 
 void hamt_utg_scc_testing(ma_ug_t *ug, int *labels);
 void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug);
-void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug);
+void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread);
+int hamt_ug_delete_unconnected_single_read_contigs(asg_t *sg, ma_ug_t *ug);
 
 #endif // __OVERLAPS_HAMT__

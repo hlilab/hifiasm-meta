@@ -11091,9 +11091,10 @@ void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s,
 // RETURN
 //     Number of remaining paths.    
 int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku32_t *s, ma_ug_t *ug, 
-                                                                        int kmersize, int n_hash){
+                                                                        int kmersize, int n_hash,
+                                                                        int n_thread){
     if (kmersize>31){
-        fprintf(stderr, "[W::%s] k (%d) too large, truncate to 31\n", __func__, kmersize);
+        fprintf(stderr, "[W::%s] k (%d) too large, reduced to 31\n", __func__, kmersize);
         kmersize = 31;
     }
     if (kmersize<3){
@@ -11104,7 +11105,6 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
     int verbose = 0;
     int n_paths = 0, n_remains=0;
     double time = Get_T();
-    double time0 = Get_T();
     uint8_t *mask;  // marks whether a path has been deleted
     
     // get the number of paths in the stack
@@ -11119,6 +11119,7 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
     if (verbose) fprintf(stderr, "[debug::%s] got %d paths\n", __func__, n_paths);
 
     // collect sequences
+    time = Get_T();
     int *seqs_ll = (int*)malloc(sizeof(int)*n_paths);  // sequences' lengths
     char **seqs = (char**)malloc(sizeof(char*)*n_paths);
     {
@@ -11131,11 +11132,13 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
             idx++;
         }
     }
+    if (verbose) fprintf(stderr, "[T::%s] got the sequences, used %.1fs\n", __func__, Get_T()-time);
 
     // sketch and pariwise
-    double **dists = hamt_minhash_mashdist(seqs, seqs_ll, n_paths, kmersize, n_hash);
+    time = Get_T();
+    double **dists = hamt_minhash_mashdist(seqs, seqs_ll, n_paths, kmersize, n_hash, n_thread);
     fprintf(stderr, "[M::%s] collected mash distances for %d seqs, used %.1fs\n", 
-                    __func__, n_paths, Get_T()-time);
+                    __func__, n_paths, Get_T()-time); fflush(stderr);
     if (verbose) {
         for (int i=0; i<n_paths; i++){
             for (int j=i+1; j<n_paths; j++){
@@ -11146,6 +11149,7 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
 
 
     // drop some
+    time = Get_T();
     int n_skip_lengthdiff=0;
     int n_skip_lengthabs=0;
     for (int i=0; i<n_paths; i++){
@@ -11168,7 +11172,7 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
                 continue;
             }
             // check mash distance
-            if (dists[i][j]<0.03)
+            if (dists[i][j]<0.05)
                 mask[j] = 1;
         }
     }
@@ -11203,9 +11207,9 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
     free(mask);
 
     fprintf(stderr, "[M::%s] had %d paths, %d remained (%d dropped by length diff, %d by length abs)," 
-                    "used total %.1fs.\n", __func__, 
+                    "used %.1fs after sketching.\n", __func__, 
                     n_paths, n_remains,
-                    n_skip_lengthdiff, n_skip_lengthabs, Get_T()-time0);
+                    n_skip_lengthdiff, n_skip_lengthabs, Get_T()-time);
     return n_remains;
 }
 
@@ -11248,7 +11252,7 @@ void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ,
 //      as possible, then deduplicate using read overlap information.
 // PRE-CONDITION NOTE
 //     Unitig graph's sequence must be collected.   
-void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
+void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread){
     double time = Get_T();
     int is_print_found = 0;  // 0 to print, 1 to write a p_ctg2 file.
     FILE *fp = 0;
@@ -11326,10 +11330,8 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
     }
 
     // deduplication and dump
-    // time = Get_T();
     // hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(&report_stack, ug);
-    hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(&report_stack, ug, 21, 1000);
-    // fprintf(stderr, "time used: %.1fs\n", Get_T()-time);
+    hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(&report_stack, ug, 21, 1000, n_thread);
     of=0, l=0, ofidx=0;
     if (!is_print_found){
         sprintf(fname, "%s.rescue.fa", asm_opt.output_file_name);
@@ -11358,4 +11360,49 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug){
     free(used);
     free(scc_counts);
     stacku32_destroy(&report_stack);
+}
+
+
+int hamt_ug_delete_unconnected_single_read_contigs(asg_t *sg, ma_ug_t *ug){
+    int ret = 0, verbose = 0;
+    asg_t *auxsg = ug->g;
+    uint32_t nv;
+    asg_arc_t *av;
+    ma_utg_t *utg;
+    int n1,n2;
+    for (uint32_t i=0; i<auxsg->n_seq*2; i++){
+        if (i&1) continue;
+        if (ug->u.a[i>>1].n==1){
+            uint32_t v = ug->u.a[i>>1].start>>1;
+            if (verbose) fprintf(stderr, "[d::%s] contig %.6d, start read %.*s. checking..\n", 
+                                    __func__, (int)(i>>1)+1,
+                                    (int)Get_NAME_LENGTH(R_INF, v), Get_NAME(R_INF, v));
+            n1 = n2 = 0;
+            nv = asg_arc_n(auxsg, i);
+            av = asg_arc_a(auxsg, i);
+            for (int j=0; j<nv; j++){
+                if (verbose)  fprintf(stderr, "[d::%s]  dir1, target tig %.6d del %d\n", __func__,
+                                    (int)(av[j].v>>1)+1, (int)av[j].del );
+                if (!av[j].del) n1++;
+            }
+            if (n1!=0) continue;
+            nv = asg_arc_n(auxsg, i^1);
+            av = asg_arc_a(auxsg, i^1);
+            for (int j=0; j<nv; j++){
+                if (verbose) fprintf(stderr, "[d::%s]  dir2, target tig %.6d del %d\n", __func__,
+                                    (int)(av[j].v>>1)+1, (int)av[j].del );
+                if (!av[j].del) n2++;
+            }
+            if (n2!=0) continue;
+
+            
+            // sg->seq[v].del = 1;
+            asg_seq_del(sg, v);
+            ret++;
+            if (verbose) fprintf(stderr, "[d::%s]    dropping read %.*s\n", __func__,
+                        (int)Get_NAME_LENGTH(R_INF, v), Get_NAME(R_INF, v));
+            
+        } 
+    }
+    return ret;
 }

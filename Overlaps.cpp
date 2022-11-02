@@ -12018,12 +12018,14 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
             uint32_t readID = ug->u.a[i].a[0]>>33;
             ma_utg_subglabels_t *subgp = &R_INF.subg_label_trail->a[readID];
             int sancheck_label=-1, sancheck_label_length=subgp->n;
+            #if 0
             for (int i_read=0; i_read<ug->u.a[i].n; i_read++){
                 assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].n==sancheck_label_length);  // same buffer length
                 for (int i_label=0; i_label<sancheck_label_length; i_label++){
                     assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].a[i_label] == subgp->a[i_label]);  // same array of labels
                 }
             }
+            #endif
             
             // write
             fprintf(fp, "\tts:B:I");  // GFA1: array of uint32_t integers.
@@ -14012,7 +14014,7 @@ void hamt_output_unitig_graph_advance(asg_t *sg, ma_sub_t* coverage_cut, char* o
 
     ma_ug_t *ug = NULL;
     ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, label);
-    hamt_ug_util_BFS_markSubgraph(ug, label);// collect subgraph info
+    hamt_ug_util_BFS_markSubgraph(ug, -1);// collect subgraph info
 
     ma_ug_seq(ug, sg, &R_INF, coverage_cut, sources, &new_rtg_edges, max_hang, min_ovlp);
 
@@ -14062,17 +14064,18 @@ ma_hit_t_alloc* sources, R_to_U* ruIndex, int print_seq, const char* prefix, FIL
             fprintf(fp, "\n");
         }else{
             // hamt, append trailing subgraph IDs
-
-            // sancheck: all reads of a unitig should have the same subgraph label
             uint32_t readID = ug->u.a[i].a[0]>>33;
             ma_utg_subglabels_t *subgp = &R_INF.subg_label_trail->a[readID];
             int sancheck_label=-1, sancheck_label_length=subgp->n;
+            #if 0
+            // sancheck: all reads of a unitig should have the same subgraph label
             for (int i_read=0; i_read<ug->u.a[i].n; i_read++){
                 assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].n==sancheck_label_length);  // same buffer length
                 for (int i_label=0; i_label<sancheck_label_length; i_label++){
                     assert(R_INF.subg_label_trail->a[ug->u.a[i].a[i_read]>>33].a[i_label] == subgp->a[i_label]);  // same array of labels
                 }
             }
+            #endif
             
             // write
             fprintf(fp, "\tts:B:I");  // GFA1: array of uint32_t integers.
@@ -30159,7 +30162,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	ma_sub_t *coverage_cut = *coverage_cut_ptr;
 	asg_t *sg = *sg_ptr;
     ma_ug_t *hamt_ug = 0;
-
+    int simplereport[5];
     // extra rescues and others
     if (asm_opt.is_mode_low_cov){
         hamt_smash_haplotype(sources, reverse_sources, n_read);
@@ -30593,7 +30596,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             output_contig_graph_alternative(sg, coverage_cut, output_file_name, sources, ruIndex, max_hang_length, mini_overlap_length);
         }else{
+
             // contig graph
+            simplereport[0] = hamt_ug_delete_unconnected_single_read_contigs(sg, hamt_ug);
+            hamt_ug_destroy(hamt_ug);
+            hamt_ug = hamt_ug_gen(sg, coverage_cut, reverse_sources, ruIndex, 0);
+            simplereport[1] = hamt_ug_delete_unconnected_single_read_contigs(sg, hamt_ug);
+            fprintf(stderr, "[M::%s] removed single-read unconnected contigs, %d on primary, %d on alt.\n", __func__, simplereport[0], simplereport[1]);
+            
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 0);
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "a_ctg", "ctg",
@@ -30609,7 +30619,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             kv_init(new_rtg_edges.a);
             ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
                       sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
-            hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug);
+            hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
             kv_destroy(new_rtg_edges.a);
 
 

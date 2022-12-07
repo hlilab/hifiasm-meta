@@ -21,7 +21,7 @@ void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_r
 
 void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs, int nb_to_keep);
 
-double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, int seqs_n, int kmersize, int n_hash);
+double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, int seqs_n, int kmersize, int n_hash, int n_thread);
 ///////////////////////////////////
 
 typedef struct {

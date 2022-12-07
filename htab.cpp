@@ -2752,15 +2752,28 @@ yak_ct_t *hamt_ch_count_seq(char *s, int len, int k, int *total){
 }
 
 
+typedef struct {
+	char **seqs;
+	int *seq_ll;
+	int kmersize, n_hash, n_seqs;
+	vec_u64v *sketch;
+	double **mat;
+}hamt_mashdist_t;
+
 // FUNC
 //     Collect bottom minhash sketch of a sequence.
-vec_u64t hamt_minhash_sketch_core(char *seq, int seq_l, int kmersize, int n_hash){
+static void hamt_minhash_sketch_core(void *data, long i_read, int tid){
+	fprintf(stderr, "[debug::%s] thread %d read %d\n", __func__, (int)tid, (int)i_read);
+	hamt_mashdist_t *d = (hamt_mashdist_t*)data;
+	char *seq = d->seqs[i_read];
+	int seq_l = d->seq_ll[i_read];
+	int kmersize = d->kmersize;
+	int n_hash = d->n_hash;
+
 	int h_size = 0, n=0, i;
 	yak_ct_t *h = hamt_ch_count_seq(seq, seq_l, kmersize, &h_size);
 	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*h_size);
-	vec_u64t ret; 
-	kv_init(ret);
-	kv_resize(uint64_t, ret, n_hash);
+	vec_u64t *ret = &d->sketch->a[i_read]; 
 
 	khint_t k;
 	uint64_t hash;
@@ -2772,72 +2785,89 @@ vec_u64t hamt_minhash_sketch_core(char *seq, int seq_l, int kmersize, int n_hash
 	}
 	radix_sort_hamt64(buf, buf+n);
 	for (i=0; i<n_hash; i++){
-		kv_push(uint64_t, ret, buf[i]);
+		kv_push(uint64_t, *ret, buf[i]);
 	}
 	
 	free(buf);
 	yak_ct_destroy(h);
-	return ret;
 }
 
 // FUNC
 //     mash distance: ANI estimation using Jaccard estimator. 
 //     See Ondov et al (2016) equation 4.
-double hamt_minhash_mashdist_core(vec_u64t *h1, vec_u64t *h2, int k, int n_hash, int *ret_share){
+static void hamt_minhash_mashdist_core(void *data, long i_read, int tid){
+	hamt_mashdist_t *d = (hamt_mashdist_t*) data;
+	int k = d->kmersize;
+	int n_hash = d->n_hash;
+	int n_seqs = d->n_seqs;
+	vec_u64t *h1 = &d->sketch->a[i_read];
+	vec_u64t *h2;
+
 	double jaccard, dist;
-	int tot=0, share=0, i1=0, i2=0, n=h1->n, which=1; 
-	assert(h1->n==h2->n);
-	while (i1<n && i2<n){
-		if (h1->a[i1]==h2->a[i2]){
-			share++;
-			i1++;
-			i2++;
-		}else if (h1->a[i1]>h2->a[i2]){
-			i2++;
-		}else{
-			i1++;
+	for (int i_read2=i_read+1; i_read2<n_seqs; i_read2++){
+		h2 = &d->sketch->a[i_read2];
+
+		int tot=0, share=0, i1=0, i2=0, n=h1->n, which=1; 
+		assert(h1->n==h2->n);
+		while (i1<n && i2<n){
+			if (h1->a[i1]==h2->a[i2]){
+				share++;
+				i1++;
+				i2++;
+			}else if (h1->a[i1]>h2->a[i2]){
+				i2++;
+			}else{
+				i1++;
+			}
+			tot++;
+			if (tot==n_hash) break;
 		}
-		tot++;
-		if (tot==n_hash) break;
+		if (share==0) dist=1;
+		else if (share==n_hash) dist=+0;
+		else{
+			jaccard = (double)share/n_hash;
+			dist = -1.0/(double)k * log(2*jaccard/(1+jaccard));
+		}
+		d->mat[i_read][i_read2] = dist;
+		d->mat[i_read2][i_read] = dist;
 	}
-	if (share==0) dist=1;
-	else if (share==n_hash) dist=+0;
-	else{
-		jaccard = (double)share/n_hash;
-		dist = -1.0/(double)k * log(2*jaccard/(1+jaccard));
-	}
-	if (ret_share) *ret_share = share;
-	return dist;
 }
 
-double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, int seqs_n, int kmersize, int n_hash){
+double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, 
+								int seqs_n, int kmersize, int n_hash,
+								int n_thread){
+    int verbose = 1;
+	double time;
 	vec_u64v sketches;
 	kv_init(sketches); kv_resize(vec_u64t, sketches, seqs_n);
+	for (int i=0; i<seqs_n; i++){
+		kv_init(sketches.a[i]);
+		kv_resize(uint64_t, sketches.a[i], n_hash);
+	}
 
 	double **ret = (double**)malloc(sizeof(double*)*seqs_n);
 	for (int i=0; i<seqs_n; i++){
 		ret[i] = (double*)malloc(sizeof(double)*seqs_n);
+		ret[i][i] = 0;
 	}
 
 	// sketch all
-	for (int i=0; i<seqs_n; i++){
-		kv_push(vec_u64t, sketches, hamt_minhash_sketch_core(
-									seqs[i], seqs_ll[i], kmersize, n_hash
-									));
-	}
+	time = Get_T();
+	hamt_mashdist_t aux;
+	aux.kmersize = kmersize;
+	aux.n_hash = n_hash;
+	aux.seqs = seqs;
+	aux.seq_ll = seqs_ll;
+	aux.sketch = &sketches;
+	aux.n_seqs = seqs_n;
+	aux.mat = ret;
+	kt_for(n_thread, hamt_minhash_sketch_core, &aux, seqs_n);
+	if (verbose) fprintf(stderr, "[T::%s] sketched - %.1fs.\n", __func__, Get_T()-time);
 
 	// pairwise comparison
-	int n_shared = 0;
-	for (int i=0; i<seqs_n; i++){
-		for (int j=i+1; j<seqs_n; j++){
-			double dist = hamt_minhash_mashdist_core(&sketches.a[i],
-													 &sketches.a[j], kmersize, n_hash, &n_shared);
-			ret[i][j] = dist;
-			ret[j][i] = dist;
-			// fprintf(stderr, "shared\t%d\t%d\t%d\n", i, j, n_shared);
-		}
-		ret[i][i] = 0.0;
-	}
+	time = Get_T();
+	kt_for(n_thread, hamt_minhash_mashdist_core, &aux, seqs_n);
+	if (verbose) fprintf(stderr, "[T::%s] compared - %.1fs.\n", __func__, Get_T()-time);
 
 	// cleanup
 	for (int i=0; i<seqs_n; i++){

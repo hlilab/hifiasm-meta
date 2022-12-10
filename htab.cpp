@@ -2763,7 +2763,10 @@ typedef struct {
 // FUNC
 //     Collect bottom minhash sketch of a sequence.
 static void hamt_minhash_sketch_core(void *data, long i_read, int tid){
-	fprintf(stderr, "[debug::%s] thread %d read %d\n", __func__, (int)tid, (int)i_read);
+	// TODO: is slow?
+	int verbose = 0;
+	if (verbose) fprintf(stderr, "[debug::%s] thread %d read %d\n", __func__, (int)tid, (int)i_read);
+	
 	hamt_mashdist_t *d = (hamt_mashdist_t*)data;
 	char *seq = d->seqs[i_read];
 	int seq_l = d->seq_ll[i_read];

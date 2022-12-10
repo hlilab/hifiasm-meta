@@ -93,8 +93,9 @@ int hamt_ug_prectg_resolve_complex_bubble(asg_t *sg, ma_ug_t *ug, int base_label
 int hamt_ug_resolve_oneMultiLeafSoapBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop);
 int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label);
 
-// exp
+
 int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
+void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step);
 int hamt_ug_pop_unevenInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
 
 // (hap)
@@ -166,7 +167,7 @@ void hamt_update_coverage(ma_ug_t *ug, asg_t *read_g,
 
 
 
-void hamt_utg_scc_testing(ma_ug_t *ug, int *labels);
+void hamt_utg_scc_debugprintext(ma_ug_t *ug);
 void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug);
 void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread);
 int hamt_ug_delete_unconnected_single_read_contigs(asg_t *sg, ma_ug_t *ug);

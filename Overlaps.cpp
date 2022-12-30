@@ -30200,9 +30200,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
-    asm_opt.get_specific_overlap_is_use_bf = 0;
-    hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
-    hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+    if (!asm_opt.no_containedreads_heuristics){
+        asm_opt.get_specific_overlap_is_use_bf = 0;
+        hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+        hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+    } else {
+        fprintf(stderr, "[M::%s] skipped conatined reads sparing heuristics.\n", __func__);
+    }
 
     asm_opt.get_specific_overlap_is_use_bf = 0; //////sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
     ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // hamt_threaded_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex);  // TODO

@@ -49,6 +49,7 @@ static ko_longopt_t long_options[] = {
     { "force-rs", ko_no_argument, 419},  // aka force-preovec, better named
     { "probe-gfa", ko_no_argument, 420},
     { "use-ha-bin", ko_no_argument, 421}, // use hifiasm bin files - will ignore hamt-specific files and use placeholders.
+    { "noch", ko_no_argument, 422},  // disable contained reads sparing heuristics
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -76,7 +77,7 @@ void Print_H(hifiasm_opt_t* asm_opt)
     fprintf(stderr, "    --version   show version number\n");
     fprintf(stderr, "  Read selection:\n");
     // fprintf(stderr, "    -S          enable read selection.\n");
-    fprintf(stderr, "    --force-preovec\n");
+    fprintf(stderr, "    --force-rs\n");
     fprintf(stderr, "                enable and force read selection.\n");
     fprintf(stderr, "    --lowq-10\n");
     fprintf(stderr, "                lower 10%% runtime kmer frequency threshold. [%d]\n", asm_opt->lowq_thre_10);
@@ -97,6 +98,7 @@ void Print_H(hifiasm_opt_t* asm_opt)
     fprintf(stderr, "    -n INT      remove tip unitigs composed of <=INT reads [%d]\n", asm_opt->max_short_tip);
     fprintf(stderr, "    -x FLOAT    max overlap drop ratio [%.2g]\n", asm_opt->max_drop_rate);
     fprintf(stderr, "    -y FLOAT    min overlap drop ratio [%.2g]\n", asm_opt->min_drop_rate);
+    fprintf(stderr, "    --noch      disable contained reads sparing heuristics.\n");
     fprintf(stderr, "  Auxiliary:\n");
     fprintf(stderr, "    -e          ban assembly, i.e. terminate before generating string graph\n");
     fprintf(stderr, "    --write-paf dump overlaps (paf).\n");
@@ -178,6 +180,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->gc_tangle_max_tig = 500;  // set to -1 to disable the limit
     asm_opt->is_aggressive = 0; 
     asm_opt->use_ha_bin = 0;
+    asm_opt->no_containedreads_heuristics = 0;
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable
 }
@@ -541,6 +544,8 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 418) {asm_opt->gc_superbubble_tig_max_length = atoi(opt.arg);}
         else if (c == 420) {asm_opt->do_probe_gfa = 1;}
         else if (c == 421) {asm_opt->use_ha_bin = 1; fprintf(stderr, "[M::%s] use hifiasm bin files\n", __func__);}
+        else if (c == 422) {asm_opt->no_containedreads_heuristics = 1; 
+                            fprintf(stderr, "[M::%s] contained reads sparing heuristics disabled.\n", __func__);}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

@@ -4709,7 +4709,7 @@ void hamt_asgarc_markBridges_DFS_v0(asg_t *sg, uint32_t v, uint32_t v_parent, in
 */
 int hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t root,
                                 uint8_t *visited, int *tin, int *low, int base_label) {
-    int verbose = 1;
+    int verbose = 0;
     int nb_bridge = 0;
     
     // for traversing graph
@@ -12311,9 +12311,9 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
  * @par ug unitig/contig graph
  * @par n_threads # of threads
  * @par base_label 0 to work with primary graph
- * @return None; will print stats to stderr.
+ * @return # spots treated; will print stats to stderr.
 */
-void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step){
+int hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step){
     asg_t *auxsg = ug->g;
     double startTime = Get_T();
 
@@ -12344,8 +12344,82 @@ void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int 
     // final
     fprintf(stderr, "[M::%s]   cleaning used %.1fs\n", __func__, Get_T()-startTime);
     fprintf(stderr, "[M::%s] treated %d spots\n", __func__, p->treated);
+    int ret = p->treated;
 
     // clean up
     hamt_ba_t_destroy(p->is_handle);
     free(p);
+    return ret;
+}
+
+
+/**
+ * @brief Disconnect two long contigs if their coverages are very different.
+ * @return # of treatments.
+*/
+int hamt_ug_disconnect_long_contig_pairs_by_cov(asg_t *sg, ma_ug_t *ug){
+    int lt = 200000;   // length threshold
+    int lt_tip = 100000;  // less stringent for tips
+    int ct_maxmin = 30;  // coverage threshold, minimum of the longer of the two
+    int ct_maxmin_tip = 10;   // less stringent if one is a tip
+    int ct_minratio = 3;  // coverage ratio threshold,  not inclusive
+
+    int n_treated = 0;
+    double T = Get_T();
+    uint32_t vu, wu, lv, lw, cv, cw;  // id, id, length, length, coverage, coverage
+    int vu_istip, wu_istip;
+    uint32_t nv;
+    asg_arc_t *av;
+    asg_t *auxsg = ug->g;
+
+    int tlt, tct;  // tmp lt, tmp ct-maxmin
+    for (vu=0; vu<auxsg->n_seq*2; vu++){
+        lv = ug->u.a[vu>>1].len;
+        vu_istip = hamt_asgarc_util_isTip(auxsg, vu, 0,0, -1);
+        
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            wu = av[i].v;
+            lw = ug->u.a[wu>>1].len;
+            wu_istip = hamt_asgarc_util_isTip(auxsg, wu, 0,0, -1);
+
+            cv = ug->utg_coverage[vu>>1];
+            cw = ug->utg_coverage[wu>>1];
+
+            // check length and coverage
+            if (vu_istip){
+                tlt = lt_tip;  tct = ct_maxmin_tip;
+            }else{
+                tlt = lt;  tct = ct_maxmin;
+            }
+            if (lv<tlt || cv<tct) continue;
+            if (wu_istip){
+                tlt = lt_tip;  tct = ct_maxmin_tip;
+            }else{
+                tlt = lt;  tct = ct_maxmin;
+            }
+            if (lw<tlt || cw<tct) continue;
+            //   (coverage ratio)
+            float ratio;
+            if (cv>cw) ratio = ((float)cv)/cw;
+            else ratio = ((float)cw)/cv;
+            if (ratio<=ct_minratio) continue;
+
+            // delete the arc
+            hamt_ug_arc_del_between(sg, ug, vu, wu, 1, 0); 
+            n_treated++;
+        }
+    }
+
+    // update graph
+    if (n_treated>0){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+
+    fprintf(stderr, "[M::%s] treated %d, used %.1fs.\n", __func__, n_treated, 
+            Get_T()-T);
+    return n_treated;
 }

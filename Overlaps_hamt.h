@@ -95,7 +95,8 @@ int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label);
 
 
 int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
-void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step);
+int hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step);
+int hamt_ug_disconnect_long_contig_pairs_by_cov(asg_t *sg, ma_ug_t *ug);
 int hamt_ug_pop_unevenInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
 
 // (hap)

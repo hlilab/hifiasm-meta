@@ -30485,13 +30485,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             // resolve tangle
             fprintf(stderr, "\n\n[M::%s] ======= tangles =======\n", __func__);
             int nb_tangle_cut, nb_tip;
-            for (int round_resolve=0; round_resolve<5; round_resolve++){
+            for (int round_resolve=0; round_resolve<5; ){
                 time = Get_T();
+                round_resolve++;
                 /*if (asm_opt.write_debug_gfa)*/ {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
                 
                 time = Get_T();
-                // nb_tangle_cut = hamt_ug_resolveTangles(sg, hamt_ug, 0, 1);
-                hamt_ug_resolveTangles_threaded(sg, hamt_ug, asm_opt.thread_num, 0, round_resolve);
+                nb_tangle_cut = hamt_ug_resolveTangles_threaded(sg, hamt_ug, asm_opt.thread_num, 0, round_resolve);
+                if (nb_tangle_cut>0) {
+                    round_resolve--;
+                    fprintf(stderr, "[M::%s] segment #1: will extend one round\n", __func__);
+                }
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #1: %.1fs\n", __func__, Get_T()-time);
 
@@ -30509,14 +30513,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #4: %.1fs\n", __func__, Get_T()-time);
 
-                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before-brute", cleanID); cleanID++;}
-                
                 time = Get_T();
                 hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 200000, 0, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 hamt_circle_cleaning(sg, hamt_ug, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #5: %.1fs\n", __func__, Get_T()-time);
+
+                time = Get_T();
+                nb_tangle_cut += hamt_ug_disconnect_long_contig_pairs_by_cov(sg, hamt_ug); 
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                fprintf(stderr, "[M::%s] segment #6: %.1fs\n", __func__, Get_T()-time);
 
                 fprintf(stderr, "[M::%s] round %d, cut %d, used %.1fs\n", __func__, round_resolve, nb_tangle_cut, Get_T()-time);
                 if (nb_tangle_cut==0){

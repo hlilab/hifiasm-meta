@@ -448,13 +448,13 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         if (c == 'h')
         {
             Print_H(asm_opt);
-            return 0;
+            return 2;  // tell main to not raise error
         } 
         else if (c == 'v' || c == 300)
         {
             fprintf(stderr, "ha base version: %s\n", HA_VERSION);
             fprintf(stderr, "hamt version: %s\n", HAMT_VERSION);
-            return 0;
+            return 2;  // tell main to not raise error 
         }
         // vanilla: abcdef hi klmnopqrstuvwxyz
         // vanilla:    D F      MNOP               
@@ -573,12 +573,12 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == ':') 
         {
 			fprintf(stderr, "[ERROR] missing option argument in \"%s\"\n", argv[opt.i - 1]);
-			return 1;
+			return 0;
 		} 
         else if (c == '?') 
         {
 			fprintf(stderr, "[ERROR] unknown option in \"%s\"\n", argv[opt.i - 1]);
-			return 1;
+			return 0;
 		}
     }
 

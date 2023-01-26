@@ -16,8 +16,9 @@ Hifiasm-meta r57 takes roughly 5 minutes and a peak memory of 18GB.
 
 ## About this fork
 
-Hifiasm\_meta comes with a read selection module, which enables the assembly of dataset of high redundancy without compromising overall assembly quality, and meta-centric graph cleaning modules. It also handles chimeric read detection and contained reads etc more carefully in the metagenome assembly context, which, in some cases, could benefit the less represented species in the sample. We need more test samples to improve the heuristics.
-
+Hifiasm\_meta comes with a read selection module, which enables the assembly of dataset of high redundancy without compromising overall assembly quality, and meta-centric graph cleaning modules.
+In post-assembly stage, hifiasm\_meta traverses the primay assembly graph
+and try to rescue some genome bins that would be overlooked by traditional binners.
 Currently hifiasm\_meta does not take bining info.
 
 ## Output files
@@ -42,23 +43,57 @@ Bin file is one-way compatible with the stable hifiasm for now: stable hifiasm c
 See also README\_ha.md, the stable hifiasm doc.
 
 ```
-# Interface
--B		Name of bin files. Allows to use bin files from other 
-       		directories.
+# General options
+-o              Prefix of output files [hifiasm_meta.asm]. 
+                For detailed description of all assembly graphs, 
+                 see above or manpage.
+-B	        	Use bin files under a different prefix than the 
+                 one specified by -o.
+-t              Number of CPU threads used by hifiasm\_meta (default: 1).
+-h              Show help information and exit. Returns 0.
+--version       Show version number and exit. Returns 0.
 
-# Read selection
--S		Enable read selection.
---force-rs       Force kmer frequency-based read selection. 
-                (otherwise if total number of read overlaps 
-                 look realistic, won't do selection.)
---lowq-10       Lower 10% quantile kmer frequency threshold, runtime. Lower value means less reads kept, if read selection is triggered. [150]
+# Read selection options
+-S              Enable read selection.
+                If enabled, hifiasm_meta will estimate the total number of 
+                 read overlaps. If the estimation seems within acceptable, 
+                 no read will be dropped; otherwise, reads will be dropped 
+                 from the most redundant ones until the criteria are satisfied.
+--force-rs      Force read selection. Read will be dropped according to the 
+                 runtime kmer frequency threshold described below.
+--lowq-10       Runtime 10% quantile kmer frequency threshold.
+                Lower value means less reads kept, if read selection is triggered. [50]
+--lowq-5        Runtime 5% quantile kmer frequency threshold.
+                Lower value means less reads kept, if read selection is triggered. [50]
+--lowq-3        Runtime 3% quantile kmer frequency threshold.
+                Lower value means less reads kept, if read selection is triggered. [disabled]
 
-# Auxiliary 
---write-paf     Dump overlaps, produces 2 files, one contains the intra-haplotype or unphased overlaps, the other contains inter-haplotype overlaps. If coverage is very high, this might not be the full set of overlaps.
+# Error correction options
+-k              K-mer length [51]. This option must be less than 64.
+-w              Minimizer window size [51].
+-f              Number of bits for bloom filter; 0 to disable [37]. 
+                This bloom filter is used to filter out singleton k-mers 
+                 when counting all k-mers. 
+-r              Rounds of haplotype-aware error corrections [3]. 
+                This option affects all outputs of hifiasm\_meta.
+--min-hist-cnt  When analyzing the k-mer spectrum, ignore counts below INT [5].
+
+# Assembly options
+-z              Length of adapters that should be removed [0]. 
+                This option remove INT bases from both ends of each read.
+-i              Ignore error corrected reads and overlaps saved in bin files.
+
+# Debugging options
+--dbg-gfa       Use extra bin files to speed up the debugging of graph cleaning.
+                If set and the extra bin files do not already exist, 
+                 assembly runs normally (i.e. from scratch or resume from bin files) 
+                 and writes the extra bin files.
+                If set and bin files as well as extra bin files are present, 
+                 assembly will resume from raw unitig graph stage.
 --dump-all-ovlp Dump all overlaps ever calculated during the final overlaping. 
+--write-paf     Dump overlaps, produces 2 files, one contains the intra-haplotype or unphased overlaps, the other contains inter-haplotype overlaps. If coverage is very high, this might not be the full set of overlaps.
 --write-ec      Dump error corrected reads.
 -e              Ban assembly, i.e. terminate before generating string graph. 
-
 ```
 
 

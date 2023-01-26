@@ -12,7 +12,9 @@ int main(int argc, char *argv[])
 	int i, ret;
 	yak_reset_realtime();
     init_opt(&asm_opt);
-    if (!CommandLine_process(argc, argv, &asm_opt)) return 1;
+    int ret_opt = CommandLine_process(argc, argv, &asm_opt);
+    if (ret_opt==0) return 1;
+    else if (ret_opt==2) return 0;  // help or version
 
 	// debug modules
 	if (asm_opt.mode_read_kmer_profile){

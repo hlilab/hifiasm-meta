@@ -2839,7 +2839,7 @@ static void hamt_minhash_mashdist_core(void *data, long i_read, int tid){
 double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, 
 								int seqs_n, int kmersize, int n_hash,
 								int n_thread){
-    int verbose = 1;
+    int verbose = 0;
 	double time;
 	vec_u64v sketches;
 	kv_init(sketches); kv_resize(vec_u64t, sketches, seqs_n);

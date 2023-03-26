@@ -3262,20 +3262,7 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     //     Note that this doesn't need the region to be very low coverage overally,
     //        and the above plot is a real case - there's only 2 phasing variants.
     // NOTE
-    //     Doesn't use v1's criteria at all.
-    // IMPLEMENTATION NOTE
-    //     Ideally it's clearer if we can get the locations of the phasing variants.
-    //     However this info only existed in ovec stage with no absolute coordiantes.
-    //     Alternatively, here we check all intra-haplotype targets of readC,
-    //       and if ANY of them is not of the same hap comparing to ALL of the readC's parents, 
-    //       readC will be protected from containment collapsing.
-    // IMPLEMENTATION potential BUG / TODO
-    //     If we are *extremely* unlucky, say, C is very short, C's non-containment targets
-    //       are also very short comparing to the C's parents. Then we might not be able to 
-    //       realize haplotypeD by checking C's immediate targets. 
-    //     We *might* be able to mitigate this by checking 2nd level neighbours, but it's still arbitrary,
-    //       and implies that we expect a narrow length distribution from hifi reads.
-    //       Need a real example to improve this.
+    //     If coverage is apparently sufficient, this can be harmful.
     // FUNC
     //     Drop arcs to protect certain shorter reads from being considered as contained.
     //     This function won't touch the reads. Only arcs.
@@ -3298,6 +3285,7 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     // early termination
     if (coverage_cut[i_r].del) {return;}
     if (R_INF.mask_readnorm[i_r] & 1){return;}
+    if (sources[i_r].length>10) {return;}
     
     // aux
     ma_hit_t_alloc *h = &sources[i_r];

@@ -288,24 +288,6 @@ int thread_id)
 		}
 	}
 
-	// If number of overlapping reads is more than the buffer length,
-	//   remove overlaps from the shortest ones.
-	// NOTE hamt r27 bug
-	//     For meta, up to around 200x coverage is ok, but higher than that, 
-	//       short containments might be dropped and cause the read graph
-	//       to be falsely complex - this has led to the problems
-	//       seen in zymo-std prevotella.
-	// // (store the info of "an overlap has existed" before anything)
-	// if (asm_opt.is_final_round){
-	// 	int absent = 0;
-	// 	uint64_t key;
-	// 	for (int i_ov=0; i_ov<overlap_list->length; i_ov++){
-	// 		overlap_region *handle = &overlap_list->list[i_ov];
-	// 		key = ((uint64_t)handle->x_id)<<32 | ((uint64_t)handle->y_id);
-	// 		hamt_ov_put(hamt_existed_ov, key, &absent);
-	// 	}
-	// }
-	// (drop shorter ones if have to)
 	if ((int)overlap_list->length > max_n_chain) {
 		int32_t w, n[4], s[4];
 		n[0] = n[1] = n[2] = n[3] = 0, s[0] = s[1] = s[2] = s[3] = 0;

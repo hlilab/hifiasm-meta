@@ -3963,7 +3963,8 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
     // NOTE
     //     Do not cut if the non-circular part only as one or a few unitigs
 
-    int verbose = 0;  // debug
+    int verbose = 0;
+    // int minl = 50000;
     double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
@@ -3982,21 +3983,25 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
         if (hamt_asgarc_util_countPre(auxsg, w, 0, 0, base_label)<2){
             continue;
         }
+        // if (ug->u.a[v>>1].len<minl || ug->u.a[w>>1].len<minl) continue;
 
         cov[2] = 0;
         av = asg_arc_a(auxsg, w^1);
         for (uint32_t i=0; i<asg_arc_n(auxsg, w^1); i++){  // collect the largest coverage of w's predecessor (except v which will be accounted by cov[0])
-            if ((av[i].v>>1)==(v>>1)){  // ignore v
+            if ((av[i].v>>1)==(v>>1)){  // ignore self
                 continue;
             }
             if (av[i].del){continue;}
             if (base_label>=0 && (auxsg->seq_vis[av[i].v>>1]!=base_label)) {continue;}
-            // covtmp = get_ug_coverage(&ug->u.a[av[i].v>>1], sg, coverage_cut, sources, ruIndex, primary_flag);
+            // if (ug->u.a[av[i].v>>1].len<minl) continue;
+
             covtmp = ug->utg_coverage[av[i].v>>1];
             if (covtmp>cov[2]){
                 cov[2] = covtmp;
             }
         }
+        if (cov[2]==0) continue;  // no child node were checked
+                                  //
         cov[0] = ug->utg_coverage[v>>1];
         cov[1] = ug->utg_coverage[w>>1];
         radix_sort_ovhamt32(cov, cov+3);
@@ -4011,6 +4016,7 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
         if (hamt_asgarc_detect_circleDFS(auxsg, v, w, 0, base_label)){  // note: v and w is ug with direction
             // check the non-circular part, if it has only a few edges, do not cut
             if (hamt_asgarc_count_leads_to_howmany(auxsg, v^1, 10)<10){
+                if (verbose) fprintf(stderr, "[debug::%s] ignore\n", __func__);
                 ;
             }else{  // cut
                 hamt_ug_arc_del(sg, ug, v, w, 1);
@@ -4875,7 +4881,10 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
         if (base_label>=0 && ( auxsg->seq_vis[v>>1]!=base_label || auxsg->seq_vis[w>>1]!=base_label) ) {continue;}
         if (verbose>1) {fprintf(stderr, "[debug::%s] checking at utg%.6d vs utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);}
 
-        // check unitig coverage
+        // check node length, no trust for coverage estimation in short nodes
+        // if (ug->u.a[v>>1].len<50000 && ug->u.a[w>>1].len<50000) continue;
+
+        // check node coverage
         cov_v = ug->utg_coverage[v>>1];
         cov_w = ug->utg_coverage[w>>1];
         if (cov_v<cov_w){
@@ -10850,7 +10859,7 @@ int hamt_ug_get_all_elementary_circuits_circuit(ma_ug_t *ug, int *sgscc_labels,
 // Enumerate _all_ elementary circuits.
 // SCC and use Johnson's method
 void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
-    int verbose = 1;
+    int verbose = 0;
     asg_t *auxsg = ug->g;
     int n_scc0;
     int *labels = hamt_asggraph_scc(auxsg, &n_scc0);
@@ -11798,7 +11807,7 @@ int hamt_ug_resolveTangles_threaded_callback_markwalk(asg_t *sg, ma_ug_t *ug,
                                                 stacku32_t *pathholder,
                                                 int *pathlength,
                                                 int base_label, int alt_label){
-    int verbose = 1;
+    int verbose = 0;
     uint32_t vu, nv, wu, uu, nu;
     asg_arc_t *av;
     asg_arc_t *au;
@@ -12044,7 +12053,7 @@ void hamt_ug_resolveTangles_threaded_callback_treatwalk(asg_t *sg, ma_ug_t *ug,
  * @par tid # of thread
 */
 static void hamt_ug_resolveTangles_threaded_callback_step1(void *data, long i, int tid){
-    int verbose = 1;
+    int verbose = 0;
     hamt_markt_t *dd = (hamt_markt_t*) data;
     ma_ug_t *ug = dd->ug;
     asg_t *auxsg = dd->ug->g;
@@ -12143,7 +12152,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                                                         int step, void *in){
     hamt_marknpop_pl_t *p = (hamt_marknpop_pl_t*)data;
     double startTime = Get_T();
-    int verbose = 1;
+    int verbose = 0;
     if (step==0){  // mark pairs, also record the path to retain
         int ret;
         // init step data

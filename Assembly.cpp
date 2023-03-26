@@ -2019,6 +2019,7 @@ int ha_assemble(void)
 		}
 		// error correction
 		assert(asm_opt.number_of_round > 0);
+        asm_opt.is_final_round = 0; 
 		for (r = ha_idx?asm_opt.number_of_round-1:0; r < asm_opt.number_of_round; ++r) {
 			ha_opt_reset_to_round(&asm_opt, r); // this update asm_opt.roundID and a few other fields
 			ha_overlap_and_correct(r);

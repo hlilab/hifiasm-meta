@@ -11638,7 +11638,7 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
             memset(color, 0, sizeof(uint8_t)*auxsg->n_seq*2);
             
             ret = hamt_asg_get_one_cycle_with_constraint(ug, root, labels, weights, color, 
-                                                        1000000, 100, &report_stack);
+                                                        500000, 100, &report_stack);
             if (ret) { // found a new cycle
                 total_report+=1;
                 // udpate mask

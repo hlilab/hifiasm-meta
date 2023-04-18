@@ -30155,13 +30155,14 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	asg_t *sg = *sg_ptr;
     ma_ug_t *hamt_ug = 0;
     int simplereport[5];
+    vu32_t *long_tigs_in_resuce;
     // extra rescues and others
     if (asm_opt.is_mode_low_cov){
         hamt_smash_haplotype(sources, reverse_sources, n_read);
     }
 
     if (debug_g && (asm_opt.do_probe_gfa==1)) {
-        fprintf(stderr, "[M::%s] go to probe gfa\n", __func__);
+        fprintf(stderr, "[M::%s] jump to proble dbg gfa\n", __func__);
         goto probe;
     }
     if(debug_g && !asm_opt.write_new_graph_bins) goto debug_gfa;
@@ -30625,47 +30626,24 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             }
             
             fprintf(stderr, "\n\n********** checkpoint: post-assembly **********\n\n");
+probe:
+            if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
             // path finding-based circle rescue
             kvec_asg_arc_t_warp new_rtg_edges;
             kv_init(new_rtg_edges.a);
             ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
                       sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
-            hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
+            long_tigs_in_resuce = hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
             kv_destroy(new_rtg_edges.a);
-
-
-            // post pctg fixes (trinucleotide profiles etc)
-probe:
-            ;
-#if 0
-            if (debug_g && (asm_opt.do_probe_gfa==1)){  // we got here by `goto`, need to generate ug
-                hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
-                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
-            }
-            for (int i=0; i<5; i++){
-                fprintf(stderr, "========================%d\n", i);
-                if (hamt_ug_popLooseTangles(sg, hamt_ug, 30000)){
-                    hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-                }else{break;}
-            }
-            hamt_ug_popLooseTangles_v2(sg, hamt_ug, 10);
-            // for (int i=0; i<3; i++){
-            //     hamt_ug_seq_simple(sg, hamt_ug, coverage_cut, sources, ruIndex, max_hang_length, mini_overlap_length);
-            //     if (!hamt_ug_finalprune(sg, hamt_ug)) {
-            //         fprintf(stderr, "[M::%s] leave final aggresive cleaning (i=%d)\n", __func__, i);
-            //         break;
-            //     }
-            //     hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // }
-            // hamt_ug_destroy(hamt_ug);
             
+            // simple binning
+            hamt_simple_binning(hamt_ug, long_tigs_in_resuce, asm_opt.thread_num, 
+                    asm_opt.output_file_name, asm_opt.write_binning_fasta);
+            kv_destroy(*long_tigs_in_resuce);
 
-            // hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "post_ctg", "ctg",
-            //                          sources, ruIndex, max_hang_length, mini_overlap_length, 0);
-            hamt_output_unitig_graph_advance_debug(sg, hamt_ug, coverage_cut, asm_opt.output_file_name, "post_ctg", "ctg",
-                                     sources, ruIndex, max_hang_length, mini_overlap_length, 0);
-#endif
+
         if (hamt_ug) {hamt_ug_destroy(hamt_ug);}
         else {fprintf(stderr, "WARNING: ug did not exist, were you using --probe-gfa?\n");}
         }

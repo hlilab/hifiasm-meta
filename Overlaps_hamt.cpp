@@ -1,3 +1,4 @@
+#include <sys/stat.h>
 #include <stdint.h>
 #include <math.h>
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
@@ -9,9 +10,13 @@
 #include "CommandLines.h" 
 #include "Overlaps_hamt.h"
 #include "ksort.h"
+#include "kvec.h"
 #include "htab.h"
 #include "kthread.h"
+#include "t-sne.h"
 
+#define HAMT_PI 3.141592653589793
+#define HAMT_TWOPI 6.283185307179586
 #define HAMT_MAX(x, y) ((x >= y)?(x):(y))  // same
 #define HAMT_MIN(x, y) ((x <= y)?(x):(y))  // same
 #define HAMT_DIFF(x, y) ((HAMT_MAX((x), (y))) - (HAMT_MIN((x), (y))))  // it's in Correct.h but don't want to include so
@@ -28,6 +33,72 @@ typedef kvec_t(char*) kvec_strings_t;
 #define HAMT_ALTER_LABEL 1
 void hamt_ug_util_BFS_markSubgraph_trailing(ma_ug_t *ug_old, ma_ug_t *ug_new, int base_label);
 
+uint16_t index5NF[1024]={
+0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 
+16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 
+32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 31, 
+47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 15, 
+62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 58, 
+77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 43, 
+92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 88, 103, 104, 105, 27, 
+106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 73, 117, 118, 119, 11, 
+120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 113, 131, 132, 133, 54, 
+134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 99, 145, 146, 147, 39, 
+148, 149, 150, 151, 152, 153, 154, 141, 155, 156, 157, 84, 158, 159, 160, 23, 
+161, 162, 163, 164, 165, 166, 167, 127, 168, 169, 170, 69, 171, 172, 173, 7, 
+174, 175, 176, 177, 178, 179, 180, 164, 181, 182, 183, 109, 184, 185, 186, 50, 
+187, 188, 189, 190, 191, 192, 193, 151, 194, 195, 196, 95, 197, 198, 199, 35, 
+200, 201, 202, 190, 203, 204, 205, 137, 206, 207, 208, 80, 209, 210, 211, 19, 
+212, 213, 214, 177, 215, 216, 217, 123, 218, 219, 220, 65, 221, 222, 223, 3, 
+224, 225, 226, 223, 227, 228, 229, 173, 230, 231, 232, 119, 233, 234, 235, 61, 
+236, 237, 238, 211, 239, 240, 241, 160, 242, 243, 244, 105, 245, 246, 247, 46, 
+248, 249, 250, 199, 251, 252, 253, 147, 254, 255, 256, 91, 257, 258, 247, 30, 
+259, 260, 261, 186, 262, 263, 264, 133, 265, 266, 267, 76, 268, 269, 235, 14, 
+270, 271, 272, 220, 273, 274, 275, 170, 276, 277, 278, 116, 279, 280, 267, 57, 
+281, 282, 283, 208, 284, 285, 286, 157, 287, 288, 289, 102, 290, 291, 256, 42, 
+292, 293, 294, 196, 295, 296, 297, 144, 298, 299, 289, 87, 300, 301, 244, 26, 
+302, 303, 304, 183, 305, 306, 307, 130, 308, 309, 278, 72, 310, 311, 232, 10, 
+312, 313, 314, 217, 315, 316, 317, 167, 318, 319, 307, 112, 320, 321, 264, 53, 
+322, 323, 324, 205, 325, 326, 327, 154, 328, 329, 297, 98, 330, 331, 253, 38, 
+332, 333, 334, 193, 335, 336, 327, 140, 337, 338, 286, 83, 339, 340, 241, 22, 
+341, 342, 343, 180, 344, 345, 317, 126, 346, 347, 275, 68, 348, 349, 229, 6, 
+350, 351, 352, 214, 353, 354, 343, 163, 355, 356, 304, 108, 357, 358, 261, 49, 
+359, 360, 361, 202, 362, 363, 334, 150, 364, 365, 294, 94, 366, 367, 250, 34, 
+368, 369, 361, 189, 370, 371, 324, 136, 372, 373, 283, 79, 374, 375, 238, 18, 
+376, 377, 352, 176, 378, 379, 314, 122, 380, 381, 272, 64, 382, 383, 226, 2, 
+384, 385, 383, 222, 386, 387, 349, 172, 388, 389, 311, 118, 390, 391, 269, 60, 
+392, 393, 375, 210, 394, 395, 340, 159, 396, 397, 301, 104, 398, 399, 258, 45, 
+400, 401, 367, 198, 402, 403, 331, 146, 404, 405, 291, 90, 406, 399, 246, 29, 
+407, 408, 358, 185, 409, 410, 321, 132, 411, 412, 280, 75, 413, 391, 234, 13, 
+414, 415, 381, 219, 416, 417, 347, 169, 418, 419, 309, 115, 420, 412, 266, 56, 
+421, 422, 373, 207, 423, 424, 338, 156, 425, 426, 299, 101, 427, 405, 255, 41, 
+428, 429, 365, 195, 430, 431, 329, 143, 432, 426, 288, 86, 433, 397, 243, 25, 
+434, 435, 356, 182, 436, 437, 319, 129, 438, 419, 277, 71, 439, 389, 231, 9, 
+440, 441, 379, 216, 442, 443, 345, 166, 444, 437, 306, 111, 445, 410, 263, 52, 
+446, 447, 371, 204, 448, 449, 336, 153, 450, 431, 296, 97, 451, 403, 252, 37, 
+452, 453, 363, 192, 454, 449, 326, 139, 455, 424, 285, 82, 456, 395, 240, 21, 
+457, 458, 354, 179, 459, 443, 316, 125, 460, 417, 274, 67, 461, 387, 228, 5, 
+462, 463, 377, 213, 464, 458, 342, 162, 465, 435, 303, 107, 466, 408, 260, 48, 
+467, 468, 369, 201, 469, 453, 333, 149, 470, 429, 293, 93, 471, 401, 249, 33, 
+472, 468, 360, 188, 473, 447, 323, 135, 474, 422, 282, 78, 475, 393, 237, 17, 
+476, 463, 351, 175, 477, 441, 313, 121, 478, 415, 271, 63, 479, 385, 225, 1, 
+480, 479, 382, 221, 481, 461, 348, 171, 482, 439, 310, 117, 483, 413, 268, 59, 
+484, 475, 374, 209, 485, 456, 339, 158, 486, 433, 300, 103, 487, 406, 257, 44, 
+488, 471, 366, 197, 489, 451, 330, 145, 490, 427, 290, 89, 487, 398, 245, 28, 
+491, 466, 357, 184, 492, 445, 320, 131, 493, 420, 279, 74, 483, 390, 233, 12, 
+494, 478, 380, 218, 495, 460, 346, 168, 496, 438, 308, 114, 493, 411, 265, 55, 
+497, 474, 372, 206, 498, 455, 337, 155, 499, 432, 298, 100, 490, 404, 254, 40, 
+500, 470, 364, 194, 501, 450, 328, 142, 499, 425, 287, 85, 486, 396, 242, 24, 
+502, 465, 355, 181, 503, 444, 318, 128, 496, 418, 276, 70, 482, 388, 230, 8, 
+504, 477, 378, 215, 505, 459, 344, 165, 503, 436, 305, 110, 492, 409, 262, 51, 
+506, 473, 370, 203, 507, 454, 335, 152, 501, 430, 295, 96, 489, 402, 251, 36, 
+508, 469, 362, 191, 507, 448, 325, 138, 498, 423, 284, 81, 485, 394, 239, 20, 
+509, 464, 353, 178, 505, 442, 315, 124, 495, 416, 273, 66, 481, 386, 227, 4, 
+510, 476, 376, 212, 509, 457, 341, 161, 502, 434, 302, 106, 491, 407, 259, 47, 
+511, 472, 368, 200, 508, 452, 332, 148, 500, 428, 292, 92, 488, 400, 248, 32, 
+511, 467, 359, 187, 506, 446, 322, 134, 497, 421, 281, 77, 484, 392, 236, 16, 
+510, 462, 350, 174, 504, 440, 312, 120, 494, 414, 270, 62, 480, 384, 224, 0, 
+};
 
 float cosine_similarity(float *a, float *b, int l){
     float d=0, A=0, B=0;
@@ -11592,9 +11663,12 @@ void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ,
 //     This function does not try to enumerate all combinations
 //      as there are too many; instead it tries to get as many different circuits
 //      as possible, then deduplicate using read overlap information.
+// RET
+//     List of long contigs >=100kb used in the deduplicated circles.
+//     To be consumed by binning functions.
 // PRE-CONDITION NOTE
 //     Unitig graph's sequence must be collected.   
-void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread){
+vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread){
     double time = Get_T();
     int is_print_found = 0;  // 0 to print, 1 to write a p_ctg2 file.
     FILE *fp = 0;
@@ -11709,7 +11783,16 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
     free(color);
     free(used);
     free(scc_counts);
+
+    vu32_t *lt = (vu32_t*)malloc(sizeof(vu32_t));
+    kv_init(*lt); 
+    kv_resize(uint32_t, *lt, 32);
+    for (uint32_t i=0; i<report_stack.n; i++){
+        if (ug->u.a[report_stack.a[i]>>1].len>=100000) 
+            kv_push(uint32_t, *lt, report_stack.a[i]>>1);
+    }
     stacku32_destroy(&report_stack);
+    return lt;
 }
 
 
@@ -12431,4 +12514,442 @@ int hamt_ug_disconnect_long_contig_pairs_by_cov(asg_t *sg, ma_ug_t *ug){
     fprintf(stderr, "[M::%s] treated %d, used %.1fs.\n", __func__, n_treated, 
             Get_T()-T);
     return n_treated;
+}
+
+/**
+ * @par buf At least is 512 long.
+ * @func Collect canonical 5-mer profile of the sequence.
+ * 
+*/
+void hamt_5NF_profile_from_seq_core(char *seq, uint32_t seq_l, double *buf){
+    memset(buf, 0, sizeof(double)*512);
+    uint16_t mer=0;
+    uint16_t mer_rev = 0;
+    uint32_t mer_l=0;
+    uint16_t c;
+    uint16_t mer_mask = (uint16_t)(1<<10)-1;
+
+    uint32_t tot = 0;
+    for (uint32_t i=0; i<seq_l-5+1; i++){
+        c = (uint16_t)seq_nt4_table[(int)seq[i]];
+        if (c<4){
+            mer <<= 2;
+            mer |= c;
+            mer &= mer_mask;
+            //mer_rev>>=2;
+            //mer_rev = c<<8; 
+            //mer_rev &=mer_mask;
+            //fprintf(stderr, "dbg %d %d\n", (int)mer, (int)mer_rev);
+            if (mer_l==4){
+                buf[index5NF[mer]]++;
+                tot++;
+            }else mer_l++;
+        }else{
+            mer = mer_l = 0;
+        }
+    }
+    for (int i=0; i<512; i++){
+        buf[i] /= tot;
+    }
+}
+typedef struct{
+    ma_ug_t *ug;
+    uint64_t *tigIDs;  // will only use the right 32bits
+                       // (is this wrong if different endianess??)
+    uint32_t tigIDs_l;
+    double *mat;
+}hamt_get5nf_t;
+static void hamt_5NFwithcov_profile_from_seq_callback(void *data, long jobID, int threadID){
+    hamt_get5nf_t *s = (hamt_get5nf_t*)data;
+    uint32_t v = (uint32_t)s->tigIDs[jobID];
+    char *seq = s->ug->u.a[v].s;
+    uint32_t seq_l = s->ug->u.a[v].len;
+    double *buf = s->mat+(513*jobID);
+    buf[0] = log10((double)s->ug->utg_coverage[v]);  // note: this needs to be collect. hamt ug regen always does it.
+    hamt_5NF_profile_from_seq_core(seq, seq_l, buf+1);
+}
+void hamt_5NF_profile_gen(ma_ug_t *ug, uint64_t *candidates, uint32_t candidates_l, 
+        int n_threads, double **mat){
+    hamt_get5nf_t s;
+    s.ug = ug;
+    s.tigIDs = candidates;
+    s.tigIDs_l = candidates_l;
+    s.mat = *mat;
+    kt_for(n_threads, hamt_5NFwithcov_profile_from_seq_callback, &s, candidates_l);
+
+    // normalize
+    znorm2D(mat, (int)candidates_l, 513);
+
+}
+
+int compare_ddp_t(const void *a_, const void *b_){
+    ddp_t *a = (ddp_t*)a_;
+    ddp_t *b = (ddp_t*)b_;
+    if (a->is_optimal && !b->is_optimal) return -1;
+    else if (!a->is_optimal && b->is_optimal) return 1;
+
+    if (a->d1 > b->d1) return 1;
+    else if (a->d1 < b->d1) return -1;
+    else{
+        if (a->d1 < b->d1) return 1;  // reverse sort
+        else if (a->d1 > b->d1) return -1;
+    }
+    return 0;
+}
+void hamt_simple_binning_pick_neighbors(FILE *fp, char *bin_dir_prefix, ma_ug_t *ug, 
+                                        vu64_t *candidates, double *emb,
+                                        double radius1, double radius2, 
+                                        int *counter_tot, int*counter_mul){  
+
+    vddp_t itvls;
+    kv_init(itvls);
+    kv_resize(ddp_t, itvls, 16);
+
+    // (upper 32 bits of candidates were used for sorting; 
+    // contig ID and are always ui32 in this function,
+    // so we just rely on unsigned truncation.)
+
+    // blocking candidates:
+    //    - block: wrt idx of the candidates buffer, is used for all iterations 
+    //    - the .is_ignored property will be reset for each clustering step,
+    //      as we re-collect angle intervals for each new seed.
+    //    (will need to check && update both)
+    int verbose = 0;
+
+    uint8_t *block = (uint8_t*)calloc(candidates->n, 1);  // can recycle upper 32bits of candidates instead, but doesn't matter
+    assert(block);
+
+    int I = 0; // binID
+
+    uint32_t seedID, otherID;
+    double seedx, seedy, x, y, r, t;
+    double boundary=radius2*2;
+    for (int32_t i=candidates->n-1; i>=0; i--){  // seed from the longest candidate contigs
+        if (verbose) fprintf(stderr, "[dbg::%s] seed ctg%.6d, i is %d\n", 
+                __func__, (int)((uint32_t)candidates->a[i])+1, (int)i);
+        if (block[i]) continue;
+        itvls.n = 0;
+
+        seedID = candidates->a[i];
+        seedx = emb[2*i];
+        seedy = emb[2*i+1];
+
+        for (int32_t j=i-1; i>=1 && j>=0; j--){
+            if (block[j]) continue;
+
+            // to polar
+            x = emb[2*j] - seedx;  // shift origin point wrt seed
+            y = emb[2*j+1] - seedy;
+            r = sqrt(pow(x, 2) + pow(y, 2));
+
+            if (r<boundary){
+                t = atan(y/(x+0.000000001));
+                if (x<0) t+=HAMT_PI;
+                else if (x>=0 && y<0) t+=HAMT_TWOPI;
+
+                // get range of available angle
+                double theta = acos(1-pow(r, 2)/(2*pow(radius2, 2)));
+                double relative_angle = (HAMT_PI-theta)/2;
+                double st = t-relative_angle;
+                double en = t+relative_angle;
+                kv_push(ddp_t, itvls, ((ddp_t){
+                                        .d1=st, 
+                                        .d2=en, .i=(uint32_t)j,
+                                        .is_optimal=r<radius1?(uint8_t)1:(uint8_t)0, 
+                                        .is_ignored=0}));
+                if (st<0){  // trying to patch where it wraps around. maybe have bug
+                    kv_push(ddp_t, itvls, ((ddp_t){
+                                        .d1=st+HAMT_TWOPI, 
+                                        .d2=en+HAMT_TWOPI, .i=(uint32_t)j,
+                                        .is_optimal=r<radius1?(uint8_t)1:(uint8_t)0, 
+                                        .is_ignored=0}));
+                }
+            }
+        }
+        if (verbose) fprintf(stderr, "[dbg::%s]    itvls len=%d\n",__func__, (int)itvls.n);
+
+        // sort, try optimal solution, then remove containment and duplicates and see if suboptimal exists
+        qsort(itvls.a, itvls.n, sizeof(ddp_t), compare_ddp_t);
+        // (check if there's optimal choice, if so, we are done)
+        {
+            int n = 0;
+            for (int tmpi=0; tmpi<itvls.n; tmpi++){
+                if (block[itvls.a[tmpi].i]) continue;
+                if (itvls.a[tmpi].is_optimal) n++;
+                else break;
+            }
+            if (n>0){  // write content and update blacklist, then goes to the next seed
+                if (verbose) fprintf(stderr, "[dbg::%s]     optimal\n", __func__);
+                if (counter_tot) (*counter_tot)++;
+                fprintf(fp, "bin%d.opt\ts%d.ctg%.6d%c", I, (int)ug->u.a[seedID].subg_label, 
+                            seedID+1, "lc"[ug->u.a[seedID].circ]);
+                block[i] = 1;
+                FILE *fp_bin = 0;
+                if (bin_dir_prefix){
+                    char *bin_fn = (char*)malloc(strlen(bin_dir_prefix)+50);
+                    sprintf(bin_fn, "%s/bin%d.opt.fa", bin_dir_prefix, I);
+                    fp_bin = fopen(bin_fn, "w");
+                    assert(fp_bin);
+                    free(bin_fn);
+                    uint32_t v = seedID;
+                    fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                    fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                }
+
+                uint32_t i_can;
+                for (i_can=0; i_can<n; i_can++){
+                    if (block[itvls.a[i_can].i]) continue;
+                    uint32_t v = candidates->a[itvls.a[i_can].i];
+                    fprintf(fp, "\ts%d.ctg%.6d%c", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                    if (fp_bin){
+                        fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                        fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                    }
+                    block[itvls.a[i_can].i] = 1;
+                }
+                fprintf(fp, "\n");
+                if (fp_bin) fclose(fp_bin);
+                I++;
+                if (i_can>1)
+                    if (counter_mul) (*counter_mul)++;  // neighbor(s) + seed itself
+                continue;
+            }
+        }
+        // (If we reach here, no candidates were available in seed's vicinity.
+        //  We will try finding a circle that intersects seed and contain all 
+        //  nearby candidates; if there are more than one circle or candidates
+        //  are within the neighborhood cannot be covered by only one such circle, 
+        //  we deny all solutions.)
+        // (remove interval containments in the "available angles" intervals)
+        for (int iseg=0; iseg<itvls.n; iseg++){
+            if (block[itvls.a[iseg].i]) continue;
+            if (itvls.a[iseg].is_ignored) continue;
+            int jseg = iseg+1;
+            double end = itvls.a[iseg].d2;
+            itvls.a[iseg].weight = 1;
+            while (jseg<itvls.n && itvls.a[jseg].d1<end){
+                if (block[itvls.a[jseg].i] || itvls.a[jseg].is_ignored) {jseg++; continue;}
+                if (itvls.a[jseg].d2<end){
+                    itvls.a[jseg].is_ignored = 1;
+                    itvls.a[iseg].weight++;
+                }
+                jseg++;
+            }
+        }
+
+        // (slide through sorted intervals to find the highest coverage)
+        // (If we allow multiple circles to be selected, we can repurpose 
+        //  the .is_optimal property to indicate who is currently
+        //  within the window's span. When we see a new high score, push 
+        //  to a stack. )
+        // The requirement is the suboptimal choice should contain
+        //  all neighboring points. Therefore here we just count and see if 
+        //  we ever reach the highest score.
+        //  Note that this REQUIRES the interval lists was collected from 
+        //  valid neighbors (i.e. no bounding box, calculate distance wrt seed). 
+        //  Although in practic I guess this doesn't matter, binning mistakes are 
+        //  from elsewhere...
+        int best = -1;  // known best coverage
+        int cov = 0;   // current coverage
+        double left;  // left of the current window
+        int i_left_window = 0;  // left most window that hasn't moved out yet
+        for (int iseg=0; iseg<itvls.n; iseg++){
+            if (itvls.a[iseg].is_ignored || block[itvls.a[iseg].i]) continue;
+            left = itvls.a[iseg].d1;
+            cov += itvls.a[iseg].weight;
+            // check if some window on the left has moved out
+            while (1){
+                if (itvls.a[i_left_window].d2<left){
+                    cov -= itvls.a[i_left_window].weight;
+                    i_left_window++;
+                }else break;
+            }
+            // check score
+            best = best>cov? best : cov;
+        }
+        if (best>=itvls.n){
+            if (verbose) fprintf(stderr, "[dbg::%s]     suboptimal\n", __func__);
+            if (counter_tot) (*counter_tot)++;
+            fprintf(fp, "bin%d.sub\ts%d.ctg%.6d%c", I, (int)ug->u.a[seedID].subg_label, 
+                        seedID+1, "lc"[ug->u.a[seedID].circ]);
+            block[i] = 1;
+
+            FILE *fp_bin = 0;
+            if (bin_dir_prefix){
+                char *bin_fn = (char*)malloc(strlen(bin_dir_prefix)+50);
+                sprintf(bin_fn, "%s/bin%d.sub.fa", bin_dir_prefix, I);
+                fp_bin = fopen(bin_fn, "w");
+                assert(fp_bin);
+                free(bin_fn);
+                uint32_t v = seedID;
+                fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+            }
+
+            uint32_t i_can;
+            for (uint32_t i_can=0; i_can<itvls.n; i_can++){
+                if (block[itvls.a[i_can].i]) continue;
+                uint32_t v = candidates->a[itvls.a[i_can].i];
+                fprintf(fp, "\ts%d.ctg%.6d%c", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                if (fp_bin){
+                    fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                    fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                }
+                block[itvls.a[i_can].i] = 1;
+            }
+            fprintf(fp, "\n");
+            if (fp_bin) fclose(fp_bin);
+            I++;
+            if (i_can>1)
+                if (counter_mul) (*counter_mul)++;  // neighbor(s) + seed itself
+            continue;
+        }
+
+        // If we reach here, put the seed contig alone in a bin if it is long.
+        // (if the contig is short, do nothing; bins initiated from other seeds might
+        // want to grab it.) 
+        if (verbose) fprintf(stderr, "[dbg::%s]     fall-through\n", __func__);
+        if ((candidates->a[i]>>32)>500000){
+            if (verbose) fprintf(stderr, "[dbg::%s]     write because long (%d)\n", __func__, 
+                    (int)(candidates->a[i]>>32));
+            if (counter_tot) (*counter_tot)++;
+            fprintf(fp, "bin%d.sub\ts%d.ctg%.6d%c\n", I, (int)ug->u.a[seedID].subg_label, 
+                        seedID+1, "lc"[ug->u.a[seedID].circ]);
+
+            if (bin_dir_prefix){
+                uint32_t v = seedID;
+                char *bin_fn = (char*)malloc(strlen(bin_dir_prefix)+50);
+                sprintf(bin_fn, "%s/bin%d.thro.fa", bin_dir_prefix, I);
+                FILE *fp_bin = fopen(bin_fn, "w");
+                assert(fp_bin);
+                free(bin_fn);
+                fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                fclose(fp_bin);
+            }
+            block[i] = 1;
+            I++;
+        }
+    }    
+    free(block);
+    kv_destroy(itvls);
+
+}
+
+void hamt_helper_write_tab_joined_darray(FILE *fp, double *a, uint32_t n){
+    if (n==0) return;
+    fprintf(fp, "%f", a[0]);
+    for (int i=1; i<n; i++){
+        fprintf(fp, "\t%f", a[i]);
+    }
+    fprintf(fp, "\n");
+}
+/**
+ * @func Post-assembly, post-circle-resuce binning based on bhtsne.
+*/
+void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads, 
+                        char *output_prefix, int write_binning_fasta){
+    // Take contigs >=100kb and is not [>=1Mb and circular] and is not used by 
+    //  circle rescue step (after deduplication).
+    // Make a 2D feature matrix {n_contigs, n_features}, where features are:
+    //    - coverage (hifiasm's estimation, tot bases / contig length)
+    //    - canonical 5-mer profile (no adjustments to frequencies, 
+    //      unlike the n=103 TNF used in various binners, since tSNE seems
+    //      indifferent to the difference. Prominent problem lies elsewhere.
+    //      Also does not matter too much whether we use 4-mer or 5-mer.) 
+    double T = Get_T();
+    int verbose = 1;
+    
+    asg_t *auxsg = ug->g;
+    vu64_t nl;  // "neighbor list"
+    kv_init(nl); 
+    kv_resize(uint64_t, nl, 32);
+
+    // collect candidates
+    radix_sort_ovhamt32(blacklist->a, blacklist->a+blacklist->n);
+    uint32_t b_p=0;  // blacklist pointer
+    for (uint32_t v=0; v<auxsg->n_seq; v++){
+        if (ug->u.a[v].len>=100000){
+            while (v>blacklist->a[b_p]) 
+                b_p++;
+            int ban = 0;
+            for (uint32_t i=b_p; i<blacklist->n; i++){
+                if (blacklist->a[i]==v) {
+                    ban = 1;
+                    break;
+                }
+                if (blacklist->a[i]>v) break;
+            }
+            if (!(ug->u.a[v].len>=1000000 && ug->u.a[v].circ) && !ban){
+                kv_push(uint64_t, nl, (((uint64_t)ug->u.a[v].len)<<32)|v );  // for sorting
+            }
+        }
+    }
+    fprintf(stderr, "[M::%s] Will try to bin on %d contigs (skipped %d because blacklist).\n", 
+            __func__, (int)nl.n, (int)blacklist->n);
+    radix_sort_ovhamt64(nl.a, nl.a+nl.n);
+
+    // coverage and 5NF profile, and z-score normalize it
+    double *pf = (double*)calloc(513*nl.n, sizeof(double));
+    assert(pf);
+    hamt_5NF_profile_gen(ug, nl.a, nl.n, n_threads, &pf);
+
+    // call tSNE
+    double *emb = ts_fit(nl.n, 513, pf, 2, 0.5, 50, 42);
+
+    // (debug: write embedding)
+    if (verbose)
+    {
+        char *fn = (char*)malloc(strlen(output_prefix)+50);
+        assert(fn);
+
+        sprintf(fn, "%s.bins.featuremat", output_prefix);
+        FILE *fp = fopen(fn, "w");
+        for (int tmpi=0; tmpi<nl.n; tmpi++){
+            uint32_t tmpv = (uint32_t)nl.a[tmpi];
+            fprintf(fp, "s%d.ctg%.6d%c\t", (int)ug->u.a[tmpv].subg_label, 
+                    (int)(tmpv+1), "lc"[ug->u.a[tmpv].circ]
+                    );
+            hamt_helper_write_tab_joined_darray(fp, pf+tmpi*513, 513);
+        }
+
+        fclose(fp);
+
+        sprintf(fn, "%s.bins.embedding", output_prefix);
+        fp = fopen(fn, "w");
+        for (int tmpi=0; tmpi<nl.n; tmpi++){
+            uint32_t tmpv = (uint32_t)nl.a[tmpi];
+            fprintf(fp, "s%d.ctg%.6d%c\t", (int)ug->u.a[tmpv].subg_label, 
+                    (int)(tmpv+1), "lc"[ug->u.a[tmpv].circ]
+                    );
+            hamt_helper_write_tab_joined_darray(fp, emb+tmpi*2, 2);
+        }
+        fclose(fp);
+        free(fn);
+    }
+
+    // parse the embedding
+    free(pf);
+    char *fn = (char*)malloc(strlen(output_prefix)+20);
+    assert(fn);
+    sprintf(fn, "%s.bins.tsv", output_prefix);
+    FILE *fp = fopen(fn, "w"); 
+    assert(fp);
+    if (write_binning_fasta){
+        sprintf(fn, "%s.bins", output_prefix);
+        mkdir(fn, S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH);  // 755
+    }
+    int tot_bins=0, tot_bins_multi=0;
+    hamt_simple_binning_pick_neighbors(fp, write_binning_fasta? fn : 0,
+                                       ug, &nl, emb, 0.25, 0.20, 
+                                       &tot_bins, &tot_bins_multi);
+    fclose(fp);
+    free(fn);
+
+    // cleanup
+    kv_destroy(nl);
+    free(emb);
+    fprintf(stderr, "[M::%s] Binning used %.2fs. %d bins (%d have more than 1 contig).\n", 
+            __func__, Get_T()-T, tot_bins, tot_bins_multi);
+
 }

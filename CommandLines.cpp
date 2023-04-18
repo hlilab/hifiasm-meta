@@ -50,6 +50,7 @@ static ko_longopt_t long_options[] = {
     { "probe-gfa", ko_no_argument, 420},
     { "use-ha-bin", ko_no_argument, 421}, // use hifiasm bin files - will ignore hamt-specific files and use placeholders.
     { "noch", ko_no_argument, 422},  // disable contained reads sparing heuristics
+    { "write-binning", ko_no_argument, 423 },  // writes binning fasta files, in addition to the tsv
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -181,6 +182,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->is_aggressive = 0; 
     asm_opt->use_ha_bin = 0;
     asm_opt->no_containedreads_heuristics = 0;
+    asm_opt->write_binning_fasta = 0;  // defaults to only write a tsv for binning
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable
 }
@@ -546,6 +548,7 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 421) {asm_opt->use_ha_bin = 1; fprintf(stderr, "[M::%s] use hifiasm bin files\n", __func__);}
         else if (c == 422) {asm_opt->no_containedreads_heuristics = 1; 
                             fprintf(stderr, "[M::%s] contained reads sparing heuristics disabled.\n", __func__);}
+        else if (c == 423) {asm_opt->write_binning_fasta = 1;}
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

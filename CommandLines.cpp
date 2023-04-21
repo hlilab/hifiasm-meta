@@ -47,7 +47,7 @@ static ko_longopt_t long_options[] = {
 
     { "gc-sb-max", ko_no_argument, 418},  // graph cleaning, max unitig length in superbubbles
     { "force-rs", ko_no_argument, 419},  // aka force-preovec, better named
-    { "probe-gfa", ko_no_argument, 420},
+    { "probe-gfa", ko_optional_argument, 420},  // compile-time probe of debug gfa, can pass prefix. MUST use = (gnu getopt behavior)
     { "use-ha-bin", ko_no_argument, 421}, // use hifiasm bin files - will ignore hamt-specific files and use placeholders.
     { "noch", ko_no_argument, 422},  // disable contained reads sparing heuristics
     { "write-binning", ko_no_argument, 423 },  // writes binning fasta files, in addition to the tsv
@@ -163,6 +163,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->mode_read_kmer_profile = 0;
     asm_opt->readselection_sort_order = 1;  // smallest first
     asm_opt->bin_base_name = (char*)(DEFAULT_OUTPUT);
+    asm_opt->probebin_base_name = 0;
     asm_opt->preovec_coverage = 150;
     asm_opt->is_ignore_ovlp_cnt = 0;
     asm_opt->is_dump_read_mask = 0;
@@ -544,7 +545,15 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->is_dump_relevant_reads = 1;
         }
         else if (c == 418) {asm_opt->gc_superbubble_tig_max_length = atoi(opt.arg);}
-        else if (c == 420) {asm_opt->do_probe_gfa = 1;}
+        else if (c == 420) {
+            asm_opt->do_probe_gfa = 1;  
+            if (opt.arg) {
+                asm_opt->probebin_base_name = opt.arg;
+                fprintf(stderr, "[M::%s] may use probe gfa bins at %s\n", __func__, opt.arg);
+            }else{
+                fprintf(stderr, "[M::%s] probe-gfa suffix will fall back to -o or -B, note that to pass a string you need the equal sign.\n", __func__);
+            }
+        }
         else if (c == 421) {asm_opt->use_ha_bin = 1; fprintf(stderr, "[M::%s] use hifiasm bin files\n", __func__);}
         else if (c == 422) {asm_opt->no_containedreads_heuristics = 1; 
                             fprintf(stderr, "[M::%s] contained reads sparing heuristics disabled.\n", __func__);}
@@ -590,6 +599,14 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
 		}
     }
 
+    // swith order should not matter. need to process some cases here.
+    if (asm_opt->do_probe_gfa){
+        if (!asm_opt->probebin_base_name) {
+            asm_opt->probebin_base_name = asm_opt->bin_base_name;
+            fprintf(stderr, "[M::%s] update probe-gfa prefix to %s\n", __func__, 
+                    asm_opt->bin_base_name);
+        }
+    }
 
     if (argc == opt.ind)
     {

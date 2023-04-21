@@ -11648,7 +11648,9 @@ void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ,
 
     fprintf(fp, ">rc.%d", pathID);
     for (i=0; i<l; i++){
-        fprintf(fp, " ctg%.6d%c", (int)(r[i]>>1)+1, "-+"[r[i]&1]);
+        fprintf(fp, " s%d.ctg%.6d%c%c", (int)ug->u.a[r[i]>>1].subg_label, 
+                (int)(r[i]>>1)+1, "lc"[ug->u.a[r[i]>>1].circ],
+                "-+"[r[i]&1]);
     }
     fprintf(fp, "\n");
     
@@ -11765,7 +11767,7 @@ vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_
         if (is_print_found){
             fprintf(stderr, "[debug::%s] ===circ%d:\n", __func__, ofidx+1);
             for (int i=0; i<l; i++){
-                fprintf(stderr, "[debug::%s]   utg%.6d%c\n", __func__, 
+                fprintf(stderr, "[debug::%s]   tig%.6d%c\n", __func__, 
                         (int)(report_stack.a[of+1+i]>>1)+1, "+-"[report_stack.a[of+1+i]&1]);
             }
         }else{
@@ -11847,6 +11849,8 @@ typedef struct {
     stacku32_t *entries;  // persumed entry vertices, to be tested; do NOT have the direction bit
     stacku32_t *exits;  // (similar)
     stacku32_t *paths;  // length=n_threads, an array of stacks to store paths through tangles
+    vu128_t *paths_sten;  // stores entry-exit pairs that are actually used,
+                              // to be sorted and ensure stable tangle popping order.
     hamt_ba_t *is_handle; // a bit array, 0 not entry/exit, 1 yes
     ma_ug_t *ug;  // will modify
     asg_t *sg; 
@@ -12203,12 +12207,20 @@ static void hamt_ug_resolveTangles_threaded_callback_step1(void *data, long i, i
                                             __func__, (int)(source>>1)+1, (int)(source&1), (int)(sink>>1)+1, (int)(sink&1)
                     );
                     }
-                // find a path and store it in thread-specific buffers, separated by 0xffffffff
+                // Find a path and store it in thread-specific buffers, 
+                // separated by 0xffffffff.
+                uint64_t tmpstart = dd->paths[tid].n;  // marks the start of a segment in the path buffer
                 hamt_ug_resolveTangles_threaded_callback_markwalk(dd->sg, ug, 
                             source, sink, &dd->paths[tid], &pathlen, 0, 1);
                 if (pathlen>0){
                     hamt_ba_t_write(dd->is_handle, 1, source);
                     hamt_ba_t_write(dd->is_handle, 1, sink);
+                    kv_push(hamt_u128_t, dd->paths_sten[tid], 
+                            ((hamt_u128_t){.x1=(((uint64_t)source)<<32 | sink) , 
+                             .x2=(tmpstart <<32 | tid)
+                             }
+                            )
+                    );
                 }
                 // if (verbose){
                 //     fprintf(stderr, "[debug::%s] tid=%d, path buffer length now %d\n", 
@@ -12249,8 +12261,11 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
         s->dd->gc_tangle_max_tig = p->gc_tangle_max_tig;
         s->dd->is_handle = p->is_handle;
         s->dd->paths = (stacku32_t*)calloc(p->n_threads, sizeof(stacku32_t));
+        s->dd->paths_sten = (vu128_t*)calloc(p->n_threads, sizeof(vu128_t));
         for (int i=0; i<p->n_threads; i++){
             stacku32_init(&s->dd->paths[i]);
+            kv_init(s->dd->paths_sten[i]);
+            kv_resize(hamt_u128_t, s->dd->paths_sten[i], 16);
         }
         s->dd->entries = (stacku32_t*)calloc(1, sizeof(stacku32_t));
         s->dd->exits = (stacku32_t*)calloc(1, sizeof(stacku32_t));
@@ -12284,7 +12299,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                 exit = entry+2;
                 p->offset = 0;
             }
-            fprintf(stderr, "[debug::%s] step0, dd length %d, new entry starts at %.6d , exit at %.6d\n", 
+            if (verbose) fprintf(stderr, "[debug::%s] step0, dd length %d, new entry starts at %.6d , exit at %.6d\n", 
                 __func__, s->dd->entries->n,  (int)(entry>>1)+1, (int)(exit>>1)+1);
         }
         return s;
@@ -12300,8 +12315,10 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
             stacku32_destroy(s->dd->exits);
             for (int i=0 ;i<p->n_threads; i++){
                 stacku32_destroy(&s->dd->paths[i]);
+                kv_destroy(s->dd->paths_sten[i]);
             }
             free(s->dd->paths);
+            free(s->dd->paths_sten);
             free(s->dd);
             free(s);
         }
@@ -12309,6 +12326,17 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
     }else if (step==2){  // flip 
         hamt_marknpop_st_t *s = (hamt_marknpop_st_t*) in;
         hamt_marknpop_pl_t *p = s->p;
+        // To ensure stable tangle popping order, sort entry-exit pairs here.
+        // Order is arbitrary (by contig IDs).
+        vu128_t orderbuf;
+        kv_init(orderbuf);
+        kv_resize(hamt_u128_t, orderbuf, 16);
+        for (int tid=0; tid<p->n_threads; tid++){
+            for (int i=0; i<s->dd->paths_sten[tid].n; i++){
+                kv_push(hamt_u128_t, orderbuf, s->dd->paths_sten[tid].a[i]);
+            }
+        }
+        qsort(orderbuf.a, orderbuf.n, sizeof(hamt_u128_t), compare_u128_t_use64);
         
         // SESE regions can only contain or exclude
         //  each other, but they never partially overlap. 
@@ -12318,10 +12346,23 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
         stacku32_t *stack;
         stacku32_t sancheck_contain;
         stacku32_init(&sancheck_contain);
-        for (int tid=0; tid<p->n_threads; tid++){
+        if (verbose) {
+            fprintf(stderr, "[dbg::%s] oderbuf length=%d\n", __func__, (int)orderbuf.n);
+            for (int i_buf=0; i_buf<orderbuf.n; i_buf++){
+                fprintf(stderr, "[dbg::%s]   %d : %d / %d\n", __func__, 
+                        i_buf,
+                        (int)((uint32_t)(orderbuf.a[i_buf].x1>>32)), 
+                        (int)((uint32_t)orderbuf.a[i_buf].x1)
+                        );
+            }
+        }
+        for (int i_buf=0; i_buf<orderbuf.n; i_buf++){
+            uint32_t tid =  (uint32_t)orderbuf.a[i_buf].x2;
+            uint32_t buf_st = orderbuf.a[i_buf].x2>>32;
+
             int has_contain = 0;
             stack = &s->dd->paths[tid];
-            for (int i=0; i<stack->n; i++){
+            for (int i=buf_st; i<stack->n; i++){
                 if (stack->a[i]==UINT32_MAX){
                     if (hamt_ba_t_get(s->dd->is_handle, stack->a[i-1])){
                         has_contain-=1;
@@ -12339,7 +12380,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                                             (int)(tmp.a[tmpi]>>1)+1);
                             }
                         }
-                        // treate
+                        // treat
                         hamt_ug_resolveTangles_threaded_callback_treatwalk(
                             p->sg, p->ug, 
                             tmp.a[0], tmp.a[tmp.n-1], &tmp, 
@@ -12363,6 +12404,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                     has_contain = 0;
                     stacku32_reset(&tmp);
                     stacku32_reset(&sancheck_contain);
+                    break;
                 }else{
                     if (hamt_ba_t_get(s->dd->is_handle, stack->a[i]) && 
                         tmp.n!=0){
@@ -12374,13 +12416,16 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
             }
         }
 
+        kv_destroy(orderbuf);
         stacku32_destroy(&sancheck_contain);
         stacku32_destroy(s->dd->entries);
         stacku32_destroy(s->dd->exits);
         for (int i=0 ;i<p->n_threads; i++){
             stacku32_destroy(&s->dd->paths[i]);
+            kv_destroy(s->dd->paths_sten[i]);
         }
         free(s->dd->paths);
+        free(s->dd->paths_sten);
         free(s->dd);
         free(s);
 
@@ -12415,7 +12460,7 @@ int hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int b
     p->sg = sg;
     p->ug = ug;
     p->n_threads = n_threads;
-    p->bufsize = n_threads*4096;
+    p->bufsize = 48*4096;  // must not be variable
     p->base_label = base_label;
     p->gc_tangle_max_tig = asm_opt.gc_tangle_max_tig;
     p->is_handle = hamt_ba_t_init(auxsg->n_seq*2);
@@ -12786,7 +12831,7 @@ void hamt_simple_binning_pick_neighbors(FILE *fp, char *bin_dir_prefix, ma_ug_t 
                 fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
             }
 
-            uint32_t i_can;
+            uint32_t i_can=0;
             for (uint32_t i_can=0; i_can<itvls.n; i_can++){
                 if (block[itvls.a[i_can].i]) continue;
                 uint32_t v = candidates->a[itvls.a[i_can].i];
@@ -12858,7 +12903,7 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
     //      indifferent to the difference. Prominent problem lies elsewhere.
     //      Also does not matter too much whether we use 4-mer or 5-mer.) 
     double T = Get_T();
-    int verbose = 1;
+    int verbose = 0;
     
     asg_t *auxsg = ug->g;
     vu64_t nl;  // "neighbor list"

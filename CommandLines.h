@@ -4,7 +4,7 @@
 #include <pthread.h>
 
 #define HA_VERSION "0.13-r308"
-#define HAMT_VERSION "0.3-r067"
+#define HAMT_VERSION "0.3-r068"
 
 
 // #define VERBOSE 1
@@ -84,7 +84,8 @@ typedef struct {
     int is_disable_read_selection;
     int mode_read_kmer_profile;
     int readselection_sort_order;  // experimental, 1 for smallestFirst, 2 for largestFirst, 0 to force disable it (note that we still go through loading all reads + sorting, just don't use the info when annotation mask_readnorm)
-    char *bin_base_name;
+    char *bin_base_name; // -B
+    char *probebin_base_name; //--probe-gfa
     int is_ignore_ovlp_cnt;  // experimental, do preovec read selection even if the whole read set looks practical
     int preovec_coverage;
     int is_dump_read_mask;

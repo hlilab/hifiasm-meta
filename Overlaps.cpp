@@ -30155,6 +30155,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	asg_t *sg = *sg_ptr;
     ma_ug_t *hamt_ug = 0;
     int simplereport[5];
+    int acc;
+    int cleanID = 0;
     vu32_t *long_tigs_in_resuce;
     // extra rescues and others
     if (asm_opt.is_mode_low_cov){
@@ -30326,7 +30328,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             double time;
             hamt_asg_reset_seq_label(sg, 0);
 
-            int cleanID = 0;
 
             hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
@@ -30339,7 +30340,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // topo pre clean
             fprintf(stderr, "[M::%s] ======= preclean =======\n", __func__);
-            int acc = 0;
+            acc = 0;
             for (int i=0; i<10; i++){
                 time = Get_T();
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnA", cleanID);}
@@ -30470,7 +30471,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] treated %d, used %.1fs\n", __func__, tot, Get_T()-time);
             }
-
+            if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
+                hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
+            }
+probe:
+            if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             // resolve tangle
             fprintf(stderr, "\n\n[M::%s] ======= tangles =======\n", __func__);
             int nb_tangle_cut, nb_tip;
@@ -30621,12 +30627,12 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 0);
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "a_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 1);
-            if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
-                hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
-            }
+            //if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
+            //    hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
+            //}
             
             fprintf(stderr, "\n\n********** checkpoint: post-assembly **********\n\n");
-probe:
+//probe:
             if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 
@@ -30679,7 +30685,7 @@ long long bubble_dist, int read_graph, int write)
     {
         fprintf(stderr, "try loading bin files of assembly graph...\n");
         if(asm_opt.do_probe_gfa){
-            loaded_debug_gfa = hamt_load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);    
+            loaded_debug_gfa = hamt_load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.probebin_base_name, &reverse_sources, &ruIndex, n_read);    
             if (!loaded_debug_gfa){  // fallback
                 fprintf(stderr, "--probe-gfa loading failed, fallback to try --dbg-gfa...\n");
                 asm_opt.do_probe_gfa = -1;

@@ -13,6 +13,32 @@ typedef struct {
     uint32_t i;
     uint32_t is_optimal:1, is_ignored:1, weight:30;
 }ddp_t;  // double-double plus; can avoid if casting double to uint32_t. just need this for sorting
+
+
+typedef struct {
+    uint64_t x1, x2;
+}hamt_u128_t;
+static inline int compare_u128_t_use64(const void *a_, const void *b_){
+    // only compare first 64 bits
+    hamt_u128_t *a = (hamt_u128_t*)a_;
+    hamt_u128_t *b = (hamt_u128_t*)b_;
+    if (a->x1 > b->x1) return 1;
+    else if (a->x1 < b->x1) return -1;
+    return 0;
+}
+static inline int compare_u128_t(const void *a_, const void *b_){
+    // compare full 128 bits
+    hamt_u128_t *a = (hamt_u128_t*)a_;
+    hamt_u128_t *b = (hamt_u128_t*)b_;
+    if (a->x1 > b->x1) return 1;
+    else if (a->x1 < b->x1) return -1;
+    else{
+        if (a->x2 > b->x2) return 1;
+        else if (a->x2 < b->x2) return -1;
+    }
+    return 0;
+}
+
 typedef kvec_t(char) chars_t;
 typedef kvec_t(uint8_t) vu8_t;
 typedef kvec_t(uint16_t) vu16_t;
@@ -21,6 +47,7 @@ typedef kvec_t(uint64_t) vu64_t;
 typedef kvec_t(int32_t) vi32_t;
 typedef kvec_t(int64_t) vi64_t;
 typedef kvec_t(ddp_t) vddp_t;
+typedef kvec_t(hamt_u128_t) vu128_t;
 
 static inline double hamt_meand(double *a, size_t n){
     // https://www.heikohoffmann.de/htmlthesis/node134.html

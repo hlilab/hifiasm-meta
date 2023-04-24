@@ -10997,10 +10997,16 @@ void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
 char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, int *seq_l){
     int verbose = 0;
     int seq_m = 3000000, seq_n=0;
-    char *seq = (char*)malloc(seq_m); assert(seq);
+    char *seq = (char*)malloc(seq_m); 
     int seqtmp_m = 1000000;
-    char *seqtmp = (char*)malloc(seq_m); assert(seqtmp);
-    
+    char *seqtmp = (char*)malloc(seq_m); 
+    if (!seq || !seqtmp){
+        fprintf(stderr, "[E::%s] malloc failed. seq_m=%d\n", 
+                __func__, seq_m);
+        *seq_l=0;
+        return 0;
+    }
+   
     asg_t *auxsg = ug->g;
     ma_utg_t *p;
     char *s;

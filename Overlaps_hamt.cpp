@@ -12946,7 +12946,7 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
     hamt_5NF_profile_gen(ug, nl.a, nl.n, n_threads, &pf);
 
     // call tSNE
-    double *emb = ts_fit(nl.n, 513, pf, 2, 0.5, 50, 42);
+    double *emb = ts_fit(nl.n, 513, pf, 2, 0.5, asm_opt.tsne_perplexity, asm_opt.tsne_randomseed);
 
     // (debug: write embedding)
     if (verbose)
@@ -12992,7 +12992,8 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
     }
     int tot_bins=0, tot_bins_multi=0;
     hamt_simple_binning_pick_neighbors(fp, write_binning_fasta? fn : 0,
-                                       ug, &nl, emb, 0.25, 0.20, 
+                                       ug, &nl, emb, 
+                                       asm_opt.tsne_neigh_dist, asm_opt.tsne_neigh_dist*0.8, 
                                        &tot_bins, &tot_bins_multi);
     fclose(fp);
     free(fn);

@@ -115,6 +115,11 @@ typedef struct {
     // hamt, multiprocessing context for get_specific_overlap's binary search 
     int get_specific_overlap_is_use_bf;
 
+    // tsne in binning
+    int tsne_perplexity;
+    int tsne_randomseed;
+    float tsne_neigh_dist;
+
     // end of hamt
     
 } hifiasm_opt_t;

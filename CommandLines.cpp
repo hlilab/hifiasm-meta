@@ -51,6 +51,10 @@ static ko_longopt_t long_options[] = {
     { "use-ha-bin", ko_no_argument, 421}, // use hifiasm bin files - will ignore hamt-specific files and use placeholders.
     { "noch", ko_no_argument, 422},  // disable contained reads sparing heuristics
     { "write-binning", ko_no_argument, 423 },  // writes binning fasta files, in addition to the tsv
+
+    { "tsne-perp", ko_required_argument, 424 },  // perplexity of tsne used in binning
+    { "tsne-seed", ko_required_argument, 425 },  // 
+    { "tsne-neighdist", ko_required_argument, 426 },  // 
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -184,6 +188,9 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->use_ha_bin = 0;
     asm_opt->no_containedreads_heuristics = 0;
     asm_opt->write_binning_fasta = 0;  // defaults to only write a tsv for binning
+    asm_opt->tsne_perplexity = 50;
+    asm_opt->tsne_randomseed = 42; 
+    asm_opt->tsne_neigh_dist = 0.25;
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable
 }
@@ -558,6 +565,10 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 422) {asm_opt->no_containedreads_heuristics = 1; 
                             fprintf(stderr, "[M::%s] contained reads sparing heuristics disabled.\n", __func__);}
         else if (c == 423) {asm_opt->write_binning_fasta = 1;}
+        else if (c == 424) {asm_opt->tsne_perplexity= atoi(opt.arg);}
+        else if (c == 425) {asm_opt->tsne_randomseed= atoi(opt.arg);}
+        else if (c == 426) {asm_opt->tsne_neigh_dist= atof(opt.arg);}
+
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;

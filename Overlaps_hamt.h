@@ -262,4 +262,13 @@ vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_
 int hamt_ug_delete_unconnected_single_read_contigs(asg_t *sg, ma_ug_t *ug);
 void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads, 
                         char *output_prefix, int write_binning_fasta);
+
+
+
+int hamt_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_read, 
+                                  ma_sub_t *coverage_cut, 
+                                  R_to_U* ruIndex, int max_hang, int min_ovlp);
+int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources, 
+                             const ma_hit_t_alloc* const reverse_sources, 
+                             const long long n_reads);
 #endif // __OVERLAPS_HAMT__

@@ -621,6 +621,7 @@ typedef struct {
 /**
  * @par bitsize the precise array length. Allocation is 8-bit blocks, 
  *      length sancheck is precise.
+ * @func Allocate memory; will zero out.
 */
 hamt_ba_t *hamt_ba_t_init(uint32_t bitsize){
     hamt_ba_t *d = (hamt_ba_t*)calloc(1, sizeof *d);
@@ -634,7 +635,13 @@ void hamt_ba_t_destroy(hamt_ba_t *d){
     free(d->a);
     free(d);
 }
+
+/**
+ * @func Reallocate, will zero out new allocation. 
+*/
 void hamt_ba_t_resize(hamt_ba_t *d, uint32_t bitsize){
+    uint32_t prev_size = d->m;
+    uint8_t prev_last = d->a[d->m-1];
     d->m = bitsize/8 +1 ;
     d->mm = bitsize;
     d->a = (uint8_t*)realloc(d->a, d->m);
@@ -642,6 +649,8 @@ void hamt_ba_t_resize(hamt_ba_t *d, uint32_t bitsize){
         fprintf(stderr, "[E::%s] realloc failed\n", __func__);
         exit(1);
     }
+    d->a[prev_size-1] = prev_last;
+    memset(d->a+prev_size, 0, d->m - prev_size);
 }
 
 /**
@@ -2796,7 +2805,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
     linked = 0;
     int passed = 1;
     if (hamt_asgarc_util_get_the_one_target(auxsg, w1[0], &u1, 0, 0, base_label)<0){
-        fprintf(stderr, "ERROR %s u1\n", __func__);
+        fprintf(stderr, "[E::%s]ERROR u1\n", __func__);
         exit(1);
     }
     if (hamt_asgarc_util_countSuc(auxsg, u1, 0, 0, base_label)<=1){
@@ -2827,7 +2836,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
     for (san=0; san<20; san++){
         // get the target in the single edge, sancheck topo
         if (hamt_asgarc_util_get_the_one_target(auxsg, w1[0], &w_tmp, 0, 0, base_label)<0){
-            fprintf(stderr, "error1 %s\n", __func__);
+            fprintf(stderr, "[E::%s]error1 \n", __func__);
             exit(1);
         }
         if (w_tmp==v0){return nb_cut;}  // prevent circling back to handle
@@ -2902,11 +2911,11 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
             uint32_t tmp_v1, tmp_v2;
             if (suc1==1 && suc2==1){
                 if (hamt_asgarc_util_get_the_one_target(auxsg, w2[0], &tmp_v1, 0, 0, base_label)<0){
-                    fprintf(stderr, "ERROR %s, tmp_v1\n", __func__);
+                    fprintf(stderr, "[E::%s]ERROR, tmp_v1\n", __func__);
                     exit(1);
                 }
                 if (hamt_asgarc_util_get_the_one_target(auxsg, w2[1], &tmp_v2, 0, 0, base_label)<0){
-                    fprintf(stderr, "ERROR %s, tmp_v2\n", __func__);
+                    fprintf(stderr, "[E::%s]ERROR tmp_v2\n", __func__);
                     exit(1);
                 }
                 if (hamt_asgarc_util_countPre(auxsg, tmp_v1, 0, 0, base_label)<=2 && hamt_asgarc_util_countPre(auxsg, tmp_v2, 0, 0, base_label)<=2){
@@ -3141,7 +3150,7 @@ int hamt_ugasg_util_findendSinglePath_allowSimpleBubble(ma_ug_t *ug, uint32_t v0
             }
         }else{  // step to the next vertex
             if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, v, &w, 0, 0, base_label)<0){
-                fprintf(stderr, "ERROR AT %s\n", __func__);
+                fprintf(stderr, "[E::%s] ERROR\n", __func__);
                 exit(1);
             }
             if (color[w>>1]){  
@@ -11003,6 +11012,8 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
     if (!seq || !seqtmp){
         fprintf(stderr, "[E::%s] malloc failed. seq_m=%d\n", 
                 __func__, seq_m);
+        if (seq) free(seq);
+        if (seqtmp) free(seqtmp);
         *seq_l=0;
         return 0;
     }
@@ -11026,7 +11037,13 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
         if (vu&1){  // reverse strand
             if (p->len>=seqtmp_m){
                 seqtmp_m = p->len+1;
-                seqtmp = (char*)realloc(seqtmp, seqtmp_m); assert(seqtmp);
+                seqtmp = (char*)realloc(seqtmp, seqtmp_m); 
+                if (!seqtmp){
+                    fprintf(stderr, "[E::%s] realloc failed, seqtmp_m is %d\n", __func__, (int)seqtmp_m);
+                    if (seq) free(seq);
+                    if (seqtmp) free(seqtmp);
+                    return 0;
+                }
             }
             for (j=p->len-1, j2=0; j>=0; j--){
                 seqtmp[j2] = seqcmp(p->s[j]);
@@ -11046,7 +11063,13 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
         if (i!=l-1){
             if (seq_n + p->len - arclen>=seq_m){
                 seq_m += p->len - arclen;
-                seq = (char*)realloc(seq, seq_m); assert(seq);
+                seq = (char*)realloc(seq, seq_m); 
+                if (!seq){
+                    fprintf(stderr, "[E::%s] realloc failed-b, seq_m is %d\n", __func__, (int)seq_m);
+                    if (seq) free(seq);
+                    if (seqtmp) free(seqtmp);
+                    return 0;
+                }
             }
             sprintf(seq+seq_n, "%.*s", (int)(p->len-arclen), s+arclen);
             seq_n += p->len-arclen;
@@ -11075,7 +11098,13 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
         if (i==l-1){
             if (seq_n + p->len - arclen - arclen_last>=seq_m){
                 seq_m += p->len - arclen - arclen_last;
-                seq = (char*)realloc(seq, seq_m); assert(seq);
+                seq = (char*)realloc(seq, seq_m); 
+                if (!seq){
+                    fprintf(stderr, "[E::%s] realloc failed-c, seq_m is %d\n", __func__, (int)seq_m);
+                    if (seq) free(seq);
+                    if (seqtmp) free(seqtmp);
+                    return 0;
+                }
             }
             if (p->len-arclen-arclen_last>=0){
                 if (verbose) {fprintf(stderr, "[debug::%s]   - last status: type add, len=%d, arclen=%d, arclen_last=%d\n", 
@@ -12055,7 +12084,7 @@ int hamt_ug_resolveTangles_threaded_callback_markwalk(asg_t *sg, ma_ug_t *ug,
         }
         san++;
         if (san>1000){
-            fprintf(stderr, "[E::%s] too many steps\n", __func__);
+            fprintf(stderr, "[W::%s] too many steps, abort this try (source was utg%.6d, sink was utg%.6d)\n", __func__, (int)(source>>1)+1, (int)(sink>>1)+1);
             ret = 1;
             goto finish;
         }
@@ -13004,4 +13033,305 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
     fprintf(stderr, "[M::%s] Binning used %.2fs. %d bins (%d have more than 1 contig).\n", 
             __func__, Get_T()-T, tot_bins, tot_bins_multi);
 
+}
+
+
+
+typedef struct {
+    //hamt_ba_t *todel;  // note to self: must not use bit array, will data race;
+                         // struct bit field will ub data race 
+    uint8_t *todel2;// array to log which read should be deleted
+    ma_hit_t_alloc* sources;
+    ma_sub_t *coverage_cut; 
+    R_to_U *ruIndex;
+    int max_hang;
+    int min_ovlp;
+}hamt_mahitcontadv_t;
+
+static void hit_contained_advance_callback(void *data, 
+                                    long jobID,   // is readID
+                                    int threadID){  // for kt_for
+    hamt_mahitcontadv_t *s = (hamt_mahitcontadv_t*)data;  
+    if (s->coverage_cut[jobID].del) return;
+
+    //int dbg_print = 0;
+    //if (jobID==67310 || jobID==96791 || jobID==161897) dbg_print = 1;
+
+    ma_hit_t *h = NULL;
+    ma_sub_t *sq = NULL;
+    ma_sub_t *st = NULL;
+    int32_t r;
+    asg_arc_t t;
+    //int printed = 0;
+    for (long long j=0; j<(long long)s->sources[jobID].length; j++) {
+        h = &(s->sources[jobID].buffer[j]);
+        //check the corresponding two reads 
+		sq = &(s->coverage_cut[Get_qn(*h)]);
+        st = &(s->coverage_cut[Get_tn(*h)]);
+        if(sq->del || st->del) continue;  // "may have trio bugs"
+        if(h->del) continue;  // "may have trio bugs"
+        r = ma_hit2arc(h, sq->e - sq->s, st->e - st->s, 
+                    s->max_hang, asm_opt.max_hang_rate, 
+                    s->min_ovlp, &t);
+        if (r == MA_HT_QCONT){
+            //fprintf(stderr, "[dbg::%s] rID %d, tn %d; qs %d qe %d, ts %d te %d\n", 
+            //        __func__, (int)jobID, (int)Get_tn(*h),
+            //        (int)sq->s, (int)sq->e,
+            //        (int)st->s, (int)st->e 
+            //       );
+            s->todel2[jobID] = 1;//hamt_ba_t_write(s->todel, 1, Get_qn(*h));
+            h->del = 1;
+            set_R_to_U(s->ruIndex, Get_qn(*h), Get_tn(*h), 0);  // safe in this direction
+            //if (!printed){
+            //    fprintf(stderr, "[dbg::%s] QCONT qn %d tn %d\n", __func__, 
+            //            (int)Get_qn(*h), (int)Get_tn(*h));
+            //    printed=1;
+            //}
+        }else if (r == MA_HT_TCONT){
+            h->del = 1;  // DO NOTHING about the target: let it happen as QCONT when tn is treated as self
+        }
+    }
+}
+
+int hamt_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_read, 
+                                  ma_sub_t *coverage_cut, 
+                                  R_to_U* ruIndex, int max_hang, int min_ovlp)
+{
+    // ma_hit_contained_advance improved for speed.
+    double startTime0 = Get_T();
+    double startTime = Get_T();
+    int verbose = 0;
+
+    uint8_t *todel2 = (uint8_t*)calloc(n_read, 1);
+
+    int ret0 = 0;
+    int ret = 0;
+	int32_t r;
+	long long i, j, m;
+	asg_arc_t t;
+    ma_hit_t *h = NULL;
+    ma_sub_t *sq = NULL;
+    ma_sub_t *st = NULL;
+
+    hamt_mahitcontadv_t dworker;
+    dworker.todel2 = todel2;
+    dworker.sources = sources;
+    dworker.coverage_cut = coverage_cut;
+    dworker.ruIndex = ruIndex;
+    dworker.max_hang = max_hang;
+    dworker.min_ovlp = min_ovlp;
+
+    // (To guarantee that set_R_to_U's functionality can be
+    // in threads (reallocation avoided beforehand) )
+    if (ruIndex->len<n_read){
+        fprintf(stderr, "[W::%s] Expanding R_to_U buffer, this might be unexpected go check code. old size %d, n_read %d\n", 
+                __func__, (int)ruIndex->len, (int)n_read);
+        ruIndex->index = (uint32_t*)realloc(ruIndex->index, n_read*sizeof(uint32_t));
+        memset(ruIndex->index + ruIndex->len, 
+                -1, 
+                sizeof(uint32_t)*(n_read - ruIndex->len));
+        ruIndex->len = n_read;
+    }
+
+    // mark things
+    kt_for(asm_opt.thread_num, hit_contained_advance_callback, 
+            &dworker, n_read);
+    int tot_marked = 0;
+    for (int i=0; i<n_read; i++){
+        tot_marked += (int)todel2[i];
+    }
+    fprintf(stderr, "[T::%s] step1: used %.2f s, marked %d in bit array\n", 
+            __func__, Get_T()-startTime, tot_marked);
+    startTime = Get_T();
+
+    // delete things
+    // No need to search in the opposite direction when deleting, we have all the 
+    // marks, so one pass for paf and one pass for coverage_cut should be enough.
+    uint64_t tot_del = 0, tot_tried_reads=0;
+    for (uint32_t i=0; i<n_read; i++){
+        if (coverage_cut[i].del) continue;
+        tot_tried_reads++;
+
+        ma_hit_t_alloc *x = &sources[i];
+        int just_del_all = todel2[i];
+        if (just_del_all){
+            for (int j=0; j<x->length; j++){
+                if (!x->buffer[j].del) tot_del++;
+                x->buffer[j].del = 1;
+            }
+        }else{
+            // self is not deleted, but need to 
+            // check whether any target is a dangling hit
+            for (int j=0; j<x->length; j++){
+                uint32_t tn = Get_tn(x->buffer[j]);
+                if (todel2[tn]){
+                    if (!x->buffer[j].del) tot_del++;
+                    x->buffer[j].del = 1;
+                }
+            }
+        }
+    }
+    free(todel2);
+    fprintf(stderr, "[T::%s] step2: used %.2f s; deleted %" PRIu64 " (tried %" PRIu64 "reads))\n", 
+            __func__, Get_T()-startTime, tot_del, tot_tried_reads);
+
+    // clean up??
+    startTime = Get_T();
+    transfor_R_to_U(ruIndex);
+    fprintf(stderr, "[T::%s] step2.5 used %.2f s\n", __func__, Get_T()-startTime); 
+
+    // mark reads that have no non-contained neighbors and drop them
+    startTime = Get_T();
+    for (i = 0; i < n_read; ++i) 
+    {
+        m = 0;
+        for (j = 0; j < (long long)sources[i].length; j++)
+        {
+            ma_hit_t *h = &(sources[i].buffer[j]);
+            if(h->del) continue;
+            ///both the qn and tn have not been deleted
+            if(coverage_cut[Get_qn(*h)].del != 1 && coverage_cut[Get_tn(*h)].del != 1)
+            {
+                h->del = 0;
+                m++;
+            }
+            else
+            {
+                h->del = 1;
+            }
+        }
+
+        ///if sources[i].length == 0, that means all overlapped reads with read i are the contained reads
+        if(m == 0)
+        {
+            //fprintf(stderr, "[dbg::%s] del %d\n", __func__, (int)i);
+            ret++;
+            coverage_cut[i].del = 1;
+        }
+    }
+    fprintf(stderr, "[T::%s] step3 used %.2f s\n", __func__, 
+                Get_T()-startTime);
+
+    fprintf(stderr, "[M::%s] dropped %d reads, used total of %0.2f s\n\n", __func__, ret, Get_T()-startTime0);
+    return ret;
+}
+
+
+typedef struct {
+    ma_hit_t_alloc *sources;
+    const ma_hit_t_alloc* reverse_sources; 
+}hamt_cleanweakhit_t;
+static void hamt_clean_weak_ma_hit_t_worker(void *data, long jobID, int tID){  // Callback for kt_for
+    hamt_cleanweakhit_t *s = (hamt_cleanweakhit_t*) data;
+    uint32_t rID = jobID, qn, tn_weak, tn_strong, qs, qe;  
+    ma_hit_t_alloc *h = &s->sources[rID];
+    const ma_hit_t_alloc *hr;
+    for (uint32_t i=0; i<h->length; i++){
+        if (h->buffer[i].del) continue;
+        if (h->buffer[i].ml==0){  // is weak overlap
+            qn = Get_qn(h->buffer[i]);  // qn should be just rID
+            tn_weak = Get_tn(h->buffer[i]);
+            qs = Get_qs(h->buffer[i]);
+            qe = Get_qe(h->buffer[i]);
+            
+            // (`inline int check_weak_ma_hit`. 
+            // The following is need to be checked multiple times because we want to make
+            // sure that the strong overlap supporting the deletion should  
+            // explicitly come from implied other haplotype. This is doen by checking 
+            // if tn_strong -> tn_weak is a trans overlap. It is not required 
+            // that tn_strong -> tn_weak exists in the cis overlaps.)
+            //
+            // The check can't be reduced to a pre-built array, either do this
+            // or make a hashtable.
+            int can_delete = 0;
+            for (int j=0; j<h->length; j++){
+                if (j==i) continue;
+                if (!h->buffer[j].del && 
+                    h->buffer[j].ml==1 &&  // is strong
+                    Get_qs(h->buffer[j]) <=qs && Get_qe(h->buffer[j])>=qe
+                   ){
+                    tn_strong = Get_tn(h->buffer[j]);
+                    hr = &s->reverse_sources[tn_strong];
+                    int is_found = 0;
+                    for (int jj=0; jj<hr->length; jj++){
+                        if (Get_tn(hr->buffer[jj])==tn_weak){
+                            is_found = 1;
+                            break;
+                        }
+                    } 
+                    if (is_found){
+                        can_delete = 1;
+                        break;
+                    }
+                }
+            }
+
+            if (!can_delete) continue;
+
+            // now mark self overlap and the other way around
+            h->buffer[i].bl = 0;
+            int sancheck = 0;
+            hr = &s->sources[tn_weak];
+            for (int j=0; j<hr->length; j++){
+                if (Get_tn(hr->buffer[j])==qn) {
+                    hr->buffer[j].bl = 0;
+                    sancheck = 1;
+                    break;
+                }
+            }
+            if (!sancheck){
+                fprintf(stderr, "[E::%s] qn->tn exists but tn->qn not found. qn=%d tn=%d\n", 
+                        __func__, (int)qn, (int)tn_weak);
+                //exit(1);
+            }
+        }
+
+    }
+}
+/**
+ * @func For each cis-overlap of each read, 
+ *        if it has at least one strong overlap and the target read of 
+ *        that strong overlap does not trans-overlap with the current target, 
+ *        mark-delete the current overlap.
+*/
+int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources, 
+                             const ma_hit_t_alloc* const reverse_sources, 
+                             const long long n_reads){
+    // threaded `clean_weak_ma_hit_t`
+    
+    int verbose = 0;
+    int n_treated;
+    uint32_t i, j, qn, tn;
+
+    double T = Get_T();
+    double T0 = T;
+
+    hamt_cleanweakhit_t data;
+    data.sources = sources;
+    data.reverse_sources = reverse_sources;
+    kt_for(asm_opt.thread_num, hamt_clean_weak_ma_hit_t_worker, &data, n_reads);
+    fprintf(stderr, "[T::%s] step 1 used %.2f s\n", __func__, Get_T()-T);
+
+    T = Get_T();
+    // i think if we don't need to report n_treated, and that ha functions before 
+    // this function call do not have unrealized changes of .bl makrings, 
+    // the following block can be put inside the kt_for callback. 
+    n_treated = 0;
+    for (int i=0; i<n_reads; i++){
+        for (j=0; j<sources[i].length; j++){
+            if (sources[i].buffer[j].del) continue;
+            if (sources[i].buffer[j].bl==0){
+                sources[i].buffer[j].del = 1;
+                n_treated++;
+            }else{
+                sources[i].buffer[j].del = 0;
+            }
+        }
+    }
+    fprintf(stderr, "[T::%s] step2 used %.2f s (should be short, otherwise read comments.\n", 
+            __func__, Get_T()-T);
+
+    fprintf(stderr, "[M::%s] treated %d, used %.2f s\n", __func__, 
+                n_treated, Get_T()-T0);
+    return n_treated;
 }

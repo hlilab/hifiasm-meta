@@ -11002,7 +11002,8 @@ void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
 // FUNC
 //     Given an array of unitig/contig IDs and the graph, 
 // RETURN
-//     Returns the sequence, its length stored in seq_l.
+//     Returns the sequence (heap allocation), 
+//     with its length stored in seq_l.
 char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, int *seq_l){
     int verbose = 0;
     int seq_m = 3000000, seq_n=0;
@@ -11042,6 +11043,7 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
                     fprintf(stderr, "[E::%s] realloc failed, seqtmp_m is %d\n", __func__, (int)seqtmp_m);
                     if (seq) free(seq);
                     if (seqtmp) free(seqtmp);
+                    *seq_l = 0;
                     return 0;
                 }
             }
@@ -11068,6 +11070,7 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
                     fprintf(stderr, "[E::%s] realloc failed-b, seq_m is %d\n", __func__, (int)seq_m);
                     if (seq) free(seq);
                     if (seqtmp) free(seqtmp);
+                    *seq_l = 0;
                     return 0;
                 }
             }
@@ -11103,6 +11106,7 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
                     fprintf(stderr, "[E::%s] realloc failed-c, seq_m is %d\n", __func__, (int)seq_m);
                     if (seq) free(seq);
                     if (seqtmp) free(seqtmp);
+                    *seq_l = 0;
                     return 0;
                 }
             }
@@ -11142,32 +11146,34 @@ static void hamt_ug_get_path_sequence_parallel_callback(void *data, long cid, in
 }
 
 /**
- * @brief Paralleled hamt_ug_get_path_sequence. 
- * @par seqs_ll_p Output, seq lengths. Address of a pointer - will point it 
- *      to the newly allocated output.
- * @par seqs_p Output, seqs. Similar.
- * @return An array of strings.
+ * @func Paralleled hamt_ug_get_path_sequence, store results.
+ * @par seqs_ll_p Stores outputs, seq lengths.
+ * @par seqs_p Output, seqs, newly allocated.
 */
 void hamt_ug_get_path_sequence_parallel(ma_ug_t *ug, stacku32_t *s, 
                                           int n_paths, int n_threads, 
-                                          int **seqs_ll_p, char ***seqs_p){
-    // allocate
-    *seqs_ll_p = (int*)malloc(sizeof(int)*n_paths);
-    *seqs_p = (char**)malloc(sizeof(char*)*n_paths);
-
+                                          int *seqs_ll_p, char **seqs_p){
     // collect
     hamt_getseq_t *d = (hamt_getseq_t*)calloc(1, sizeof(hamt_getseq_t));
     d->ug = ug;
     d->paths = s;
-    d->offsets = (int*)calloc(n_paths, sizeof(int));
-    d->seqs = *seqs_p;
-    d->seqs_ll = *seqs_ll_p;
+    d->offsets = (int*)calloc(n_paths, sizeof(int)); assert(d->offsets);
+    d->seqs = seqs_p;
+    d->seqs_ll = seqs_ll_p;
 
     int offset=0, idx=0, l=0;
     int seq_l;   
-    while (offset<s->n){
+    while (idx<n_paths){//while (offset<s->n){
+        if (offset>=s->n){
+            fprintf(stderr, "[E::%s] offset OOB reading, check the path stack. Aborting.\n", __func__);
+            fprintf(stderr, "[E::%s] n_paths=%d, dump of path stack:\n", __func__, n_paths);
+            for (int i=0; i<s->n; i++){
+                fprintf(stderr, "[dump::%s] i=%d val=%d\n", __func__, i, (int)s->a[i]);
+            }
+            exit(1);
+        }
         d->offsets[idx] = offset;
-        l = s->a[offset];
+        l = s->a[offset];  // packed as: [n_tigs, ID_tig1, ID_tig2, ...., ID_tign, n_tigs2, ID_tig1, ...]
         offset += l+1;
         idx++;
     }
@@ -11577,9 +11583,9 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
 
     // collect sequences
     time = Get_T();
-    int *seqs_ll;
-    char **seqs;
-    hamt_ug_get_path_sequence_parallel(ug, s, n_paths, n_thread, &seqs_ll, &seqs);
+    int *seqs_ll = (int*)calloc(n_paths, sizeof(int)); assert(seqs_ll);
+    char **seqs = (char**)malloc(sizeof(char*)*n_paths); assert(seqs);
+    hamt_ug_get_path_sequence_parallel(ug, s, n_paths, n_thread, seqs_ll, seqs);
     fprintf(stderr, "[T::%s] got the sequences, used %.1fs\n", __func__, Get_T()-time);
 
     // sketch and pariwise
@@ -13061,27 +13067,57 @@ static void hit_contained_advance_callback(void *data,
     ma_sub_t *sq = NULL;
     ma_sub_t *st = NULL;
     int32_t r;
+    uint32_t tn;
     asg_arc_t t;
     //int printed = 0;
     for (long long j=0; j<(long long)s->sources[jobID].length; j++) {
         h = &(s->sources[jobID].buffer[j]);
         //check the corresponding two reads 
-		sq = &(s->coverage_cut[Get_qn(*h)]);
-        st = &(s->coverage_cut[Get_tn(*h)]);
+        tn = Get_tn(*h);
+		sq = &(s->coverage_cut[jobID]);
+        st = &(s->coverage_cut[tn]);
         if(sq->del || st->del) continue;  // "may have trio bugs"
         if(h->del) continue;  // "may have trio bugs"
         r = ma_hit2arc(h, sq->e - sq->s, st->e - st->s, 
                     s->max_hang, asm_opt.max_hang_rate, 
                     s->min_ovlp, &t);
         if (r == MA_HT_QCONT){
-            //fprintf(stderr, "[dbg::%s] rID %d, tn %d; qs %d qe %d, ts %d te %d\n", 
-            //        __func__, (int)jobID, (int)Get_tn(*h),
-            //        (int)sq->s, (int)sq->e,
-            //        (int)st->s, (int)st->e 
-            //       );
-            s->todel2[jobID] = 1;//hamt_ba_t_write(s->todel, 1, Get_qn(*h));
-            h->del = 1;
-            set_R_to_U(s->ruIndex, Get_qn(*h), Get_tn(*h), 0);  // safe in this direction
+            //
+            // need to consider a rare case when updating R_to_U: 
+            // identical reads will be considered as QCONT in both directions..
+            // (this was not a problem in the original function due to every 
+            // containment encounter triggers .del marking in both direction; 
+            // here we collect in one direction and only mark when all are 
+            // collected.)
+            //
+            // A bad solution for now: if tn is smaller than qn and hit is 
+            // between identical reads, choose to do nothing.
+            int is_special_case = 0;
+            if (tn<jobID){
+                if (sq->s==0 && st->s==0 && sq->e==st->e &&
+                    sq->e==Get_READ_LENGTH(R_INF, jobID) &&
+                    st->e==Get_READ_LENGTH(R_INF, tn)){
+
+                    is_special_case = 1;
+                    //fprintf(stderr, "[W::%s] saw a pair of identical reads: "
+                    //        "%.*s (len %d) and %.*s (len %d) | sancheck: "
+                    //        "sq-s %d sq-e %d st-s %d st-e %d \n", __func__, 
+                    //        (int)Get_NAME_LENGTH(R_INF, jobID), Get_NAME(R_INF, jobID),
+                    //        (int)Get_READ_LENGTH(R_INF, jobID),
+                    //        (int)Get_NAME_LENGTH(R_INF, tn), Get_NAME(R_INF, tn),
+                    //        (int)Get_READ_LENGTH(R_INF, tn),
+                    //        (int)sq->s, (int)sq->e, (int)st->s, (int)st->e
+                    //        );
+
+                }
+            }
+            if (!is_special_case){
+                s->todel2[jobID] = 1;//hamt_ba_t_write(s->todel, 1, Get_qn(*h));
+                h->del = 1;
+                uint32_t tmpleft=jobID, tmpright, tmpisunitig;
+                set_R_to_U(s->ruIndex, Get_qn(*h), Get_tn(*h), 0);  // safe in this direction
+            }
+ 
             //if (!printed){
             //    fprintf(stderr, "[dbg::%s] QCONT qn %d tn %d\n", __func__, 
             //            (int)Get_qn(*h), (int)Get_tn(*h));
@@ -13175,7 +13211,7 @@ int hamt_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_read,
     fprintf(stderr, "[T::%s] step2: used %.2f s; deleted %" PRIu64 " (tried %" PRIu64 "reads))\n", 
             __func__, Get_T()-startTime, tot_del, tot_tried_reads);
 
-    // clean up??
+    // update index
     startTime = Get_T();
     transfor_R_to_U(ruIndex);
     fprintf(stderr, "[T::%s] step2.5 used %.2f s\n", __func__, Get_T()-startTime); 

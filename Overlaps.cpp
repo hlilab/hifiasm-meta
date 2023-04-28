@@ -26441,7 +26441,8 @@ void transfor_R_to_U(R_to_U* x)
             int is_bad = 0;
             for (int j=0; j<san.n; j++){
                 if ((uID&0x7fffffff)==san.a[j]){
-                    fprintf(stderr, "[E::%s] bad trial of indexing. dump:\n", __func__);
+                    fprintf(stderr, "[E::%s] bad trial of indexing, current uID is %d. dump:\n", 
+                            __func__, (int)(uID&0x7fffffff));
                     is_bad = 1;
                 }
             }

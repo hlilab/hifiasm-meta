@@ -11394,8 +11394,6 @@ int hamt_ug_sum_lengths_of_unitigs(uint32_t *a, int n, ma_ug_t *ug, int is_path,
 // NOTE
 //     `s` is filled like so: array length1, value1, value2...., array length2, value1, value2, ... 
 //     Long contig is always preferred over path-finding.  
-    //     Long contig is always preferred over path-finding.  
-//     Long contig is always preferred over path-finding.  
 void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s, ma_ug_t *ug){
     int verbose = 0;
     int of1=0, of2=0, of1idx=0, of2idx=1;
@@ -11785,21 +11783,20 @@ vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_
     
     int of=0, l=0, ofidx=0;
 
-    // // dump all found circuits, no deduplication
-    // (commented out because not useful)
-    // time = Get_T();
-    // if (!is_print_found){
-    //     sprintf(fname, "%s.rescue.all.fa", asm_opt.output_file_name);
-    //     fp = fopen(fname, "w"); assert(fp);
-    //     while (of<report_stack.n){
-    //         l = report_stack.a[of];
-    //         hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
-    //         of = of+1+l;
-    //         ofidx++;
-    //     }
-    //     fclose(fp);
-    // }
-    // fprintf(stderr, "[M::%s] wrote all rescued circles, used %.2fs\n", __func__, Get_T()-time);
+    // dump all found circuits, no deduplication
+    time = Get_T();
+    if (!is_print_found){
+        sprintf(fname, "%s.rescue.all.fa", asm_opt.output_file_name);
+        fp = fopen(fname, "w"); assert(fp);
+        while (of<report_stack.n){
+            l = report_stack.a[of];
+            hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
+            of = of+1+l;
+            ofidx++;
+        }
+        fclose(fp);
+    }
+    fprintf(stderr, "[M::%s] wrote all rescued circles, used %.2fs\n", __func__, Get_T()-time);
 
     // deduplication and dump
     time = Get_T();
@@ -12364,6 +12361,8 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
         }else{  // end of stream
             stacku32_destroy(s->dd->entries);
             stacku32_destroy(s->dd->exits);
+            free(s->dd->exits);
+            free(s->dd->entries);
             for (int i=0 ;i<p->n_threads; i++){
                 stacku32_destroy(&s->dd->paths[i]);
                 kv_destroy(s->dd->paths_sten[i]);
@@ -12470,11 +12469,14 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
         kv_destroy(orderbuf);
         stacku32_destroy(&sancheck_contain);
         stacku32_destroy(s->dd->entries);
+        free(s->dd->entries);
         stacku32_destroy(s->dd->exits);
+        free(s->dd->exits);
         for (int i=0 ;i<p->n_threads; i++){
             stacku32_destroy(&s->dd->paths[i]);
             kv_destroy(s->dd->paths_sten[i]);
         }
+        kv_destroy(tmp);
         free(s->dd->paths);
         free(s->dd->paths_sten);
         free(s->dd);
@@ -13330,10 +13332,10 @@ paf_ht_t* hamt_index_pafs(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sourc
 }
 
 
-typedef struct {
+struct paf_ct_v{
     int prefix_l;
     paf_ct_t **hs;
-}paf_ct_v;
+};
 paf_ct_v *init_paf_ct_v(int prefix_l){
     paf_ct_v *H = (paf_ct_v*)calloc(1, sizeof(paf_ct_v));
     H->prefix_l = prefix_l;
@@ -13344,7 +13346,7 @@ paf_ct_v *init_paf_ct_v(int prefix_l){
     return H;
 }
 void destroy_paf_ct_v(paf_ct_v *H){
-    for (int i=0; i<H->prefix_l; i++){
+    for (int i=0; i<1<<H->prefix_l; i++){
         paf_ct_destroy(H->hs[i]);
     }
     free(H->hs);
@@ -13424,13 +13426,14 @@ static void *hamt_index_pafs_multithread_pipeline(void *data, int step, void *in
             }
             for (uint32_t j=0; j<tmpl; j++){
                 hh = &h->buffer[j];
-                if (hh->del) continue;
+                //if (hh->del) continue; // note: commented out because ha(v0.13)'s function doesn't check this.
 
                 qn = Get_qn(*hh);
                 tn = Get_tn(*hh);
                 hash = ((uint64_t)qn)<<32 | tn;
                 prefix = hash & p->prefix_mask;
-                hash = (hash>>p->prefix_l)<<p->prefix_l | (j<<1) | p->is_trans;
+                //hash = (hash>>p->prefix_l)<<p->prefix_l | (j<<1) | p->is_trans;
+                hash = (hash>>p->prefix_l)<<p->prefix_l | j;
                 kv_push(uint64_t, s->ahashes[prefix], hash);
                 tot++;
             }
@@ -13466,7 +13469,8 @@ paf_ct_v* hamt_index_pafs_multithread(ma_hit_t_alloc *sources, ma_hit_t_alloc *r
     pl.n_threads = n_threads;
     pl.prefix_l = PAF_CT_PRE;
     pl.prefix_mask = (1<<PAF_CT_PRE)-1;
-    pl.sancheck_countermax = (1<<(PAF_CT_PRE-1)) -1;  // need 1bit for is_trans
+    //pl.sancheck_countermax = (1<<(PAF_CT_PRE-1)) -1;  // need 1bit for is_trans
+    pl.sancheck_countermax = PAF_CT_PRE_M;
     pl.batchsize = batchsize;
     pl.n_reads= n_reads;
     pl.H = H;
@@ -13486,7 +13490,7 @@ paf_ct_v* hamt_index_pafs_multithread(ma_hit_t_alloc *sources, ma_hit_t_alloc *r
     return H;
 }
 
-int get_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn, int *is_trans){
+int get_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn){
     uint64_t hash = ((uint64_t)qn)<<32 | tn;
     paf_ct_t *hh = h->hs[hash&PAF_CT_PRE_M];
     khint_t key = paf_ct_get(hh, hash);
@@ -13494,9 +13498,22 @@ int get_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn, int *is_trans){
         return -1;
     }else{
         uint64_t tmp = PAF_CT_PRE_M & kh_key(hh, key);
-        *is_trans = (int)(tmp&1);
-        return (int)(tmp>>1);
+        return (int)tmp;
     }
+}
+int insert_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn, uint32_t idx){
+    int absent;
+    int silent = 0;
+
+    uint64_t hash = ((uint64_t)qn)<<32 | tn;
+    paf_ct_t *hh = h->hs[hash&PAF_CT_PRE_M];
+    khint_t key = paf_ct_put(hh, hash, &absent);
+    if (!absent && !silent){
+        fprintf(stderr, "[W::%s] inserted to non-empty slot. qn %d tn %d\n", 
+                __func__, (int)qn, (int)tn);
+    }
+    kh_key(hh, key) = ((hash)>>PAF_CT_PRE)<<PAF_CT_PRE | idx;
+    return absent;
 }
 
 
@@ -13505,7 +13522,8 @@ typedef struct {
     ma_hit_t_alloc *sources;
     const ma_hit_t_alloc* reverse_sources; 
     //paf_ht_t *paf_h;
-    paf_ct_v *paf_h;
+    paf_ct_v *paf_h_cis;
+    paf_ct_v *paf_h_trans;
     double *dTs_trans;  // per-thread timer 
     double *dTs_any;
 }hamt_cleanweakhit_t;
@@ -13563,9 +13581,9 @@ static void hamt_clean_weak_ma_hit_t_worker(void *data, long jobID, int tID){  /
                     // method2: hashtable
                     //hash = ((uint64_t)tn_strong)<<32 | tn_weak;
                     //key = paf_ht_get(s->paf_h, hash);
-                    idx = get_paf_index_ct(s->paf_h, tn_strong, tn_weak, &is_trans);
+                    idx = get_paf_index_ct(s->paf_h_trans, tn_strong, tn_weak);
                     //if (key!=kh_end(s->paf_h) && (kh_val(s->paf_h, key)&1) ){
-                    if (idx!=-1 && is_trans){
+                    if (idx!=-1){
                         is_found = 1;
                         //san_jj2 = (int)(kh_val(s->paf_h, key) >>1);
                         san_jj2 = idx;
@@ -13599,13 +13617,13 @@ static void hamt_clean_weak_ma_hit_t_worker(void *data, long jobID, int tID){  /
 //            }
             hash = ((uint64_t)tn_weak)<<32 | qn;
             //key = paf_ht_get(s->paf_h, hash);
-            idx = get_paf_index_ct(s->paf_h, tn_weak, qn, &is_trans);
+            idx = get_paf_index_ct(s->paf_h_cis, tn_weak, qn);
             //if (key!=kh_end(s->paf_h)){
             if (idx!=-1){
                 //uint16_t jj = kh_val(s->paf_h, key);
                 uint16_t jj = (uint16_t)idx;
                 //if (!(jj&1)){
-                if (!is_trans){
+                if (1/*!is_trans*/){
                     //s->sources[tn_weak].buffer[jj>>1].bl = 0;  // last bit indicates cis/trans
                     s->sources[tn_weak].buffer[idx].bl = 0;
                     sancheck = 1;
@@ -13635,7 +13653,9 @@ static void hamt_clean_weak_ma_hit_t_worker(void *data, long jobID, int tID){  /
 int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources, 
                              ma_hit_t_alloc* const reverse_sources, 
                              ma_sub_t *coverage_cut, 
-                             const long long n_reads){
+                             const long long n_reads,
+                             paf_ct_v *paf_h_cis, 
+                             paf_ct_v *paf_h_trans){
     // threaded `clean_weak_ma_hit_t`
     
     int verbose = 0;
@@ -13647,16 +13667,17 @@ int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources,
     double T0 = T;
 
     // collect indexing
-    //paf_ht_t *paf_h = hamt_index_pafs(sources, reverse_sources, coverage_cut, n_reads);
-    paf_ct_v *paf_h = hamt_index_pafs_multithread(sources, reverse_sources, 
-            coverage_cut, n_reads, 2048, asm_opt.thread_num);
-
+    //paf_ct_v *paf_h_cis = hamt_index_pafs_multithread(sources, 0, 
+    //        coverage_cut, n_reads, 2048, asm_opt.thread_num);
+    //paf_ct_v *paf_h_trans = hamt_index_pafs_multithread(0, reverse_sources, 
+    //        coverage_cut, n_reads, 2048, asm_opt.thread_num);
     hamt_cleanweakhit_t data;
     data.sources = sources;
     data.reverse_sources = reverse_sources;
     data.dTs_trans = (double*)calloc(n_threads, sizeof(double));
     data.dTs_any = (double*)calloc(n_threads, sizeof(double));
-    data.paf_h = paf_h;
+    data.paf_h_cis = paf_h_cis;
+    data.paf_h_trans = paf_h_trans;
     kt_for(n_threads, hamt_clean_weak_ma_hit_t_worker, &data, n_reads);
 
     double dT_trans=0, dT_any = 0;
@@ -13694,4 +13715,171 @@ int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources,
     return n_treated;
 }
 
+
+typedef struct {
+    ma_hit_t_alloc *paf;
+    paf_ct_v *H;
+    uint64_t *cnt1, *cnt2;  // for sancheck
+}normalize_paf_s_t;
+
+static void hamt_normalize_paf_worker(void *data, long jobID, int tID){
+    normalize_paf_s_t *s = (normalize_paf_s_t*)data;
+    uint32_t rID = jobID, qn, tn;
+    uint32_t ql, ql_rev;
+    ma_hit_t_alloc *h = &s->paf[rID];
+    ma_hit_t *hh, *hh_rev;
+    int is_del;
+
+    uint64_t cnt1=0, cnt2 = 0;
+    for (uint32_t i=0; i<h->length; i++){
+        // (((ha doesn't require an unset .del of self here)))
+
+        hh = &h->buffer[i];
+        qn = Get_qn(*hh);
+        tn = Get_tn(*hh);
+
+        // does the opposite exist?
+        int j=get_paf_index_ct(s->H, tn, qn);
+        if (j<0) {
+            fprintf(stderr, "[E::%s] ovlp from the other way around not found."
+                    "Will be fatal for later functions, check code now\n", __func__);
+            exit(1);
+        }
+
+        is_del = 0;
+        hh = &h->buffer[i];
+        hh_rev = &s->paf[tn].buffer[j];
+        if (hh->del || hh_rev->del) is_del = 1;
+
+        ql =     Get_qe(*hh)     - Get_qs(*hh);
+        ql_rev = Get_qe(*hh_rev) - Get_qs(*hh_rev);
+
+        // always only update when qn<tn to avoid data race
+        if (qn<tn){
+            if (ql>=ql_rev){  // overwrite tn's
+                set_reverse_overlap(hh_rev, hh);
+                cnt1++;
+            }else{  // overwrite self(shorter)
+                set_reverse_overlap(hh, hh_rev);
+                cnt2++;
+            }
+        }
+        hh->del = is_del;
+        hh_rev->del = is_del;
+    }
+    s->cnt1[tID]+=cnt1;
+    s->cnt2[tID]+=cnt2;
+}
+
+
+
+typedef struct {
+    ma_hit_t_alloc *paf;
+    paf_ct_v *H;
+    vu64_t *qni;
+    uint64_t *cnt;
+}symmetrize_paf_s_t;
+
+static void hamt_symmetrize_paf_worker(void *data, long rID, int tID){
+    symmetrize_paf_s_t *s = (symmetrize_paf_s_t*)data;
+    ma_hit_t_alloc *h =  &s->paf[rID];
+    uint32_t qn=rID, tn;
+    int idx;
+    uint64_t tmp;
+    for (uint16_t i=0; i<h->length; i++){
+        tn = Get_tn(h->buffer[i]);
+        idx = get_paf_index_ct(s->H, tn, qn);
+        if (idx<0){
+            tmp = ((uint64_t)qn)<<32 | i;
+            kv_push(uint64_t, s->qni[tID], tmp);
+            s->cnt[tID]++;
+        }
+    }
+}
+
+void hamt_symmetrize_paf_add_new_entry(ma_hit_t_alloc *paf, paf_ct_v *H, 
+                                        uint32_t qn, uint32_t qi){
+    ma_hit_t ele;
+    set_reverse_overlap(&ele, &paf[qn].buffer[qi]);
+    paf[qn].buffer[qi].del = 1;
+    ele.del = 1;
+    uint32_t tn = Get_qn(ele);
+    add_ma_hit_t_alloc(&paf[tn], &ele);
+    insert_paf_index_ct(H, tn, qn, paf[tn].length-1);
+}
+void hamt_symmetrize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads){
+    // hopefully there aren't too many asym pairs; this can't be sliced up 
+    // into batches because we need to modify hashtables.
+    double T0 = Get_T();
+    symmetrize_paf_s_t s;
+    s.paf = paf;
+    s.H = H;
+    s.qni = (vu64_t*)calloc(n_threads, sizeof(vu64_t));
+    s.cnt = (uint64_t*)calloc(n_threads, sizeof(uint64_t));
+    for (int i=0; i<n_threads; i++){
+        kv_init(s.qni[i]);
+        kv_resize(uint64_t, s.qni[i], 64);
+    }
+
+    // collect asym entries
+    kt_for(n_threads, hamt_symmetrize_paf_worker, &s, n_reads);
+    for (int i=0; i<n_threads; i++){s.cnt[0]+=s.cnt[i];}
+    fprintf(stderr, "[M::%s] step1, total %" PRIu64 " todo. used %.2f s\n",
+            __func__, s.cnt[0], Get_T()-T0);
+
+    T0 = Get_T();
+    for (int i=0; i<n_threads; i++){
+        radix_sort_ovhamt64(s.qni[i].a, s.qni[i].a+s.qni[i].n);
+    }
+    fprintf(stderr, "[M::%s] step1b, sorting used %.2f s (for cache efficiency, "
+            "maybe doesn't matter. remove if takes a long time)\n", 
+            __func__, Get_T()-T0);
+
+    // create new entries and update hashtables
+    T0 = Get_T();
+    uint32_t qn, qi;
+    for (int i=0; i<n_threads; i++){
+        for (int j=0; j<s.qni[i].n; j++){
+            qn = s.qni[i].a[j]>>32;
+            qi = (uint32_t)s.qni[i].a[j];
+            hamt_symmetrize_paf_add_new_entry(paf, H, qn, qi);
+        }
+    }
+    fprintf(stderr, "[M::%s] step2, used %.2f s\n", __func__, Get_T()-T0);
+
+
+    for (int i=0; i<n_threads; i++){
+        kv_destroy(s.qni[i]);
+    }
+    free(s.qni);
+    free(s.cnt);
+}
+
+void hamt_normalize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads){
+    // Rewrite hamt_normalize_ma_hit_t_single_side_advance
+    // Use paf indexing.
+    // Different from ha's function: the lack of counterpart ovlp should be
+    //  already accounted for before calling this function. The ha's function
+    //  does that and the normalization at the same time. This might lead to 
+    //  minor differences? (not sure)
+
+    double T0 = Get_T();    
+    int verbose = 0;
+
+    normalize_paf_s_t s;
+    s.paf = paf;
+    s.H = H;
+    s.cnt1 = (uint64_t*)calloc(n_threads, sizeof(uint64_t));
+    s.cnt2 = (uint64_t*)calloc(n_threads, sizeof(uint64_t));
+
+    kt_for(n_threads, hamt_normalize_paf_worker, &s, n_reads);
+    for (int i=1; i<n_threads; i++){
+        s.cnt1[0] += s.cnt1[i];
+        s.cnt2[0] += s.cnt2[i];
+    }
+    fprintf(stderr, "[M::%s] type1 %" PRIu64 ", type2 %" PRIu64 ", used %.2f s\n", 
+            __func__, s.cnt1[0], s.cnt2[0], Get_T()-T0);
+    free(s.cnt1);
+    free(s.cnt2);
+}
 

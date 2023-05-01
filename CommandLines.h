@@ -4,7 +4,7 @@
 #include <pthread.h>
 
 #define HA_VERSION "0.13-r308"
-#define HAMT_VERSION "0.3-r071"
+#define HAMT_VERSION "0.3-r072"
 
 
 // #define VERBOSE 1
@@ -138,6 +138,7 @@ void ha_opt_reset_to_round(hifiasm_opt_t* asm_opt, int round);
 void ha_opt_update_cov(hifiasm_opt_t *opt, int hom_cov);
 int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt);
 double Get_T(void);
+double Get_U(void);
 
 static inline int ha_opt_triobin(const hifiasm_opt_t *opt)
 {

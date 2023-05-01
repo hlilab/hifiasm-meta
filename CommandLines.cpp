@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <sys/time.h>
+#include <sys/resource.h>
 #include "CommandLines.h"
 #include "ketopt.h"
 #include "gitcommit.h"  // if gone, use stamp
@@ -67,6 +68,11 @@ double Get_T(void)
   struct timeval t;
   gettimeofday(&t, NULL);
   return t.tv_sec+t.tv_usec/1000000.0;
+}
+double Get_U(void){
+    struct rusage s;
+    getrusage(RUSAGE_SELF, &s);
+    return (double)s.ru_maxrss/1048576.0;  // GB
 }
 
 void Print_H(hifiasm_opt_t* asm_opt)

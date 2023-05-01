@@ -49,6 +49,11 @@ typedef kvec_t(int64_t) vi64_t;
 typedef kvec_t(ddp_t) vddp_t;
 typedef kvec_t(hamt_u128_t) vu128_t;
 
+struct paf_ct_v ;
+typedef struct paf_ct_v paf_ct_v;
+void destroy_paf_ct_v(paf_ct_v *H);
+
+
 static inline double hamt_meand(double *a, size_t n){
     // https://www.heikohoffmann.de/htmlthesis/node134.html
     // https://stackoverflow.com/questions/1930454/what-is-a-good-solution-for-calculating-an-average-where-the-sum-of-all-values-e
@@ -264,12 +269,16 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
                         char *output_prefix, int write_binning_fasta);
 
 
-
+paf_ct_v* hamt_index_pafs_multithread(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
+                    ma_sub_t *coverage_cut,
+                    long long n_reads, int batchsize, int n_threads );
 int hamt_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_read, 
                                   ma_sub_t *coverage_cut, 
                                   R_to_U* ruIndex, int max_hang, int min_ovlp);
 int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources, 
                              ma_hit_t_alloc* const reverse_sources, 
                              ma_sub_t *coverage_cut,
-                             const long long n_reads);
+                             const long long n_reads, paf_ct_v *paf_h_cis, paf_ct_v *paf_h_trans);
+void hamt_symmetrize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads);
+void hamt_normalize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads);
 #endif // __OVERLAPS_HAMT__

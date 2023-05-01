@@ -11236,7 +11236,7 @@ int min_ovlp, uint32_t query, uint32_t target, asg_arc_t* t)
                 break;
             }
         }
-        if(k == edge->a.n) fprintf(stderr, "sbsbsbsbsbsbERROR\n");
+        if(k == edge->a.n) fprintf(stderr, "[E::%s] thing missing when shouldn't\n", __func__);
     }
 
 }
@@ -29931,17 +29931,14 @@ KRADIX_SORT_INIT(pafbuffer_sort_qns, ma_hit_t, mahit_qns_key, member_size(ma_hit
 typedef struct{
     long long n_read;
     ma_hit_t_alloc *x;
-    int is_ignore_breakeven;
 }pafbuffer_sort_qns_aux_t;
 static void sort_paf_buffers_by_qns_worker(void *data, long i_read, int tid){  // callback for kt_for
     pafbuffer_sort_qns_aux_t *aux = (pafbuffer_sort_qns_aux_t*)data;
     uint32_t buf_l = aux->x[i_read].length;
-    if (aux->is_ignore_breakeven && buf_l<LINEAR_BF_BREAKEVEN_POINT) return;  //  linear search was used, order is fine
-
     ma_hit_t *buf = aux->x[i_read].buffer;
     radix_sort_pafbuffer_sort_qns(buf, buf+buf_l);
 }
-void sort_paf_buffers_by_qns(ma_hit_t_alloc *source, long long n_read, int is_ignore_breakeven_threshold){
+void sort_paf_buffers_by_qns(ma_hit_t_alloc *source, long long n_read){
     // FUNC
     //     Used to restore the ordering (key is qns) after binary search.
     double startTime = Get_T();
@@ -29949,7 +29946,6 @@ void sort_paf_buffers_by_qns(ma_hit_t_alloc *source, long long n_read, int is_ig
     pafbuffer_sort_qns_aux_t aux;
     aux.x = source;
     aux.n_read = n_read;
-    aux.is_ignore_breakeven = is_ignore_breakeven_threshold;
     kt_for(n_cpu, sort_paf_buffers_by_qns_worker, &aux, n_read);
 }
 
@@ -30205,6 +30201,11 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     int acc;
     int cleanID = 0;
     vu32_t *long_tigs_in_resuce;
+    double T0;
+
+    paf_ct_v *pafidx_cis, *pafidx_trans;
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+
     // extra rescues and others
     if (asm_opt.is_mode_low_cov){
         hamt_smash_haplotype(sources, reverse_sources, n_read);
@@ -30216,28 +30217,45 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     }
     if(debug_g && !asm_opt.write_new_graph_bins) goto debug_gfa;
     fprintf(stderr, "[M::%s] no debug gfa\n", __func__);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
     renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
     reset_paf_buffers_sorting_marks_targetID(sources, n_read);
     reset_paf_buffers_sorting_marks_targetID(reverse_sources, n_read);
 
-    asm_opt.get_specific_overlap_is_use_bf = 1; 
-    sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
-    hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
-    
+    // generate a indexing for pafs, in order to avoid get_specific_overlap calls
+    T0 = Get_T();
+    pafidx_cis = hamt_index_pafs_multithread(sources, 0, coverage_cut, n_read, 
+                                            2048, asm_opt.thread_num) ;
+    pafidx_trans = hamt_index_pafs_multithread(0, reverse_sources, coverage_cut, n_read, 
+                                            2048, asm_opt.thread_num) ;
+    fprintf(stderr, "[M::%s] generated paf index, used %.2f s\n", __func__, Get_T()-T0);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+
+    T0 = Get_T();
+    hamt_symmetrize_paf(sources, pafidx_cis, n_read, asm_opt.thread_num);
+    hamt_symmetrize_paf(reverse_sources, pafidx_trans, n_read, asm_opt.thread_num);
+    fprintf(stderr, "[M::%s] symmetrize used %.2f s total.\n", __func__, Get_T()-T0);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+
+    asm_opt.get_specific_overlap_is_use_bf = 0; 
+    //sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
+    //hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
+    //hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
+    hamt_normalize_paf(sources, pafidx_cis, n_read, asm_opt.thread_num);
+    hamt_normalize_paf(reverse_sources, pafidx_trans, n_read, asm_opt.thread_num);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+
     memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
 
 
 
 
 
-    asm_opt.get_specific_overlap_is_use_bf = 0; 
-    sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    hamt_clean_weak_ma_hit_t2(sources, reverse_sources, coverage_cut, n_read);  
-    //clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // threaded
+    hamt_clean_weak_ma_hit_t2(sources, reverse_sources, coverage_cut, n_read, 
+            pafidx_cis, pafidx_trans);  
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-    
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());   
 
 
 
@@ -30256,11 +30274,13 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         fprintf(stderr, "[M::%s] skipped conatined reads sparing heuristics.\n", __func__);
     }
 
-    asm_opt.get_specific_overlap_is_use_bf = 0; //////sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
     hamt_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  
-    //ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // hamt_threaded_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex);  // TODO
-    asm_opt.get_specific_overlap_is_use_bf = 0;
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
+
+    // cleanup unuseful index
+    destroy_paf_ct_v(pafidx_cis);
+    destroy_paf_ct_v(pafidx_trans);
 
     sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
@@ -30281,6 +30301,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     asg_cut_tip(sg, asm_opt.max_short_tip);
     
     fprintf(stderr, "[M::%s] ====== initial clean ======\n", __func__);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
     if(clean_round > 0)
     {
         double cut_step;
@@ -30355,7 +30376,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
 
     fprintf(stderr, "\n\n********** checkpoint: r_utg **********\n");
-
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
     if ((asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.write_new_graph_bins)
     {
         /*******************************for debug***************************************/
@@ -30398,6 +30419,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // topo pre clean
             fprintf(stderr, "[M::%s] ======= preclean =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             acc = 0;
             for (int i=0; i<10; i++){
                 time = Get_T();
@@ -30434,6 +30456,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             
             fprintf(stderr, "\n\n********** checkpoint: p_utg **********\n\n");
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_utg", "utg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, -1);
 
@@ -30489,6 +30512,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // resolve complex bubble
             fprintf(stderr, "\n\n[M::%s] ======= complex bubbles =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             int nb_complex_bubble_cut;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
                 time = Get_T();
@@ -30517,6 +30541,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             }
 
             fprintf(stderr, "\n\n[M::%s] ======= circle cut and topo cleans =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             time = Get_T();
             {
                 int tot=0;
@@ -30537,6 +30562,7 @@ probe:
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             // resolve tangle
             fprintf(stderr, "\n\n[M::%s] ======= tangles =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             int nb_tangle_cut, nb_tip;
             for (int round_resolve=0; round_resolve<5; ){
                 time = Get_T();
@@ -30586,6 +30612,7 @@ probe:
 
             // rescues
             fprintf(stderr, "\n\n[M::%s] ======= rescues and coverage-based cut =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             time = Get_T();
             {
                 int tot=0;
@@ -30664,6 +30691,7 @@ probe:
         }  
 
         fprintf(stderr, "\n\n********** checkpoint: p_ctg **********\n\n");
+        fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
         // p_ctg and a_ctg
         if (!asm_opt.is_use_exp_graph_cleaning){
@@ -30691,6 +30719,7 @@ probe:
             
             fprintf(stderr, "\n\n********** checkpoint: post-assembly **********\n\n");
 //probe:
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
 

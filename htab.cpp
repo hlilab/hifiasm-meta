@@ -2775,7 +2775,7 @@ static void hamt_minhash_sketch_core(void *data, long i_read, int tid){
 
 	int h_size = 0, n=0, i;
 	yak_ct_t *h = hamt_ch_count_seq(seq, seq_l, kmersize, &h_size);
-	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*h_size);
+    vec_u64t buf; kv_init(buf); kv_resize(uint64_t, buf, h_size);
 	vec_u64t *ret = &d->sketch->a[i_read]; 
 
 	khint_t k;
@@ -2783,15 +2783,16 @@ static void hamt_minhash_sketch_core(void *data, long i_read, int tid){
 	for (k=0; k<kh_end(h); k++){
 		if (kh_exist(h, k)){
 			hash = kh_key(h, k);
-			buf[n++] = hash;
+            kv_push(uint64_t, buf, hash);
+			//buf[n++] = hash;
 		}
 	}
-	radix_sort_hamt64(buf, buf+n);
+	radix_sort_hamt64(buf.a, buf.a+buf.n);
 	for (i=0; i<n_hash; i++){
-		kv_push(uint64_t, *ret, buf[i]);
+		kv_push(uint64_t, *ret, buf.a[i]);
 	}
 	
-	free(buf);
+	kv_destroy(buf);
 	yak_ct_destroy(h);
 }
 
@@ -2839,7 +2840,6 @@ static void hamt_minhash_mashdist_core(void *data, long i_read, int tid){
 double **hamt_minhash_mashdist(char **seqs, int *seqs_ll, 
 								int seqs_n, int kmersize, int n_hash,
 								int n_thread){
-    int verbose = 0;
 	double time;
 	vec_u64v sketches;
 	kv_init(sketches); kv_resize(vec_u64t, sketches, seqs_n);
@@ -2865,12 +2865,12 @@ double **hamt_minhash_mashdist(char **seqs, int *seqs_ll,
 	aux.n_seqs = seqs_n;
 	aux.mat = ret;
 	kt_for(n_thread, hamt_minhash_sketch_core, &aux, seqs_n);
-	if (verbose) fprintf(stderr, "[T::%s] sketched - %.1fs.\n", __func__, Get_T()-time);
+	fprintf(stderr, "[T::%s] sketched - %.1fs.\n", __func__, Get_T()-time);
 
 	// pairwise comparison
 	time = Get_T();
 	kt_for(n_thread, hamt_minhash_mashdist_core, &aux, seqs_n);
-	if (verbose) fprintf(stderr, "[T::%s] compared - %.1fs.\n", __func__, Get_T()-time);
+	fprintf(stderr, "[T::%s] compared - %.1fs.\n", __func__, Get_T()-time);
 
 	// cleanup
 	for (int i=0; i<seqs_n; i++){

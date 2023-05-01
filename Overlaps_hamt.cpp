@@ -13549,28 +13549,28 @@ static void hamt_clean_weak_ma_hit_t_worker(void *data, long jobID, int tID){  /
                     int is_found = 0;
                     double Ttmp = Get_T();
 
-                    // method1: search
-                    hr = &s->reverse_sources[tn_strong];
-                    for (int jj=0; jj<hr->length; jj++){
-                        if (hr->buffer[jj].del) continue;
-                        if (Get_tn(hr->buffer[jj])==tn_weak){
-                            is_found = 1;
-                            san_jj1 = jj;
-                            tn1 = tn_strong;
-                            break;
-                        }
-                    } 
-//                    // method2: hashtable
-//                    //hash = ((uint64_t)tn_strong)<<32 | tn_weak;
-//                    //key = paf_ht_get(s->paf_h, hash);
-//                    idx = get_paf_index_ct(s->paf_h, tn_strong, tn_weak, &is_trans);
-//                    //if (key!=kh_end(s->paf_h) && (kh_val(s->paf_h, key)&1) ){
-//                    if (idx!=-1 && is_trans){
-//                        is_found = 1;
-//                        //san_jj2 = (int)(kh_val(s->paf_h, key) >>1);
-//                        san_jj2 = idx;
-//                        tn2 = tn_strong;
-//                    }
+//                    // method1: search
+//                    hr = &s->reverse_sources[tn_strong];
+//                    for (int jj=0; jj<hr->length; jj++){
+//                        if (hr->buffer[jj].del) continue;
+//                        if (Get_tn(hr->buffer[jj])==tn_weak){
+//                            is_found = 1;
+//                            san_jj1 = jj;
+//                            tn1 = tn_strong;
+//                            break;
+//                        }
+//                    } 
+                    // method2: hashtable
+                    //hash = ((uint64_t)tn_strong)<<32 | tn_weak;
+                    //key = paf_ht_get(s->paf_h, hash);
+                    idx = get_paf_index_ct(s->paf_h, tn_strong, tn_weak, &is_trans);
+                    //if (key!=kh_end(s->paf_h) && (kh_val(s->paf_h, key)&1) ){
+                    if (idx!=-1 && is_trans){
+                        is_found = 1;
+                        //san_jj2 = (int)(kh_val(s->paf_h, key) >>1);
+                        san_jj2 = idx;
+                        tn2 = tn_strong;
+                    }
 
                     dT_trans+=Get_T()-Ttmp;
                     if (is_found){
@@ -13589,28 +13589,28 @@ static void hamt_clean_weak_ma_hit_t_worker(void *data, long jobID, int tID){  /
 
             // now mark self overlap and the other way around
             int sancheck = 0;
-            hr = &s->sources[tn_weak];
-            for (int j=0; j<hr->length; j++){
-                if (Get_tn(hr->buffer[j])==qn) {
-                    hr->buffer[j].bl = 0;
-                    sancheck = 1;
-                    break;
-                }
-            }
-//            hash = ((uint64_t)tn_weak)<<32 | qn;
-//            //key = paf_ht_get(s->paf_h, hash);
-//            idx = get_paf_index_ct(s->paf_h, tn_weak, qn, &is_trans);
-//            //if (key!=kh_end(s->paf_h)){
-//            if (idx!=-1){
-//                //uint16_t jj = kh_val(s->paf_h, key);
-//                uint16_t jj = (uint16_t)idx;
-//                //if (!(jj&1)){
-//                if (!is_trans){
-//                    //s->sources[tn_weak].buffer[jj>>1].bl = 0;  // last bit indicates cis/trans
-//                    s->sources[tn_weak].buffer[idx].bl = 0;
+//            hr = &s->sources[tn_weak];
+//            for (int j=0; j<hr->length; j++){
+//                if (Get_tn(hr->buffer[j])==qn) {
+//                    hr->buffer[j].bl = 0;
 //                    sancheck = 1;
+//                    break;
 //                }
 //            }
+            hash = ((uint64_t)tn_weak)<<32 | qn;
+            //key = paf_ht_get(s->paf_h, hash);
+            idx = get_paf_index_ct(s->paf_h, tn_weak, qn, &is_trans);
+            //if (key!=kh_end(s->paf_h)){
+            if (idx!=-1){
+                //uint16_t jj = kh_val(s->paf_h, key);
+                uint16_t jj = (uint16_t)idx;
+                //if (!(jj&1)){
+                if (!is_trans){
+                    //s->sources[tn_weak].buffer[jj>>1].bl = 0;  // last bit indicates cis/trans
+                    s->sources[tn_weak].buffer[idx].bl = 0;
+                    sancheck = 1;
+                }
+            }
             if (!sancheck){
                 fprintf(stderr, "[E::%s] qn->tn exists but tn->qn not found or is trans?"
                         "qn=%d tn=%d\n", 
@@ -13648,15 +13648,15 @@ int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources,
 
     // collect indexing
     //paf_ht_t *paf_h = hamt_index_pafs(sources, reverse_sources, coverage_cut, n_reads);
-    //paf_ct_v *paf_h = hamt_index_pafs_multithread(sources, reverse_sources, 
-    //        coverage_cut, n_reads, 2048, asm_opt.thread_num);
+    paf_ct_v *paf_h = hamt_index_pafs_multithread(sources, reverse_sources, 
+            coverage_cut, n_reads, 2048, asm_opt.thread_num);
 
     hamt_cleanweakhit_t data;
     data.sources = sources;
     data.reverse_sources = reverse_sources;
     data.dTs_trans = (double*)calloc(n_threads, sizeof(double));
     data.dTs_any = (double*)calloc(n_threads, sizeof(double));
-    //data.paf_h = paf_h;
+    data.paf_h = paf_h;
     kt_for(n_threads, hamt_clean_weak_ma_hit_t_worker, &data, n_reads);
 
     double dT_trans=0, dT_any = 0;

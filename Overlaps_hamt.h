@@ -269,6 +269,7 @@ int hamt_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_read,
                                   ma_sub_t *coverage_cut, 
                                   R_to_U* ruIndex, int max_hang, int min_ovlp);
 int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources, 
-                             const ma_hit_t_alloc* const reverse_sources, 
+                             ma_hit_t_alloc* const reverse_sources, 
+                             ma_sub_t *coverage_cut,
                              const long long n_reads);
 #endif // __OVERLAPS_HAMT__

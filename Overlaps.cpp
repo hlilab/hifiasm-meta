@@ -30234,7 +30234,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asm_opt.get_specific_overlap_is_use_bf = 0; 
     sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    hamt_clean_weak_ma_hit_t2(sources, reverse_sources, n_read);  
+    hamt_clean_weak_ma_hit_t2(sources, reverse_sources, coverage_cut, n_read);  
     //clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // threaded
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     

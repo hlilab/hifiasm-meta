@@ -30,7 +30,7 @@ KHASHL_MAP_INIT(static klib_unused, paf_ht_t, paf_ht, uint64_t, uint16_t, paf_ht
 #define PAF_CT_PRE_M ((1<<(PAF_CT_PRE))-1)
 #define paf_ct_eq(a, b) ((a>>PAF_CT_PRE)==(b>>PAF_CT_PRE))
 #define paf_ct_hash(a) ((a>>PAF_CT_PRE))
-KHASHL_SET_INIT(static klib_unused, paf_ct_t, paf_ct, uint64_t, paf_ct_hash, paf_ct_eq)
+KHASHL_MAP_INIT(static klib_unused, paf_ct_t, paf_ct, uint64_t, uint32_t, paf_ct_hash, paf_ct_eq)
 
 KDQ_INIT(uint64_t)
 KDQ_INIT(uint32_t)
@@ -11765,10 +11765,12 @@ vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_
             ret = hamt_asg_get_one_cycle_with_constraint(ug, root, labels, weights, color, 
                                                         500000, 100, &report_stack);
             if (ret) { // found a new cycle
+                fprintf(stderr, "[dbg::%s] cyc from idx %d to %d in report stack\n", 
+                        __func__, idx, report_stack.n);
                 total_report+=1;
                 // udpate mask
                 int tmpi=0, tmpl;
-                uint32_t *tmpa = &report_stack.a[idx];
+                uint32_t *tmpa = report_stack.a+idx;
                 while (tmpi<report_stack.n-idx){
                     tmpl = tmpa[tmpi];
                     for (int i=tmpi; i<tmpl; i++){
@@ -11776,6 +11778,7 @@ vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_
                     }
                     tmpi+=tmpl+1;
                 }
+                idx = report_stack.n;
             }
         }
     }
@@ -13366,20 +13369,24 @@ typedef struct{
  
 typedef struct{
     hamt_paf_ht_v_pl_t *pl;
-    vu64_t *ahashes;  // (1<<prefix_l) arrays, piggyback
+    vu64_t *ahashes;  // (1<<prefix_l) arrays, not piggyback because not enough bits
+    vu32_t *aindices; // (1<<prefix_l) arrays
 }hamt_paf_ht_v_ps_t; // pipeline step struct
 
 void destroy_hamt_paf_ht_v_ps_t(hamt_paf_ht_v_ps_t* s){
     for (int i=0; i<=s->pl->prefix_mask; i++){
         kv_destroy(s->ahashes[i]);
+        kv_destroy(s->aindices[i]);
     }
     free(s->ahashes);
+    free(s->aindices);
     free(s);
 }
  
 static void hamt_index_pafs_multithread_pipeline_worker(void *data, long prefixID, int tID){
     hamt_paf_ht_v_ps_t *s = (hamt_paf_ht_v_ps_t*)data;
     vu64_t *v = &s->ahashes[prefixID];
+    vu32_t *vi = &s->aindices[prefixID];
     paf_ct_t *h = s->pl->H->hs[prefixID];
     khint_t key;
     int absent, prefix_l = s->pl->prefix_l;
@@ -13388,11 +13395,11 @@ static void hamt_index_pafs_multithread_pipeline_worker(void *data, long prefixI
     for (size_t i=0; i<v->n; i++){
         key = paf_ct_put(h, v->a[i], &absent);
         if (!absent){
-            sanhash = ((v->a[i])>>prefix_l)<<prefix_l | (uint64_t)prefixID;
-            fprintf(stderr, "[E::%s] slot not empty, qn %d tn %d\n", 
-                    __func__, (int)((uint32_t)(sanhash>>32)), (int)((uint32_t)sanhash));
+            fprintf(stderr, "[E::%s] slot not empty, query is %" PRIu64 "\n", 
+                    __func__, v->a[i]);
         }
-        kh_key(h, key) = v->a[i] ;
+        //kh_key(h, key) = v->a[i] ;
+        kh_val(h, key) = vi->a[i];
     }
 }
 static void *hamt_index_pafs_multithread_pipeline(void *data, int step, void *in){
@@ -13407,20 +13414,23 @@ static void *hamt_index_pafs_multithread_pipeline(void *data, int step, void *in
         hamt_paf_ht_v_ps_t *s = (hamt_paf_ht_v_ps_t*)calloc(1, sizeof(hamt_paf_ht_v_ps_t));
         s->pl = p;
         s->ahashes = (vu64_t*)calloc(1<<p->prefix_l, sizeof(vu64_t));
+        s->aindices = (vu32_t*)calloc(1<<p->prefix_l, sizeof(vu32_t));
         for (int i=0; i<1<<p->prefix_l; i++){
             kv_init(s->ahashes[i]);
             kv_resize(uint64_t, s->ahashes[i], 128);
+            kv_init(s->aindices[i]);
+            kv_resize(uint32_t, s->aindices[i], 128);
         }
         // collect values
         uint32_t i;
         for (i=p->start; i<p->n_reads && i<p->start+p->batchsize; i++){
             h = &p->paf[i];
             int tmpl = h->length;
-            if (h->length>p->sancheck_countermax){
-                fprintf(stderr, "[W::%s] Too many targets at read#%d (%.*s): %d. "
+            if (h->length > UINT32_MAX/*p->sancheck_countermax*/){
+                fprintf(stderr, "[W::%s] Too many targets at read#%d (%.*s): %" PRIu64 ". "
                         "Indexing will truncate wrt current sorting order.\n", 
                         __func__, (int)i, (int)Get_NAME_LENGTH(R_INF, i), 
-                        Get_NAME(R_INF, i), (int)h->length
+                        Get_NAME(R_INF, i), (uint64_t)h->length
                         );
                 tmpl = p->sancheck_countermax;
             }
@@ -13432,9 +13442,9 @@ static void *hamt_index_pafs_multithread_pipeline(void *data, int step, void *in
                 tn = Get_tn(*hh);
                 hash = ((uint64_t)qn)<<32 | tn;
                 prefix = hash & p->prefix_mask;
-                //hash = (hash>>p->prefix_l)<<p->prefix_l | (j<<1) | p->is_trans;
-                hash = (hash>>p->prefix_l)<<p->prefix_l | j;
+                //hash = (hash>>p->prefix_l)<<p->prefix_l | j;
                 kv_push(uint64_t, s->ahashes[prefix], hash);
+                kv_push(uint32_t, s->aindices[prefix], j);
                 tot++;
             }
         }
@@ -13497,7 +13507,8 @@ int get_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn){
     if (key==kh_end(hh)){
         return -1;
     }else{
-        uint64_t tmp = PAF_CT_PRE_M & kh_key(hh, key);
+        //uint64_t tmp = PAF_CT_PRE_M & kh_key(hh, key);
+        uint32_t tmp = kh_val(hh, key);
         return (int)tmp;
     }
 }
@@ -13512,7 +13523,8 @@ int insert_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn, uint32_t idx){
         fprintf(stderr, "[W::%s] inserted to non-empty slot. qn %d tn %d\n", 
                 __func__, (int)qn, (int)tn);
     }
-    kh_key(hh, key) = ((hash)>>PAF_CT_PRE)<<PAF_CT_PRE | idx;
+    //kh_key(hh, key) = ((hash)>>PAF_CT_PRE)<<PAF_CT_PRE | idx;
+    kh_val(hh, key) = idx;
     return absent;
 }
 
@@ -13733,6 +13745,7 @@ static void hamt_normalize_paf_worker(void *data, long jobID, int tID){
     uint64_t cnt1=0, cnt2 = 0;
     for (uint32_t i=0; i<h->length; i++){
         // (((ha doesn't require an unset .del of self here)))
+        if (h->buffer[i].del) continue;
 
         hh = &h->buffer[i];
         qn = Get_qn(*hh);
@@ -13796,7 +13809,21 @@ static void hamt_symmetrize_paf_worker(void *data, long rID, int tID){
         }
     }
 }
-
+static void hamt_symmetrize_by_del_paf_worker(void *data, long rID, int tID){
+    symmetrize_paf_s_t *s = (symmetrize_paf_s_t*)data;
+    ma_hit_t_alloc *h =  &s->paf[rID];
+    uint32_t qn=rID, tn;
+    int idx;
+    uint64_t tmp;
+    for (uint16_t i=0; i<h->length; i++){
+        tn = Get_tn(h->buffer[i]);
+        idx = get_paf_index_ct(s->H, tn, qn);
+        if (idx<0){
+            h->buffer[i].del = 1;
+            s->cnt[tID]++;
+        }
+    }
+}
 void hamt_symmetrize_paf_add_new_entry(ma_hit_t_alloc *paf, paf_ct_v *H, 
                                         uint32_t qn, uint32_t qi){
     ma_hit_t ele;
@@ -13808,8 +13835,8 @@ void hamt_symmetrize_paf_add_new_entry(ma_hit_t_alloc *paf, paf_ct_v *H,
     insert_paf_index_ct(H, tn, qn, paf[tn].length-1);
 }
 void hamt_symmetrize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads){
-    // hopefully there aren't too many asym pairs; this can't be sliced up 
-    // into batches because we need to modify hashtables.
+    // Symmetrize uses weirdly lot of memory? Switching to mark single entries
+    // as deleted. (Was insert the counterpart then mark boths as deleted.)
     double T0 = Get_T();
     symmetrize_paf_s_t s;
     s.paf = paf;
@@ -13822,30 +13849,30 @@ void hamt_symmetrize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, in
     }
 
     // collect asym entries
-    kt_for(n_threads, hamt_symmetrize_paf_worker, &s, n_reads);
+    kt_for(n_threads, hamt_symmetrize_by_del_paf_worker, &s, n_reads);
     for (int i=0; i<n_threads; i++){s.cnt[0]+=s.cnt[i];}
-    fprintf(stderr, "[M::%s] step1, total %" PRIu64 " todo. used %.2f s\n",
+    fprintf(stderr, "[M::%s] step1, total %" PRIu64 " . used %.2f s\n",
             __func__, s.cnt[0], Get_T()-T0);
 
-    T0 = Get_T();
-    for (int i=0; i<n_threads; i++){
-        radix_sort_ovhamt64(s.qni[i].a, s.qni[i].a+s.qni[i].n);
-    }
-    fprintf(stderr, "[M::%s] step1b, sorting used %.2f s (for cache efficiency, "
-            "maybe doesn't matter. remove if takes a long time)\n", 
-            __func__, Get_T()-T0);
+    //T0 = Get_T();
+    //for (int i=0; i<n_threads; i++){
+    //    radix_sort_ovhamt64(s.qni[i].a, s.qni[i].a+s.qni[i].n);
+    //}
+    //fprintf(stderr, "[M::%s] step1b, sorting used %.2f s (for cache efficiency, "
+    //        "maybe doesn't matter. remove if takes a long time)\n", 
+    //        __func__, Get_T()-T0);
 
-    // create new entries and update hashtables
-    T0 = Get_T();
-    uint32_t qn, qi;
-    for (int i=0; i<n_threads; i++){
-        for (int j=0; j<s.qni[i].n; j++){
-            qn = s.qni[i].a[j]>>32;
-            qi = (uint32_t)s.qni[i].a[j];
-            hamt_symmetrize_paf_add_new_entry(paf, H, qn, qi);
-        }
-    }
-    fprintf(stderr, "[M::%s] step2, used %.2f s\n", __func__, Get_T()-T0);
+    //// create new entries and update hashtables
+    //T0 = Get_T();
+    //uint32_t qn, qi;
+    //for (int i=0; i<n_threads; i++){
+    //    for (int j=0; j<s.qni[i].n; j++){
+    //        qn = s.qni[i].a[j]>>32;
+    //        qi = (uint32_t)s.qni[i].a[j];
+    //        hamt_symmetrize_paf_add_new_entry(paf, H, qn, qi);
+    //    }
+    //}
+    //fprintf(stderr, "[M::%s] step2, used %.2f s\n", __func__, Get_T()-T0);
 
 
     for (int i=0; i<n_threads; i++){

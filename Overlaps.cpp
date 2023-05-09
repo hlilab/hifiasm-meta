@@ -11196,7 +11196,7 @@ uint32_t src, uint32_t dest_idx)
     return (uint32_t)-1;
 }
 
-void get_specific_edge(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
+int get_specific_edge(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
 R_to_U* ruIndex, kvec_asg_arc_t_warp* edge, asg_t* read_g, int max_hang, 
 int min_ovlp, uint32_t query, uint32_t target, asg_arc_t* t)
 {
@@ -11236,9 +11236,12 @@ int min_ovlp, uint32_t query, uint32_t target, asg_arc_t* t)
                 break;
             }
         }
-        if(k == edge->a.n) fprintf(stderr, "[E::%s] thing missing when shouldn't\n", __func__);
+        if(k == edge->a.n){
+            return -1;
+            //fprintf(stderr, "[E::%s] thing missing when shouldn't\n", __func__);
+        } 
     }
-
+    return 0;
 }
 
 uint32_t polish_unitig(ma_utg_t* collection, asg_t* read_g, ma_hit_t_alloc* sources, 
@@ -11259,10 +11262,12 @@ ma_sub_t *coverage_cut, kvec_asg_arc_t_warp* edge, int max_hang, int min_ovlp)
         v = (uint64_t)(collection->a[i])>>32;
         afte = (uint64_t)(collection->a[i+1])>>32;
 
-        get_specific_edge(sources, coverage_cut, NULL, edge, pre_i == i-1? read_g:NULL, max_hang, min_ovlp, 
+        int san = get_specific_edge(sources, coverage_cut, NULL, edge, pre_i == i-1? read_g:NULL, max_hang, min_ovlp, 
         v^1, pre^1, &pE);
-        get_specific_edge(sources, coverage_cut, NULL, edge, read_g, max_hang, min_ovlp, 
+        if (san<0) continue;
+        san = get_specific_edge(sources, coverage_cut, NULL, edge, read_g, max_hang, min_ovlp, 
         v, afte, &aE);
+        if (san<0) continue;
         
         if(pE.el == 1 && aE.el == 1)
         {
@@ -25358,21 +25363,32 @@ char* output_file_name, long long n_read, ma_hit_t_alloc* reverse_sources, R_to_
     return 1;
 }
 int hamt_load_debug_graph(asg_t** sg, ma_hit_t_alloc** sources, ma_sub_t** coverage_cut, 
-char* output_file_name, ma_hit_t_alloc** reverse_sources, R_to_U* ruIndex, long long total_reads)
+                          char* output_file_name, 
+                          ma_hit_t_alloc** reverse_sources, 
+                          R_to_U* ruIndex, long long total_reads)
 {
-    // (companion monky patch of the function above)
     FILE* fp = NULL;
     char* gfa_name = (char*)malloc(strlen(output_file_name)+55);
+
     sprintf(gfa_name, "%s.all.probe.source.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.reverse.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.coverage_cut.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.ruIndex.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.asg_t.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
 
     if((*sources)!=NULL) destory_ma_hit_t_alloc((*sources), total_reads);
     if((*reverse_sources)!=NULL) destory_ma_hit_t_alloc((*reverse_sources), total_reads);
@@ -25425,14 +25441,19 @@ char* output_file_name, ma_hit_t_alloc** reverse_sources, R_to_U* ruIndex, long 
     char* gfa_name = (char*)malloc(strlen(output_file_name)+55);
     sprintf(gfa_name, "%s.all.debug.source.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.reverse.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.coverage_cut.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.ruIndex.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.asg_t.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
 
 
     if((*sources)!=NULL)
@@ -30261,7 +30282,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
 
 
-    asm_opt.get_specific_overlap_is_use_bf = 0; //////sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
     detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);  // detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
     ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
@@ -30771,6 +30791,7 @@ long long bubble_dist, int read_graph, int write)
     if ( (asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.do_probe_gfa)
     {
         fprintf(stderr, "try loading bin files of assembly graph...\n");
+        fflush(stderr);
         if(asm_opt.do_probe_gfa){
             loaded_debug_gfa = hamt_load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.probebin_base_name, &reverse_sources, &ruIndex, n_read);    
             if (!loaded_debug_gfa){  // fallback
@@ -30779,7 +30800,10 @@ long long bubble_dist, int read_graph, int write)
                 loaded_debug_gfa = load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);
             }
         }else{
+            double T = Get_T();
             loaded_debug_gfa = load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);
+            fprintf(stderr, "[M::%s] load_debug_graph(--dbg-gfa) used %.2f s\n", 
+                    __func__, Get_T()-T); fflush(stderr);
         }
         if(loaded_debug_gfa)
         {

@@ -30740,21 +30740,25 @@ probe:
             fprintf(stderr, "\n\n********** checkpoint: post-assembly **********\n\n");
 //probe:
             fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
-            if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
-            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-
-            // path finding-based circle rescue
-            kvec_asg_arc_t_warp new_rtg_edges;
-            kv_init(new_rtg_edges.a);
-            ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
-                      sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
-            long_tigs_in_resuce = hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
-            kv_destroy(new_rtg_edges.a);
-            
-            // simple binning
-            hamt_simple_binning(hamt_ug, long_tigs_in_resuce, asm_opt.thread_num, 
-                    asm_opt.output_file_name, asm_opt.write_binning_fasta);
-            kv_destroy(*long_tigs_in_resuce);
+            if (!asm_opt.no_post_assembly_binning){
+                if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+    
+                // path finding-based circle rescue
+                kvec_asg_arc_t_warp new_rtg_edges;
+                kv_init(new_rtg_edges.a);
+                ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
+                          sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
+                long_tigs_in_resuce = hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
+                kv_destroy(new_rtg_edges.a);
+                
+                // simple binning
+                hamt_simple_binning(hamt_ug, long_tigs_in_resuce, asm_opt.thread_num, 
+                        asm_opt.output_file_name, asm_opt.write_binning_fasta);
+                kv_destroy(*long_tigs_in_resuce);
+            }else{
+                fprintf(stderr, "[M::%s] skipped binning. \n", __func__);
+            }
 
 
         if (hamt_ug) {hamt_ug_destroy(hamt_ug);}

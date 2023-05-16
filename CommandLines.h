@@ -119,6 +119,7 @@ typedef struct {
     int tsne_perplexity;
     int tsne_randomseed;
     float tsne_neigh_dist;
+    int no_post_assembly_binning;
 
     // end of hamt
     

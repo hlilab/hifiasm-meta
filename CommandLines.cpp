@@ -56,6 +56,7 @@ static ko_longopt_t long_options[] = {
     { "tsne-perp", ko_required_argument, 424 },  // perplexity of tsne used in binning
     { "tsne-seed", ko_required_argument, 425 },  // 
     { "tsne-neighdist", ko_required_argument, 426 },  // 
+    { "no-binning", ko_no_argument, 427 },
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -197,6 +198,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->tsne_perplexity = 50;
     asm_opt->tsne_randomseed = 42; 
     asm_opt->tsne_neigh_dist = 0.25;
+    asm_opt->no_post_assembly_binning = 0;  // default does binning
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable
 }
@@ -574,6 +576,8 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
         else if (c == 424) {asm_opt->tsne_perplexity= atoi(opt.arg);}
         else if (c == 425) {asm_opt->tsne_randomseed= atoi(opt.arg);}
         else if (c == 426) {asm_opt->tsne_neigh_dist= atof(opt.arg);}
+        else if (c == 427) {asm_opt->no_post_assembly_binning = 1;
+            fprintf(stderr, "[M::%s] Will not do post assembly genome binning.\n", __func__);}
 
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;

@@ -18586,6 +18586,11 @@ void output_tangles(uint32_t startID, uint32_t endId, uint32_t* a, uint32_t n, c
 }
 
 
+/**
+ * @par result Is the address of an allocated struct. It gets a copy. 
+ *             Use hamt_get_arc to return pointer to the original asg_arc_t item.
+ * @return 1 if found, 0 not found
+*/
 int get_arc(asg_t *g, uint32_t src, uint32_t dest, asg_arc_t* result)
 {
     uint32_t i;
@@ -18599,11 +18604,10 @@ int get_arc(asg_t *g, uint32_t src, uint32_t dest, asg_arc_t* result)
         if(av[i].v == dest)
         {
             (*result) = av[i];
-            break;
+            return 1;
         } 
     }
 
-    if(i != nv) return 1;
     return 0;
 }
 
@@ -30334,6 +30338,11 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
 
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "HEY", cleanID);
+            // hamt_ug_resolveTangles_threaded(sg, hamt_ug, asm_opt.thread_num, 0);
+            // hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+            // hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "HEYafter", cleanID);
+            // exit(0);
 
             // topo pre clean
             fprintf(stderr, "[M::%s] ======= preclean =======\n", __func__);
@@ -30378,6 +30387,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             time = Get_T();
             // cut dangling circles and inversion links
+            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "HEYbefore_circle_cln", cleanID);
             hamt_circle_cleaning(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
@@ -30473,10 +30483,11 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             int nb_tangle_cut, nb_tip;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
                 time = Get_T();
-                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
+                /*if (asm_opt.write_debug_gfa)*/ {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
                 
                 time = Get_T();
-                nb_tangle_cut = hamt_ug_resolveTangles(sg, hamt_ug, 0, 1);
+                // nb_tangle_cut = hamt_ug_resolveTangles(sg, hamt_ug, 0, 1);
+                hamt_ug_resolveTangles_threaded(sg, hamt_ug, asm_opt.thread_num, 0, round_resolve);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #1: %.1fs\n", __func__, Get_T()-time);
 
@@ -30498,6 +30509,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 
                 time = Get_T();
                 hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 200000, 0, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                hamt_circle_cleaning(sg, hamt_ug, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #5: %.1fs\n", __func__, Get_T()-time);
 

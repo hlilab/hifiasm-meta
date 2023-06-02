@@ -10,6 +10,7 @@
 #include "Overlaps_hamt.h"
 #include "ksort.h"
 #include "htab.h"
+#include "kthread.h"
 
 #define HAMT_MAX(x, y) ((x >= y)?(x):(y))  // same
 #define HAMT_MIN(x, y) ((x <= y)?(x):(y))  // same
@@ -20,6 +21,8 @@ KDQ_INIT(uint64_t)
 KDQ_INIT(uint32_t)
 KRADIX_SORT_INIT(ovhamt64, uint64_t, uint64_t, 8)
 KRADIX_SORT_INIT(ovhamt32, uint32_t, uint32_t, 4)
+
+typedef kvec_t(char*) kvec_strings_t;
 
 #define HAMT_PRIMARY_LABEL 0
 #define HAMT_ALTER_LABEL 1
@@ -45,9 +48,6 @@ char seqcmp(char n){
     return n;
 }
 
-//////////////////////////////////////////////////////////////////////
-//                        debug functions                           //
-//////////////////////////////////////////////////////////////////////
 // for debug fprintf from kthreads
 // (note: printf operates in multithreaded; might crash if race)
 void hamt_dbgmsg_init(dbgmsg_t *h){
@@ -183,9 +183,7 @@ void hamtdebug_output_unitig_graph_ug(ma_ug_t *ug, char *base_fn, const char *su
     free(gfa_name);
 }
 
-//////////////////////////////////////////////////////////////////////
-//                 non-debug file output routines                   //
-//////////////////////////////////////////////////////////////////////
+
 typedef struct {
     uint32_t *a;
     int n, m;  // n is the count, m is the capacity
@@ -379,6 +377,16 @@ int stacku32_peek_last_item(stacku32_t *stack, uint32_t *buf){
     }
     return 0;
 }
+int stacku32_peek_prev_item(stacku32_t *stack, int i, uint32_t *buf){
+    // RETURN
+    //     1 if success
+    //     0 if invalid i (larger than stack size) or fail (stack is empty)
+    if (stack->n>0 && i<stack->n){
+        *buf = stack->a[i-1];
+        return 1;
+    }
+    return 0;
+}
 void stacku32_invert_buffer(stacku32_t *stack){
     if (stack->n<=1) return;
     uint32_t tmp;
@@ -526,6 +534,87 @@ void stacku64_invert_buffer(stacku64_t *stack){
         tmp = stack->a[i];
         stack->a[i] = stack->a[stack->n-1-i];
         stack->a[stack->n-1-i] = tmp;
+    }
+}
+
+
+
+/**
+ * @brief fixed length single bit array
+*/
+typedef struct {
+    uint8_t *a;  // left to right
+    uint32_t m, mm; // array size and expected bit-wise array size
+}hamt_ba_t;
+
+/**
+ * @par bitsize the precise array length. Allocation is 8-bit blocks, 
+ *      length sancheck is precise.
+*/
+hamt_ba_t *hamt_ba_t_init(uint32_t bitsize){
+    hamt_ba_t *d = (hamt_ba_t*)calloc(1, sizeof *d);
+    uint32_t size = bitsize/8+1;
+    d->a = (uint8_t*)calloc(size, 1);
+    d->m = size;
+    d->mm = bitsize;
+    return d;
+}
+void hamt_ba_t_destroy(hamt_ba_t *d){
+    free(d->a);
+    free(d);
+}
+void hamt_ba_t_resize(hamt_ba_t *d, uint32_t bitsize){
+    d->m = bitsize/8 +1 ;
+    d->mm = bitsize;
+    d->a = (uint8_t*)realloc(d->a, d->m);
+    if (!d->a){
+        fprintf(stderr, "[E::%s] realloc failed\n", __func__);
+        exit(1);
+    }
+}
+
+/**
+ * @par i index in the bitarray
+*/
+uint8_t hamt_ba_t_get(hamt_ba_t *d, uint32_t i){
+    if (i>d->mm){
+        fprintf(stderr, "[E::%s] index exceeds array size\n", __func__);
+        exit(1);
+    }
+    int idx = i/8;
+    int shift = i%8;
+    uint8_t ret = d->a[idx] & ((((uint8_t)1)<<7) >> shift);
+    return ret>>(7-shift);
+}
+
+/**
+ @par op 0 for unmark, 1 for mark, 2 for toggle
+ @par i index in the bitarray
+*/
+void hamt_ba_t_write(hamt_ba_t *d, int op, uint32_t i){
+    if (i>d->mm){
+        fprintf(stderr, "[E::%s] index exceeds array size\n", __func__);
+        exit(1);
+    }
+    int shift = i%8;
+    int index = i/8;
+    uint8_t mask = (((uint8_t)1)<<7) >> shift;
+    if (op==0){
+        d->a[index] &= (~mask);
+    }else if (op==1){
+        d->a[index] |= mask;
+    }else if (op==2){
+        d->a[index] ^= mask;
+    }
+}
+
+/**
+ * @brief print out bits
+*/
+void hamt_bat_t_debugprint(hamt_ba_t *d){
+    for (int i=0; i<=d->mm; i++){
+        fprintf(stderr, "[debug::%s] %d => %d\n", __func__, 
+                                            i, (int)hamt_ba_t_get(d, i));
     }
 }
 
@@ -1001,8 +1090,28 @@ void asg_get_subgraph_DFSfinishTimes(asg_t *sg, stacku32_t *vertices, stacku32_t
     stacku64_destroy(&finishing_time);
 }
 
-void hamt_util_shortest_path(){
-    ;
+/**
+ * @brief Given the graph and two nodes (ordered), fetch the point to their edge.
+ * @par resultp Output, is the address of point to be modified. 
+ * @return 1 if found, 0 not found
+*/
+int hamt_get_arc(asg_t *g, uint32_t src, uint32_t dest, asg_arc_t** resultp){
+    uint32_t i;
+    if(g->seq[src>>1].del) return 0;
+
+    uint32_t nv = asg_arc_n(g, src);
+    asg_arc_t *av = asg_arc_a(g, src);
+    for (i = 0; i < nv; i++)
+    {
+        if(av[i].del) continue;
+        if(av[i].v == dest)
+        {
+            (*resultp) = &av[i];
+            return 1;
+        } 
+    }
+
+    return 0;
 }
 
 
@@ -1613,12 +1722,31 @@ int hamt_asgarc_util_isTip(asg_t *g, uint32_t v, int include_del_seq, int includ
     return 0;
 }
 
+/**
+ * @brief Check if arc v->v exists, and v has no other arcs.
+ * @return 1 if yes, 0 if no
+*/
+int hamt_asgarc_util_isSelfCirc(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc, int base_label){
+    if (hamt_asgarc_util_countSuc(g, v, include_del_seq, include_del_arc, base_label)==1){
+        uint32_t nv = asg_arc_n(g, v);
+        asg_arc_t *av = asg_arc_a(g, v);
+        for (int i=0; i<(int)nv; i++){
+            if (!include_del_arc && av[i].del) {continue;}
+            if (!include_del_seq && g->seq[av[i].v>>1].del) {continue;}
+            if (base_label>=0 && g->seq_vis[av[i].v>>1]!=base_label){continue;}
+            if (av[i].v==v) return 1;
+        }
+    }
+    return 0;
+}
+
+
+/**
+ * @brief Check if v is a tip (either direction) with only 1 connection. 
+ * @par v unitig ID, with the direction bit.
+ * @return 1 if yes, 0 if no.
+*/
 int hamt_asgarc_util_isDanglingTip(asg_t *g, uint32_t v, int include_del_seq, int include_del_arc, int base_label){
-    // FUNC
-    //     check if v is a tip (or orphan), in either direction
-    // RETURN
-    //     0 if no
-    //     1 if yes
     if (hamt_asgarc_util_countSuc(g, v, include_del_seq, include_del_arc, base_label)==1 || 
         hamt_asgarc_util_countPre(g, v, include_del_seq, include_del_arc, base_label)==0){
         return 1;
@@ -1727,8 +1855,13 @@ int hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(asg_t *g, uint32_t v, 
     return -1;
 }
 
-void hamt_asgarc_util_get_the_two_targets(asg_t *g, uint32_t v, uint32_t *w, uint32_t *u,
+int hamt_asgarc_util_get_the_two_targets(asg_t *g, uint32_t v, uint32_t *w, uint32_t *u,
                                          int include_del_seq, int include_del_arc, int base_label){
+    // NOTE
+    //    Will not report error if there are more than two targets (will take the first two).
+    // RET
+    //    0 if ok
+    //    1 if less than two targets
     int nv = asg_arc_n(g, v);
     asg_arc_t *av = asg_arc_a(g, v);
     int i;
@@ -1744,8 +1877,14 @@ void hamt_asgarc_util_get_the_two_targets(asg_t *g, uint32_t v, uint32_t *w, uin
             fprintf(stderr, "[E::%s] more than two targets, continue anyway\n", __func__);
         }
     }
-    *w = buf[0];
-    *u = buf[1];
+    if (idx<2){
+        return 1;
+    }else{
+        *w = buf[0];
+        *u = buf[1];
+        return 0;
+    }
+
 }
 
 int hamt_asgarc_util_has_self_arc(asg_t *g, uint32_t v, int base_label){
@@ -2271,7 +2410,8 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
 
     // check v4
     int passed = 0;
-    hamt_asgarc_util_get_the_two_targets(g, v2, &w2[0], &w2[1], 0, 0, base_label);
+    if (hamt_asgarc_util_get_the_two_targets(g, v2, &w2[0], &w2[1], 0, 0, base_label)!=0)
+        return 0;
     // is w2[0] v4?
     if (hamt_asgarc_util_countSuc(g, w2[0], 0, 0, base_label)==1 && hamt_asgarc_util_countPre(g, w2[0], 0, 0, base_label)==1){
         hamt_asgarc_util_get_the_one_target(g, w2[0], &w_tmp, 0, 0, base_label);
@@ -2323,6 +2463,9 @@ int hamt_asgarc_util_checkSimplePentaBubble(ma_ug_t *ug, asg_t *g, uint32_t v0, 
     return 1;
 }
 
+/**
+ * @return 1 if yes, 0 if no
+*/
 int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0, 
                                       int *max_length, int *max_coverage,  // side effect
                                       int base_label,
@@ -2335,8 +2478,11 @@ int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0,
     //    Directions are: v0->(stuff in between)<-w0
     int verbose = 0;
     if (verbose){
-        fprintf(stderr, "[debug::%s] utg%.6d vs utg%.6d\n", __func__, (int)(v0>>1)+1, (int)(w0>>1)+1);
+        fprintf(stderr, "[debug::%s] utg%.6d (%d) vs utg%.6d (%d)\n", __func__, 
+            (int)(v0>>1)+1, (int)(v0&1), (int)(w0>>1)+1, (int)(w0&1));
     }
+
+    // if ((v0>>1)+1==993 || (v0>>1)+1==95) verbose = 2;  // 990
 
     asg_t *auxsg = ug->g;
     if (hamt_asgarc_util_countSuc(auxsg, v0, 0, 0, base_label)==0 ||
@@ -2361,7 +2507,7 @@ int hamt_ug_check_localSourceSinkPair(ma_ug_t *ug, uint32_t v0, uint32_t w0,
 
     // arbitrary check: if the handle hints circular walk, check handle length
     if (source_nodir==sink_nodir){
-        if (ug->u.a[source_nodir].len<500000){
+        if (ug->u.a[source_nodir].len<100000){
             if  (verbose){fprintf(stderr, "[debug::%s]     hinted circular, handle too short\n", __func__);}
             ret = 0;
             goto finish;
@@ -2752,7 +2898,8 @@ int hamt_ug_popSpecialCase1(asg_t *sg, ma_ug_t *ug, int base_label, int alt_labe
     for (uint32_t v0=0; v0<auxsg->n_seq*2; v0++){
         if (hamt_asgarc_util_countSuc(auxsg, v0, 0, 0, base_label)!=2){continue;}
         // get v1 and v2
-        hamt_asgarc_util_get_the_two_targets(auxsg, v0, &v1, &v2, 0, 0, base_label);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, v0, &v1, &v2, 0, 0, base_label)!=0)
+            continue;
         // v1 and v2 check:
         if (hamt_asgarc_util_countPre(auxsg, v1, 0, 0, base_label)!=1 || 
             hamt_asgarc_util_countPre(auxsg, v2, 0, 0, base_label)!=1){continue;}  // backward branching
@@ -2767,13 +2914,15 @@ int hamt_ug_popSpecialCase1(asg_t *sg, ma_ug_t *ug, int base_label, int alt_labe
         if (hamt_asgarc_util_countPre(auxsg, v3, 0, 0, base_label)!=2){continue;}
         if (hamt_asgarc_util_countSuc(auxsg, v3, 0, 0, base_label)!=2){continue;}
         // get v4 and v5
-        hamt_asgarc_util_get_the_two_targets(auxsg, v3, &v_tmp1, &v_tmp2, 0, 0, base_label);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, v3, &v_tmp1, &v_tmp2, 0, 0, base_label)!=0)
+            continue;
         if ((v_tmp1>>1)==(v1>>1) || (v_tmp1>>1)==(v2>>1)){
             v4 = v_tmp2;
         }else{
             v4 = v_tmp1;
         }
-        hamt_asgarc_util_get_the_two_targets(auxsg, v3^1, &v_tmp1, &v_tmp2, 0, 0, base_label);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, v3^1, &v_tmp1, &v_tmp2, 0, 0, base_label)!=0)
+            continue;
         if ((v_tmp1>>1)==(v1>>1) || (v_tmp1>>1)==(v2>>1)){
             v5 = v_tmp2;
         }else{
@@ -3009,15 +3158,17 @@ int hamt_ugasgarc_util_BFS_mark(ma_ug_t *ug, uint32_t v0, uint8_t *color, queue3
 }
 
 
-int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t *color0, queue32_t *q0, int base_label){
-    // helper func, do a BFS within the given range(s) and mark touched vertices in `color`
-    // (if both thresholds are given, require exceed them both to terminate search)
-    // (set threshold to -1 to disable)
-    // the caller is responsible for init color and q
-    // RETURN
-    //      max subgraph label
-    // TODO
-    //     subg_labels and color don't need to be n_seq*2 long. 
+/**
+ * @brief Helper function. Treats the bidirectional graph as undirected, find
+ *        disconnected subgraphs, and label their nodes with unique non-negative 
+ *        integer IDs.
+ * @par sg String graph or aux grpah of a unitig/contig graph. Note that for string graph,
+ *        set base_label to -1.
+ * @par max_label Output, stores the number of disconnected subgraphs.
+ * @par base_label 0 for primary , 1 for alt, -1 ignores the check.
+ * @return An integer array of length n_seq (no direction bit).
+*/
+int *hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *n_subgraphs, int base_label){
     int verbose = 0;
 
     uint32_t v0, v, nv, w;
@@ -3025,93 +3176,59 @@ int hamt_asgarc_util_BFS_markSubgraph_core(asg_t *sg, int *subg_labels, uint8_t 
     int cnt_nread, cnt_bp;
     int tmp;
     int label = 0;
+    int n_nodes;
 
-    queue32_t *q = 0;
-    queue32_t q_alloc;
-    uint8_t *color;
-    if (!q0){
-        queue32_init(&q_alloc);
-        q = &q_alloc;
-    }else{
-        q = q0;
-    }
-    if (!color0){
-        color = (uint8_t*)calloc(sg->n_seq*2, 1);
-    }else{
-        color = color0;
-    }
+    queue32_t q;
+    queue32_init(&q);
+    uint8_t *color = (uint8_t*)calloc(sg->n_seq, 1);
+    int *subg_labels = (int*)calloc(sg->n_seq, sizeof(int));
 
-    for (v0=0; v0<sg->n_seq*2; v0++){
-        if (color[v0]){
-            continue;
-        }
+    for (v0=0; v0<sg->n_seq*2; v0+=2){
+        if (color[v0>>1]!=0) continue;
+        if (base_label>=0 && sg->seq_vis[v0>>1]!=base_label){continue;}
         if (verbose){
             fprintf(stderr, "[debug::%s] seed utg%.6d\n", __func__, (int)(v0>>1)+1);
         }
-        if (base_label>=0 && sg->seq_vis[v0>>1]!=base_label){continue;}
-        tmp = 0;
-        queue32_reset(q);
-        queue32_enqueue(q, v0);
-        // queue32_enqueue(q, v0^1);
-        color[v0] = 1;
-        color[v0^1] = 1;
-        tmp++;
-        subg_labels[v0] = label;
-        subg_labels[v0^1] = label;
-        while(queue32_dequeue(q, &v)){
+        
+        // BFS, treat graph as undirected
+        n_nodes = 0;
+        v = v0>>1;
+        queue32_reset(&q);
+        queue32_enqueue(&q, v);
+        color[v] = 1;
+        n_nodes++;
+        subg_labels[v] = label;
+        while(queue32_dequeue(&q, &v)){
             if (color[v]==2){
-                if (verbose) {fprintf(stderr, "[debug::%s]    skip utg%.6d bcs color\n", __func__, (int)(v>>1)+1);}
                 continue;
             }
-            if (verbose) {fprintf(stderr, "[debug::%s]    dequeue utg%.6d, n %d, m %d, head %d, tail %d\n", __func__, (int)(v>>1)+1, (int)q->n, (int)q->m, (int)q->i_head, (int)q->i_tail);}
-            // 1st direction
-            if (verbose) {fprintf(stderr, "[debug::%s]    check 1st dir\n", __func__);}
-            nv = asg_arc_n(sg, v);
-            av = asg_arc_a(sg, v);
-            for (uint32_t i=0; i<nv; i++){
-                if (av[i].del){continue;}
-                if (base_label>=0 && sg->seq_vis[av[i].v>>1]!=base_label) {continue;}
-                w = av[i].v;
-                if (color[w]==0){
-                    queue32_enqueue(q, w);
-                    color[w] = 1;
-                    color[w^1] = 1;
-                    tmp++;
-                    subg_labels[w] = label;
-                    subg_labels[w^1] = label;
-                    if (verbose) {fprintf(stderr, "[debug::%s]    push utg%.6d, n %d, m %d, head %d, tail %d\n", __func__, (int)(w>>1)+1, (int)q->n, (int)q->m, (int)q->i_head, (int)q->i_tail);}
+            
+            for (uint32_t dir=0; dir<2; dir++){
+                nv = asg_arc_n(sg, (v<<1)|dir);
+                av = asg_arc_a(sg, (v<<1)|dir);
+                for (uint32_t i=0; i<nv; i++){
+                    if (av[i].del){continue;}
+                    if (base_label>=0 && sg->seq_vis[av[i].v>>1]!=base_label) {continue;}
+                    w = av[i].v>>1;
+                    if (color[w]==0){
+                        queue32_enqueue(&q, w);
+                        color[w] = 1;
+                        n_nodes++;
+                        subg_labels[w] = label;
+                    }
                 }
+                color[v] = 2;
             }
-            // 2nd direction
-            if (verbose) {fprintf(stderr, "[debug::%s]    check 2nd dir\n", __func__);}
-            nv = asg_arc_n(sg, v^1);
-            av = asg_arc_a(sg, v^1);
-            for (uint32_t i=0; i<nv; i++){
-                if (av[i].del){continue;}
-                if (base_label>=0 && sg->seq_vis[av[i].v>>1]!=base_label) {continue;}
-                w = av[i].v;
-                if (color[w]==0){
-                    queue32_enqueue(q, w);
-                    color[w] = 1;
-                    color[w^1] = 1;
-                    tmp++;
-                    subg_labels[w] = label;
-                    subg_labels[w^1] = label;
-                    if (verbose) {fprintf(stderr, "[debug::%s]    push utg%.6d, n %d, m %d, head %d, tail %d\n", __func__, (int)(w>>1)+1, (int)q->n, (int)q->m, (int)q->i_head, (int)q->i_tail);}
-                }
-            }
-            color[v] = 2;
-            color[v^1] = 2;
         }
         label++;
         if (verbose){
-            fprintf(stderr, "[debug::%s] subgraph #%d, %d reads/tigs.\n", __func__, label, tmp);
+            fprintf(stderr, "[debug::%s]   got subgraph #%d, has %d nodes.\n", __func__, label, n_nodes);
         }
     }
-
-    if (!q0){queue32_destroy(&q_alloc);}
-    if (!color0){free(color);}
-    return label;
+    queue32_destroy(&q);
+    free(color);
+    *n_subgraphs = label;
+    return subg_labels;
 }
 
 int hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label){
@@ -3121,17 +3238,12 @@ int hamt_ug_util_BFS_markSubgraph(ma_ug_t *ug, int base_label){
     // RET
     //     The largest subgraph ID.
     asg_t *auxsg = ug->g;
-    uint8_t *color_sg = (uint8_t*)calloc(auxsg->n_seq*2, 1);
-    int *subg_labels = (int*)calloc(auxsg->n_seq*2, sizeof(int));
-    queue32_t q;
-    queue32_init(&q);
-    int max_label = hamt_asgarc_util_BFS_markSubgraph_core(auxsg, subg_labels, color_sg, &q, base_label);
-    for (uint32_t i=0; i<auxsg->n_seq*2; i++){
-        ug->u.a[i>>1].subg_label = subg_labels[i];
+    int max_label;
+    int *labels = hamt_asgarc_util_BFS_markSubgraph_core(auxsg, &max_label, -1);
+    for (uint32_t i=0; i<auxsg->n_seq*2; i+=2){
+        ug->u.a[i>>1].subg_label = labels[i>>1];
     }
-    free(color_sg);
-    free(subg_labels);
-    queue32_destroy(&q);
+    free(labels);
     return max_label;
 }
 
@@ -4510,7 +4622,12 @@ int hamt_ug_check_bifurTip(ma_ug_t *ug, uint32_t vu, int base_label,
     }
 
     // check haplotig status
-    hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+    if (hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label)!=0){
+        if (verbose){
+            fprintf(stderr, "[debug::%s] utg %.6d , failed to get wu0 and wu1\n", __func__, (int)(vu>>1)+1);
+        }
+        return 0;
+    }
     if (hamt_check_diploid(ug, wu[0], wu[1], 0.3, reverse_sources)>0){
         if (verbose){
             fprintf(stderr, "[debug::%s] utg %.6d , failed haplotig requirement\n", __func__, (int)(vu>>1)+1);
@@ -4534,8 +4651,9 @@ int hamt_ug_check_bifurTip(ma_ug_t *ug, uint32_t vu, int base_label,
 
 
 
-void hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t v, uint32_t v_parent, int *DFStime, uint8_t *visited, int *tin, int *low, int base_label){
-    // initended to be called (only) by hamt_asgarc_markBridges
+void hamt_asgarc_markBridges_DFS_v0(asg_t *sg, uint32_t v, uint32_t v_parent, int *DFStime,
+                                 uint8_t *visited, int *tin, int *low, int base_label){
+    // recursive.
     uint32_t w;
     asg_arc_t *av_fwd, *av_bwd, *av, *av_tmp;
     uint32_t nv_fwd, nv_bwd;
@@ -4567,7 +4685,7 @@ void hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t v, uint32_t v_parent, int *
         if (visited[w>>1]){
             low[v>>1] = low[v>>1]<tin[w>>1]? low[v>>1] : tin[w>>1];
         }else{
-            hamt_asgarc_markBridges_DFS(sg, w, v, DFStime, visited, tin, low, base_label);
+            hamt_asgarc_markBridges_DFS_v0(sg, w, v, DFStime, visited, tin, low, base_label);
             low[v>>1] = low[v>>1]<low[w>>1]? low[v>>1] : low[w>>1];
             if (low[w>>1]>tin[v>>1]){  // arc is bridge
                 av[i].is_bridge = 1;
@@ -4576,6 +4694,135 @@ void hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t v, uint32_t v_parent, int *
             }
         }
     }
+}
+
+/**
+ * @brief Treat the assembly graph as an undirected graph and mark bridge edges.
+ *        Non-recursive version.
+ * @par sg Aux graph of a unitig or contig graph. Will modify sg->arc[i].is_bridge.
+ * @par root A node as DFS seed, has direction bit.
+ * @par visited An array of length n_seq provided by caller.
+ * @par tin An array of length n_seq initialized all to -1 provided by caller  
+ * @par low (Similar to tin.)
+ * @par base_label -1 to ignore, 0 to use primary graph, 1 to use alt graph.
+ * @return Number of bridges.
+*/
+int hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t root,
+                                uint8_t *visited, int *tin, int *low, int base_label) {
+    int verbose = 1;
+    int nb_bridge = 0;
+    
+    // for traversing graph
+    int DFStime = 0;
+    uint32_t vu, wu, parent, vu_;
+    asg_arc_t *av_fwd, *av_bwd, *av;  
+    uint32_t nv_fwd, nv_bwd;
+    stacku32_t DFSstack;
+    stacku32_init(&DFSstack);
+    // for fetching arcs
+    asg_arc_t *av0, *avr, *avtmp;  
+
+    // init
+    stacku32_push(&DFSstack, root);
+    visited[root >> 1] = 1;
+    tin[root >> 1] = DFStime;
+    low[root >> 1] = tin[root >> 1];
+    DFStime += 1;
+
+    int exhausted;
+    uint8_t parent_sancheck;
+    int hasDFSparent;
+    while (stacku32_pop(&DFSstack, &vu)) {
+        if (verbose>1) {fprintf(stderr, "[debug::%s] pop vu tig %.6d\n", __func__, (int)(vu>>1)+1);}
+        av_fwd = asg_arc_a(sg, vu);
+        av_bwd = asg_arc_a(sg, vu ^ 1);
+        nv_fwd = asg_arc_n(sg, vu);
+        nv_bwd = asg_arc_n(sg, vu ^ 1);
+        exhausted = 1;
+        hasDFSparent = stacku32_peek_last_item(&DFSstack, &parent);
+        for (uint32_t i_ = 0, i = 0; i_ < (nv_fwd + nv_bwd); i_++) {  // check all neighbors
+            if (i_ < nv_fwd) {
+                i = i_;
+                av = av_fwd;
+                vu_ = vu;
+            } else {
+                i = i_ - nv_fwd;
+                av = av_bwd;
+                vu_ = vu^1;
+            }
+            if (av[i].del) { continue; }
+            if (base_label >= 0 && sg->seq_vis[av[i].v >> 1] != base_label) { continue; }
+
+            wu = av[i].v;
+            if (visited[wu >> 1] == 0) {  // found white
+                if (verbose>1) {fprintf(stderr, "[debug::%s]   push wu tig %.6d\n", __func__, (int)(wu>>1)+1);}
+                exhausted = 0;
+                stacku32_push(&DFSstack, vu);  // put current node back
+                stacku32_push(&DFSstack, wu);
+                visited[wu>>1] = 1;
+                DFStime++;
+                low[wu >> 1] = DFStime;
+                tin[wu >> 1] = DFStime;  // discovery time
+                break;  // step deeper
+            } else{
+                if (hasDFSparent && (wu>>1)!=(parent>>1))
+                    low[vu>>1] = low[vu>>1]<low[wu>>1]? low[vu>>1] : low[wu>>1];
+            }
+        }
+        if (hasDFSparent==0) continue;
+        if (exhausted && DFSstack.n!=0){  // update times
+            if (verbose>1){
+                fprintf(stderr, "[debug::%s] finish %.6d , DFSparent=%.6d, tin=%d low=%d\n", __func__,
+                                (int)(vu>>1)+1, (int)(parent>>1)+1, 
+                                tin[vu>>1], low[vu>>1]);
+            }
+
+            if (tin[vu >> 1] == low[vu >> 1]) {  // the edge between this node and its DFS parent is a bridge
+                if (hamt_asgarc_util_isTip(sg, vu, 0, 0, base_label) ||  
+                    hamt_asgarc_util_isTip(sg, parent, 0, 0, base_label)){
+                    if (verbose>1) {fprintf(stderr, "[debug::%s] IGNORE because tip: edge %.6d to %.6d\n",
+                                    __func__, (int)(vu>>1)+1, (int)(parent>>1)+1);}
+                }else{
+                    int found1 = hamt_get_arc(sg, parent,vu,  &av0);
+                    if (!found1){
+                        if (verbose>1) fprintf(stderr, "flip parent direction because found1 is false\n");
+                        parent ^=1;
+                        found1 = hamt_get_arc(sg, parent,vu,  &av0);
+                    }
+                    int found2 = hamt_get_arc(sg,vu, parent, &avtmp);  
+                    int found3 = hamt_get_arc(sg,vu^1, parent^1, &avr);  
+                    
+                    if (verbose>1) {
+                        fprintf(stderr, "vu %.6d parent %.6d stat1 %d stat2 %d stat3 %d\n", 
+                                (int)(vu>>1)+1, (int)(parent>>1)+1, 
+                                found1, found2, found3);
+                        if (found1) fprintf(stderr, "av0: %.6d %.6d\n", (int)(av0->v>>1)+1, (int)(av0->ul>>33)+1);
+                        if (found2) fprintf(stderr, "avtmp: %.6d %.6d\n", (int)(avtmp->v>>1)+1, (int)(avtmp->ul>>33)+1);
+                        if (found3) fprintf(stderr, "avr: %.6d %.6d\n", (int)(avr->v>>1)+1, (int)(avr->ul>>33)+1);
+                    }
+
+                    if (found2) continue;
+
+                    if (!found3){
+                        fprintf(stderr, "[E::%s] failed to get the reverse arc: parent=%.6d (%d), vu=%.6d (%d)\n", 
+                                __func__, (int)(parent>>1)+1, (int)(parent&1),
+                                (int)(vu>>1)+1, (int)(vu&1));
+                    }else{
+                        av0->is_bridge = 1;
+                        avr->is_bridge = 1;
+                        nb_bridge++;
+                    }
+                    if (verbose) {
+                        fprintf(stderr, "[debug::%s] MARK: edge %.6d (%d) to %.6d (%d)\n",
+                                    __func__, (int)(vu>>1)+1, (int)(vu&1),
+                                    (int)(parent>>1)+1, (int)(parent&1));
+                    }
+                }
+            }
+        }
+    }
+    stacku32_destroy(&DFSstack);
+    return nb_bridge;
 }
 
 void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
@@ -4598,35 +4845,31 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
 
     // mark bridge arcs
     uint8_t *visited = (uint8_t*)calloc(auxsg->n_seq, 1);
-    int *tin = (int*)calloc(auxsg->n_seq, sizeof(int));  memset(tin, -1, auxsg->n_seq*sizeof(int));
-    int *low = (int*)calloc(auxsg->n_seq, sizeof(int));  memset(tin, -1, auxsg->n_seq*sizeof(int));
+    int *tin = (int*)calloc(auxsg->n_seq, sizeof(int));
+    int *low = (int*)calloc(auxsg->n_seq, sizeof(int));
+    memset(tin, -1, auxsg->n_seq*sizeof(int));
+    memset(low, -1, auxsg->n_seq*sizeof(int));
     int DFStime = 0;
-    for (v=0; v<auxsg->n_seq; v++){
-        if (!visited[v>>1]){
-            hamt_asgarc_markBridges_DFS(auxsg, v, v, &DFStime, visited, tin, low, base_label);
+    for (v=0; v<auxsg->n_seq*2; v++){
+        if (v&1) continue;
+        if (visited[v>>1]==0){
+            // hamt_asgarc_markBridges_DFS(auxsg, v, v, &DFStime, visited, tin, low, base_label);
+            hamt_asgarc_markBridges_DFS(auxsg, v, visited, tin, low, base_label);
+            memset(tin, -1, auxsg->n_seq*sizeof(int));
+            memset(low, -1, auxsg->n_seq*sizeof(int));
         }
-    }
-    if (verbose){
-        int n_bridges = 0;
-        for (uint32_t i=0; i<auxsg->n_arc; i++){
-            if (auxsg->arc[i].is_bridge){
-                n_bridges++;
-                if (verbose>1){
-                    fprintf(stderr, "[debug::%s] identified bridge beween utg%.6d and utg%.6d\n", __func__, (int)(auxsg->arc[i].ul>>33)+1, (int)(auxsg->arc[i].v>>1)+1);
-                }
-            }
-        }
-        fprintf(stderr, "[M::%s] %d out of %d arcs are bridge edges.\n", __func__, n_bridges, (int)auxsg->n_arc);
     }
 
     // check arcs
     // (note: since the asg is treated as if undirected, edges in bubbles are not bridges)
+    int nb_bridge = 0;
     for (uint32_t i=0; i<auxsg->n_arc; i++){
         if (auxsg->arc[i].del){continue;}
         if (!auxsg->arc[i].is_bridge){
             continue;
         }
-        
+        nb_bridge++;
+
         v = auxsg->arc[i].ul>>32;
         w = auxsg->arc[i].v;
         if (base_label>=0 && ( auxsg->seq_vis[v>>1]!=base_label || auxsg->seq_vis[w>>1]!=base_label) ) {continue;}
@@ -4649,7 +4892,8 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
 
         // detect circles
         if (hamt_asgarc_detect_circleDFS(auxsg, v, w, 0, base_label)){  // note: v and w is ug with direction
-            if (hamt_asgarc_util_isTip(auxsg, v, 0, 0, base_label) && (hamt_asgarc_util_countSuc(auxsg, v, 0, 0, base_label)==1)){
+            if (hamt_asgarc_util_isTip(auxsg, v, 0, 0, base_label) &&
+                (hamt_asgarc_util_countSuc(auxsg, v, 0, 0, base_label)==1)){
                 // don't remove tips from circles
                 // (however, allow cutting if the tip is still connected to somewhere else)
                 if (verbose>1) {fprintf(stderr, "[debug::%s]    spared bcs handle is a tip\n", __func__);}
@@ -4657,7 +4901,7 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
             }
 
             // cut
-            hamt_ug_arc_del(sg, ug, v, w, 1);
+            hamt_ug_arc_del(sg, ug, v, w, 1);  // deletes both direction
             nb_cut++;
             if (verbose){
                 fprintf(stderr, "[debug::%s] cut: utg%.6d - utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);
@@ -4675,9 +4919,9 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
         }
         
     }
-    if (VERBOSE){
-        fprintf(stderr, "[M::%s] cut %d links.\n", __func__, nb_cut);
-    }
+
+    fprintf(stderr, "[M::%s] cut %d bridges outof %d, used %.1fs.\n", 
+            __func__, nb_cut, (nb_bridge-nb_cut)/2, Get_T()-startTime);
     free(tin);
     free(visited);
     free(low);
@@ -4747,12 +4991,13 @@ int hamt_ug_recover_ovlp_if_existed(asg_t *sg, ma_ug_t *ug, uint32_t start, uint
     //     search_span : how many reads to search if the overlap of start/end pair 
     //                     is suboptimal (e.g. containment) & couldn't directly form the arc.
     // NOTE
+    //     Core function expects the path to be: start->...-> end (not the end^1 closing)
     //     Topo context of vu will NOT be checked; caller is responsible for sanchecks.
     //     Will search more than start/end vertex - since we can't add arc if the overlap was containment etc.
-    //       if all recoverble overlaps were not ideal, do nothing.
+    //       if all recoverable overlaps were not ideal, do nothing.
     //     After recovering the arc, also trim off reads involved in containment. (reads will be DELETED)
     // RETURN
-    //     1 upon recovereing an arc (+cleanup)
+    //     1 upon recovering an arc (+cleanup)
     //     0 if no termination criteria met, but ran out of search_span
     //     -1 if we shouldn't recover stuff
     int verbose = 0;
@@ -5530,6 +5775,7 @@ void hamt_circle_cleaning(asg_t *sg, ma_ug_t *ug, int base_label)
     // hamt_asgarc_ugCovCutSCC(sg, ug, coverage_cut, sources, ruIndex);  
     hamt_ug_covCutByBridges(sg, ug, base_label);
     hamt_asgarc_ugCovCutDFSCircle(sg, ug, base_label);
+    fprintf(stderr, "[M::%s] done\n", __func__);
 }
 
 void hamt_clean_shared_seq(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label, int is_hard_drop){
@@ -6493,7 +6739,8 @@ int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label){
             ){
                 continue;
             }
-        hamt_asgarc_util_get_the_two_targets(auxsg, v1, &vtmp[0], &vtmp[1], 0, 0, base_label);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, v1, &vtmp[0], &vtmp[1], 0, 0, base_label)!=0)
+            continue;
         if (vtmp[0]!=v1 && vtmp[1]!=v1){continue;}  // v1 is not a self circle
         if (vtmp[0]==v1 and vtmp[1]==v1){  // sancheck, should not happen
             fprintf(stderr, "[E::%s] double arc at %.6d ? continue anyway\n", __func__, (int)(v1>>1));
@@ -6501,7 +6748,8 @@ int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label){
         }
         v0 = vtmp[0]==v1? vtmp[1] : vtmp[0];
 
-        hamt_asgarc_util_get_the_two_targets(auxsg, v1^1, &vtmp[0], &vtmp[1], 0, 0, base_label);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, v1^1, &vtmp[0], &vtmp[1], 0, 0, base_label)!=0)
+            continue;
         if (vtmp[0]!=(v1^1) && vtmp[1]!=(v1^1)){ // should not happen, v1 is not a normal self circle
             fprintf(stderr, "[E::%s] asym arc? %.6d\n", __func__, (int)(v1>>1));
             continue;
@@ -8317,7 +8565,7 @@ void hamt_debug_dump(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, ma_hit_t_a
 }
 
 int hamt_ug_popTangles(asg_t *sg, ma_ug_t *ug, uint32_t source, uint32_t sink, 
-                       uint32_t *buf_blacklist,  // note: maybe we don't need this. test more
+                       uint32_t *buf_blacklist,
                        int base_label, int alt_label){
     // NOTE
     //     direction is source->...<-sink
@@ -8577,7 +8825,7 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                 source = buf.a[idx_vu];
                 sink = buf.a[idx_wu]^1;
                 if (treated[source>>1] || treated[sink>>1]){
-                    if (verbose) {fprintf(stderr, "[debug::%s] skip becuase either handle was a part of some tangles treated\n", __func__);}
+                    if (verbose) {fprintf(stderr, "[debug::%s] skip because either handle was a part of some tangles treated\n", __func__);}
                     continue;
                 }
 
@@ -8591,7 +8839,7 @@ int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug,
                 if (base_label>=0 && auxsg->seq_vis[sink>>1]!=base_label) {continue;}
 
                 if (source==sink) {  // for hinted circular, it's source==(sink^1)
-                    if (verbose) fprintf(stderr, "[deubg::%s] skip becuase sink==source\n", __func__);
+                    if (verbose) fprintf(stderr, "[deubg::%s] skip because sink==source\n", __func__);
                     continue;
                 } 
                 if (hamt_ug_check_localSourceSinkPair(ug, source, sink, &max_length, &max_coverage, base_label, asm_opt.gc_tangle_max_tig)){
@@ -8670,7 +8918,8 @@ int hamt_ug_resolve_fake_haplotype_bifurcation(asg_t *sg, ma_ug_t *ug, int base_
         if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=2){
             continue;
         }
-        hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label)!=0)
+            continue;
         if (ug->u.a[wu[0]>>1].len>30000){continue;}
         if (ug->u.a[wu[1]>>1].len>30000){continue;}
         if (hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, base_label)!=1 ||
@@ -8781,7 +9030,8 @@ int hamt_ug_resolve_fake_haplotype_bifurcation_aggressive(asg_t *sg, ma_ug_t *ug
         if (hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, base_label)!=2){
             continue;
         }
-        hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label)!=0)
+            continue;
         if (ug->u.a[wu[0]>>1].len>30000){continue;}
         if (ug->u.a[wu[1]>>1].len>30000){continue;}
         if (hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, base_label)!=1 ||
@@ -8968,16 +9218,17 @@ int hamt_ug_rescue_bifurTip(asg_t *sg, ma_ug_t *ug, int base_label,
         if (ug->u.a[vu>>1].len>50000) continue;  // handle utg shall be short
 
         if (hamt_ug_check_bifurTip(ug, vu, base_label, sources, reverse_sources)>0){
-            hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label);
+            if (hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, base_label)!=0)
+                continue;
 
             // get reads at the ends of wu0 and wu1
-            if (wu[0]^1){
+            if (wu[0]&1){
                 startread = ug->u.a[wu[0]>>1].end^1;
             }else{
-                startread = ug->u.a[wu[0]>>1].start^1;
+                startread = ug->u.a[wu[0]>>1].start;
             }
-            if (wu[1]^1){
-                endread = ug->u.a[wu[1]>>1].end;
+            if (wu[1]&1){
+                endread = ug->u.a[wu[1]>>1].end^1;
             }else{
                 endread = ug->u.a[wu[1]>>1].start;
             }
@@ -9003,7 +9254,7 @@ int hamt_ug_rescue_bifurTip(asg_t *sg, ma_ug_t *ug, int base_label,
         }
     }
 
-
+    fprintf(stderr, "[M::%s] treated %d\n", __func__, cnt);
     if (cnt){
         free(sg->idx);
         sg->idx = 0;
@@ -9050,12 +9301,12 @@ int hamt_ug_drop_shorter_ovlp(asg_t *sg, ma_ug_t *ug, ma_hit_t_alloc *sources, m
     // NOTE
     //     Assume coverage has been collected.
     // FUNC
-    //     Drop the shorter ovlp at a birfucation if the length diff between the two 
+    //     Drop the shorter overlap at a bifurcation if the length diff between the two
     //       is extreme. Additionally, will consider:
     //       - coverage diff
     //       - topo: query has at least 2 non-tip targets (won't check further though)
     // RETURN
-    //     number of ovlps dropped.
+    //     number of overlaps dropped.
     int verbose = 0;
     int ret = 0;
     asg_t *auxsg = ug->g;
@@ -9216,7 +9467,8 @@ int hamt_ug_3mer_cut_with_coverage(asg_t *sg, ma_ug_t *ug, int threshold_l){
     int which_cos, which_cov;
     for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
         if (ug->u.a[vu>>1].len<=threshold_l || hamt_asgarc_util_countSuc(auxsg, vu, 0, 0, 0)!=2) continue;
-        hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, 0);
+        if (hamt_asgarc_util_get_the_two_targets(auxsg, vu, &wu[0], &wu[1], 0, 0, 0)!=0)
+            continue;
         if (ug->u.a[wu[0]>>1].len<=threshold_l || ug->u.a[wu[1]>>1].len<=threshold_l) continue;  // require both targets to be long
         // if (hamt_asgarc_util_countSuc(auxsg, wu[0], 0, 0, 0)==0 || hamt_asgarc_util_countSuc(auxsg, wu[1], 0, 0, 0)==0) continue;  // targets are not tips
         
@@ -10264,14 +10516,20 @@ void hamt_update_coverage(ma_ug_t *ug, asg_t *read_g,
     free(targets); stacku32_destroy(&ru);
 }
 
-// FUNC
-//    Given a string or aux graph, label the vertices using
-//     DFSs similar to that of (mono-)directional graph SCC finding.
-//    To test if a pair of vertices are in the same SCC,
-//     use `hamt_ug_scc_test`.
-// RET
-//    An array of scc labels (length of n_vertices*2).
-//    Store number of SCCs in the n_scc.
+
+/**
+ * @brief Given the auxilliary graph of a bidirected graph, do SCC finding 
+ *         and report the labels on the (ordinary) graph.\n 
+ *        To get SCC labels of the bidirected grpah, use `hamt_ug_scc_test`.
+ * @cite Ando, Kazutoshi, Satoru Fujishige, and Toshio Nemoto. 
+ *        "Decomposition of a bidirected graph into strongly connected components and 
+ *        its signed poset structure." 
+ *        Discrete Applied Mathematics 68.3 (1996): 237-248.
+ * @par g auxilliary graph of a bidirected graph
+ * @par n_scc if available, will store # of SCCs
+ * @return array of vertex SCC labels on the auxilliary graph, length is 
+ * n_seq*2, must not contain -1.
+*/
 int* hamt_asggraph_scc(asg_t *g, int *n_scc){
     int verbose = 0;
     int *ret = (int*)malloc(sizeof(int)*g->n_seq*2);
@@ -10395,10 +10653,15 @@ int* hamt_asggraph_scc(asg_t *g, int *n_scc){
         }
     }
 
-    *n_scc = scci;
+    if (n_scc) *n_scc = scci;
     return ret;
 }
 
+/**
+ * @brief Label checker for bidirected graph SCC.
+ * @par strict should be 1; 0 bypasses the XOR...
+ * @return 1 if yes, 0 if no
+*/
 int hamt_ug_scc_test(int *labels, uint32_t v, uint32_t w, int strict){
     // FUNC
     //    Given SCC info from the aux graph of a bidirected graph, 
@@ -10440,22 +10703,47 @@ int hamt_ug_scc_count(ma_ug_t *ug, int *labels, uint32_t vu){
     return ret;
 }
 
-void hamt_utg_scc_testing(ma_ug_t *ug, int *labels){
-    int n_scc;
-    // fprintf(stderr, "[debug::%s] labels:\n", __func__);
-    // for (uint32_t i=0; i<ug->g->n_seq*2; i++){
-    //     fprintf(stderr, "[debug::%s]  utg%.6d, dir %d, label=%d\n", __func__, (int)(i>>1)+1, (int)(i&1), labels[i]);
-    // }
-
-    for (uint32_t vu=0; vu<ug->g->n_seq*2; vu++){
-        if (vu&1) continue;
-        for (uint32_t wu=vu; wu<ug->g->n_seq*2; wu++){
-            if (wu&1) continue;
-            if (wu==vu) continue;
-            if (hamt_ug_scc_test(labels, vu>>1, wu>>1, 0))
-                fprintf(stderr, "SCC\ttig%.6d\ttig%.6d\n", (int)(vu>>1)+1, (int)(wu>>1)+1);
+/**
+ * @brief Given tig graph and SCC labels collected from aux graph, 
+ * print tig and labels of the bidirected graph.
+ * (Use hamt_utg_scc_debugprintext if you don't already have labels.)
+ * @par ug unitig/contig graph
+ * @par labels collected by `hamt_asggraph_scc`. Array length is 
+ * n_seq*2.
+*/
+void hamt_utg_scc_debugprint(ma_ug_t *ug, int *labels){ 
+    asg_t *auxsg = ug->g;
+    int i_scc = 0;
+    uint8_t *color = (uint8_t*)calloc(auxsg->n_seq, 1);
+    for (uint32_t vu=0; vu<auxsg->n_seq*2; vu++){
+        if (color[vu>>1]) continue;
+        fprintf(stderr, "[debug::%s]\tutg%.6d\t%d\n", __func__, 
+                (int)(vu>>1)+1, i_scc);
+        for (uint32_t wu=vu+2; wu<auxsg->n_seq*2; wu++){
+            if (color[wu>>1]) continue;
+            if ((labels[vu]==labels[wu]) ^ (labels[vu]==labels[wu^1])){
+                fprintf(stderr, "[debug::%s]\tutg%.6d\t%d\n", __func__, 
+                        (int)(wu>>1)+1, i_scc);
+                color[wu>>1] = 1;
+            }
         }
+        color[vu>>1] = 1;
+        i_scc++;
     }
+}
+
+/**
+ * @brief For sprinkling into the main workflow. Give the tig graph, 
+ * collect SCC labels and write to stderr. cut and awk friendly.
+ * @par ug unitig/contig grpah.
+*/
+void hamt_utg_scc_debugprintext(ma_ug_t *ug){ 
+    int n_scc0;
+    asg_t *auxsg = ug->g;
+    int *labels = hamt_asggraph_scc(auxsg, &n_scc0);
+    fprintf(stderr, "%d\n", n_scc0);
+    hamt_utg_scc_debugprint(ug, labels);
+    free(labels);
 }
 
 #if 0
@@ -10566,7 +10854,7 @@ void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
     asg_t *auxsg = ug->g;
     int n_scc0;
     int *labels = hamt_asggraph_scc(auxsg, &n_scc0);
-    if (verbose) hamt_utg_scc_testing(ug, labels);
+    if (verbose) hamt_utg_scc_debugprint(ug, labels);
 
     exit(0);
 
@@ -10721,6 +11009,60 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
     return seq;
 }
 
+typedef struct {
+    // input
+    ma_ug_t *ug; 
+    stacku32_t *paths;
+    int *offsets;  
+    // output
+    char **seqs;
+    int *seqs_ll;
+}hamt_getseq_t; 
+
+static void hamt_ug_get_path_sequence_parallel_callback(void *data, long cid, int tid){
+    hamt_getseq_t *d = (hamt_getseq_t*)data;
+    int offset = d->offsets[cid];
+    stacku32_t *s = d->paths;
+    d->seqs[cid] = hamt_ug_get_path_sequence(d->ug, s->a+offset+1, s->a[offset], 1, &d->seqs_ll[cid]);
+}
+
+/**
+ * @brief Paralleled hamt_ug_get_path_sequence. 
+ * @par seqs_ll_p Output, seq lengths. Address of a pointer - will point it 
+ *      to the newly allocated output.
+ * @par seqs_p Output, seqs. Similar.
+ * @return An array of strings.
+*/
+void hamt_ug_get_path_sequence_parallel(ma_ug_t *ug, stacku32_t *s, 
+                                          int n_paths, int n_threads, 
+                                          int **seqs_ll_p, char ***seqs_p){
+    // allocate
+    *seqs_ll_p = (int*)malloc(sizeof(int)*n_paths);
+    *seqs_p = (char**)malloc(sizeof(char*)*n_paths);
+
+    // collect
+    hamt_getseq_t *d = (hamt_getseq_t*)calloc(1, sizeof(hamt_getseq_t));
+    d->ug = ug;
+    d->paths = s;
+    d->offsets = (int*)calloc(n_paths, sizeof(int));
+    d->seqs = *seqs_p;
+    d->seqs_ll = *seqs_ll_p;
+
+    int offset=0, idx=0, l=0;
+    int seq_l;   
+    while (offset<s->n){
+        d->offsets[idx] = offset;
+        l = s->a[offset];
+        offset += l+1;
+        idx++;
+    }
+
+    kt_for(n_threads, hamt_ug_get_path_sequence_parallel_callback, d, n_paths);
+
+    // cleanup
+    free(d->offsets);
+    free(d);
+}
 
 // opportunistic elementary circuits: 
 //   - seed from long contigs (TODO)
@@ -11120,24 +11462,15 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
 
     // collect sequences
     time = Get_T();
-    int *seqs_ll = (int*)malloc(sizeof(int)*n_paths);  // sequences' lengths
-    char **seqs = (char**)malloc(sizeof(char*)*n_paths);
-    {
-        int offset=0, idx=0, l=0;
-        int seq_l;   
-        while (offset<s->n){
-            l = s->a[offset];
-            seqs[idx] = hamt_ug_get_path_sequence(ug, s->a+offset+1, l, 1, &seqs_ll[idx]);
-            offset += l+1;
-            idx++;
-        }
-    }
-    if (verbose) fprintf(stderr, "[T::%s] got the sequences, used %.1fs\n", __func__, Get_T()-time);
+    int *seqs_ll;
+    char **seqs;
+    hamt_ug_get_path_sequence_parallel(ug, s, n_paths, n_thread, &seqs_ll, &seqs);
+    fprintf(stderr, "[T::%s] got the sequences, used %.1fs\n", __func__, Get_T()-time);
 
     // sketch and pariwise
     time = Get_T();
     double **dists = hamt_minhash_mashdist(seqs, seqs_ll, n_paths, kmersize, n_hash, n_thread);
-    fprintf(stderr, "[M::%s] collected mash distances for %d seqs, used %.1fs\n", 
+    fprintf(stderr, "[T::%s] collected mash distances for %d seqs, used %.1fs\n", 
                     __func__, n_paths, Get_T()-time); fflush(stderr);
     if (verbose) {
         for (int i=0; i<n_paths; i++){
@@ -11316,28 +11649,35 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
     
     int of=0, l=0, ofidx=0;
 
-    // dump all found circuits, no deduplication
-    if (!is_print_found){
-        sprintf(fname, "%s.rescue.all.fa", asm_opt.output_file_name);
-        fp = fopen(fname, "w"); assert(fp);
-        while (of<report_stack.n){
-            l = report_stack.a[of];
-            hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
-            of = of+1+l;
-            ofidx++;
-        }
-        fclose(fp);
-    }
+    // // dump all found circuits, no deduplication
+    // (commented out because not useful)
+    // time = Get_T();
+    // if (!is_print_found){
+    //     sprintf(fname, "%s.rescue.all.fa", asm_opt.output_file_name);
+    //     fp = fopen(fname, "w"); assert(fp);
+    //     while (of<report_stack.n){
+    //         l = report_stack.a[of];
+    //         hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
+    //         of = of+1+l;
+    //         ofidx++;
+    //     }
+    //     fclose(fp);
+    // }
+    // fprintf(stderr, "[M::%s] wrote all rescued circles, used %.2fs\n", __func__, Get_T()-time);
 
     // deduplication and dump
+    time = Get_T();
     // hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(&report_stack, ug);
     hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(&report_stack, ug, 21, 1000, n_thread);
+    fprintf(stderr, "[M::%s] deduplicated rescued circles, used %.2fs\n", __func__, Get_T()-time);
+
+    time = Get_T();
     of=0, l=0, ofidx=0;
     if (!is_print_found){
         sprintf(fname, "%s.rescue.fa", asm_opt.output_file_name);
         fp = fopen(fname, "w"); assert(fp);
     }
-    while (of<report_stack.n){
+    while (of<report_stack.n){  // TODO: parallel if slow
         l = report_stack.a[of];
         if (is_print_found){
             fprintf(stderr, "[debug::%s] ===circ%d:\n", __func__, ofidx+1);
@@ -11351,6 +11691,7 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
         of = of+1+l;
         ofidx++;
     }
+    fprintf(stderr, "[M::%s] wrote deduplicated rescued circles, used %.2fs\n", __func__, Get_T()-time);
 
     if (fp) fclose(fp);
     free(fname);
@@ -11405,4 +11746,606 @@ int hamt_ug_delete_unconnected_single_read_contigs(asg_t *sg, ma_ug_t *ug){
         } 
     }
     return ret;
+}
+
+
+
+
+typedef struct {
+    stacku32_t *entries;  // persumed entry vertices, to be tested; do NOT have the direction bit
+    stacku32_t *exits;  // (similar)
+    stacku32_t *paths;  // length=n_threads, an array of stacks to store paths through tangles
+    hamt_ba_t *is_handle; // a bit array, 0 not entry/exit, 1 yes
+    ma_ug_t *ug;  // will modify
+    asg_t *sg; 
+    int n_threads, base_label, gc_tangle_max_tig;
+}hamt_markt_t;
+
+typedef struct{
+    asg_t *sg;  // string graph
+    ma_ug_t *ug;
+    int n_threads;
+    int bufsize;   // collect how many pairs before forwarding to the next step
+    int base_label, gc_tangle_max_tig;
+    uint32_t starter, offset;
+    uint32_t treated;
+    hamt_ba_t *is_handle;
+    int debug_step;
+}hamt_marknpop_pl_t;
+
+typedef struct{
+    hamt_marknpop_pl_t *p;
+    hamt_markt_t *dd;
+}hamt_marknpop_st_t;
+
+
+/**
+ * @brief Record a walk through a known SESE region, will not modify the graph.
+ *        Call the treatwalk method to modify graph.
+ *        It is a DFS that greedily pick ndoes with highest coverage at each
+ *        step. When seeing a loop, the search will step back, and while 
+ *        retreating from a node, we mark all child nodes of this node 
+ *        as unvisited. 
+ * @note Will not try to early terminate when seeing handle. Let the caller
+ *       deal with nesting.
+ * @par source forward direction
+ * @par sink closing backward, i.e. source->...<-sink.
+ * @par pathlength Output, will store lenght of path (counting source and sink)
+ * @return 0 if found and recorded path, 1 otherwise.
+*/
+int hamt_ug_resolveTangles_threaded_callback_markwalk(asg_t *sg, ma_ug_t *ug, 
+                                                uint32_t source, uint32_t sink, 
+                                                stacku32_t *pathholder,
+                                                int *pathlength,
+                                                int base_label, int alt_label){
+    int verbose = 1;
+    uint32_t vu, nv, wu, uu, nu;
+    asg_arc_t *av;
+    asg_arc_t *au;
+    asg_t *auxsg = ug->g;
+    int ret = 0;
+    *pathlength = 0;
+    char debug_name[50];
+    sprintf(debug_name, "[%.6d(%c)-%.6d(%c)]", (int)(source>>1)+1, "+-"[source&1],
+                        (int)(sink>>1)+1, "+-"[sink&1]);
+
+    // special case, early termination: self circle (shortcut or 1 unitig circle)
+    nv = asg_arc_n(auxsg, source);
+    av = asg_arc_a(auxsg, source);
+    { int cnt=0, self=0; 
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            if (av[i].v==source){
+                self = 1;
+            }
+            cnt++;
+        }
+        if (self==1 && cnt==1){
+            if (verbose) {fprintf(stderr, "[debug::%s] %s special case failure\n", __func__, debug_name);}
+            return 1;
+        }
+    }
+
+    hamt_ba_t *color = hamt_ba_t_init(auxsg->n_seq);
+
+    // a buffer for greedily choosing the path with most coverage
+    stacku64_t for_sorting;
+    stacku64_init(&for_sorting);
+    uint64_t packed_value;
+    hamt_ba_t *visited = hamt_ba_t_init(auxsg->n_seq*2);
+
+    stacku32_t s;
+    stacku32_init(&s);
+    int is_exhausted, is_loop, san=0;
+    int is_hinted_circular = ((sink>>1) == (source>>1));
+    int is_reached_sink = 0;
+
+    stacku32_push(&s, source);
+    hamt_ba_t_write(visited, 1, source);
+    hamt_ba_t_write(visited, 1, source^1);
+    hamt_ba_t_write(visited, 1, sink);
+    hamt_ba_t_write(visited, 1, sink^1);
+
+    while (stacku32_pop(&s, &vu)){
+        if (verbose) {fprintf(stderr, "[debug::%s] %s at utg%.6d dir %d\n", 
+                                __func__, debug_name, (int)(vu>>1)+1, (int)(vu&1));}
+        if (vu==(sink^1)){
+            if (is_hinted_circular && (s.n==0)){  // special case: 1st pop of a hinted-circular subgraph, proceed to check child nodes
+                ;
+            }else{  // regular case: found end, end the walk
+                stacku32_push(&s, vu);  // put back
+                if (verbose) {fprintf(stderr, "[debug::%s] %s reached sink\n", __func__, debug_name);}
+                break;
+            }
+        }
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        is_exhausted = 1;
+        is_loop = 0;
+
+        // try to greedily get the path with most coverage
+        // so here we first sort the available target vertices
+        //   before proceeding to topo checks
+        //   (the sorting)
+        stacku64_reset(&for_sorting);
+        for (int i=0; i<nv; i++){
+            if (av[i].del) {continue;}
+            if (auxsg->seq_vis[av[i].v>>1]!=base_label){continue;}
+            packed_value = ((uint64_t)ug->utg_coverage[av[i].v>>1])<<32 | (uint64_t)av[i].v;
+            stacku64_push(&for_sorting, packed_value);
+            if (verbose){
+                fprintf(stderr, "[debug::%s] %s (add to sorting buffer) vertex %.6d , cov %.d\n", 
+                    __func__, debug_name,
+                    (int)(av[i].v>>1)+1, (int)ug->utg_coverage[av[i].v>>1]);
+            }
+        }
+        radix_sort_ovhamt64(for_sorting.a, for_sorting.a+for_sorting.n);
+        stacku64_invert_buffer(&for_sorting);
+
+        // topology check
+        for (int i=0; i<for_sorting.n; i++){  // greedily best
+            wu = (uint32_t)for_sorting.a[i];
+            if (hamt_ba_t_get(visited, wu)) {
+                if (wu==(sink^1)){
+                    if (verbose) {fprintf(stderr, "[debug::%s] %s reached sink(a)\n", __func__, debug_name);}
+                    stacku32_push(&s, vu);  // put back current round's handle
+                    stacku32_push(&s, wu);
+                    is_reached_sink = 1;
+                    break;
+                }
+                if (verbose) fprintf(stderr, "[debug::%s] %s   (utg%.6d already visited)\n", __func__, debug_name, (int)(wu>>1)+1);
+                continue;
+            }
+            if (hamt_ba_t_get(visited, wu^1)) {
+                if (wu!=(sink^1)){
+                    is_loop = 1;
+                }else{
+                    if (verbose) {fprintf(stderr, "[debug::%s] %s reached sink(b)\n", __func__, debug_name);}
+                    is_reached_sink = 1;
+                    stacku32_push(&s, vu);  // put back current round's handle
+                    stacku32_push(&s, wu);
+                    break;
+                }
+            }
+            if (verbose) fprintf(stderr, "[debug::%s] %s    not exhausted: %.6d dir %d\n", __func__, debug_name,
+                                (int)(wu>>1)+1, (int)(wu&1));
+            is_exhausted = 0;
+            break;
+        }
+
+        if (is_reached_sink){break;}
+        if (is_exhausted && is_loop){  // remove current node
+            if (verbose) {fprintf(stderr, "[debug::%s] %s    found looping(a) at utg%.6d, remove %.6d\n", 
+                                    __func__, debug_name, (int)(wu>>1)+1, (int)(vu>>1)+1);}
+                continue;
+        }
+        if (!is_exhausted){  // step
+            if (hamt_ba_t_get(visited, wu^1)) {  // check if it's a loop
+                if (wu!=(sink^1)){
+                    if (verbose) {fprintf(stderr, "[debug::%s] %s    found looping(b) at utg%.6d, remove %.6d\n", 
+                                    __func__, debug_name, (int)(wu>>1)+1, (int)(vu>>1)+1);}
+                    continue;
+                }else{
+                    if (verbose) {fprintf(stderr, "[debug::%s] %s reached sink(c)\n", __func__, debug_name);}
+                    is_reached_sink = 1;
+                    stacku32_push(&s, vu);  // put back current round's handle
+                    stacku32_push(&s, wu);
+                    break;
+                }
+            }else{
+                if (verbose) {fprintf(stderr, "[debug::%s] %s     push %.6d dir %d\n", 
+                                        __func__, debug_name, (int)(wu>>1)+1, (int)(wu&1));}
+                stacku32_push(&s, vu);  // put back
+                stacku32_push(&s, wu);
+                hamt_ba_t_write(visited, 1, wu);
+            }
+        }else{  // remove current node
+            // mark all children as unvisited
+            for (int i=0; i<nv; i++){
+                if (av[i].del) {continue;}
+                if (auxsg->seq_vis[av[i].v>>1]!=base_label){continue;}
+                hamt_ba_t_write(visited, 0, av[i].v);
+                if (verbose) {fprintf(stderr, "[debug::%s] %s       removed child %.6d\n", 
+                                               __func__, debug_name, (int)(av[i].v>>1)+1);}
+            }
+            if (verbose) {fprintf(stderr, "[debug::%s] %s     removed %.6d\n", __func__, debug_name, (int)(vu>>1)+1);}
+            ;
+        }
+        san++;
+        if (san>1000){
+            fprintf(stderr, "[E::%s] too many steps\n", __func__);
+            ret = 1;
+            goto finish;
+        }
+    }
+
+
+    if (s.n==0){
+        if (verbose) {fprintf(stderr, "[E::%s] %s can't find a path\n", __func__, debug_name);}
+        ret = 1;
+        goto finish;
+    }else{
+        if (verbose){
+            if (verbose) {fprintf(stderr, "[debug::%s] %s the path (%d nodes):\n", __func__, debug_name, s.n);}
+            for (int i=0; i<s.n; i++){
+                fprintf(stderr, " %s       utg%.6d\n", debug_name, (int)(s.a[i]>>1)+1);
+            }
+        }
+        for (int i=0; i<s.n; i++){
+            stacku32_push(pathholder, s.a[i]);
+        }
+        stacku32_push(pathholder, UINT32_MAX);  // marks end of path
+        *pathlength = s.n;   
+    }
+
+finish:
+    stacku32_destroy(&s);
+    hamt_ba_t_destroy(visited);
+    stacku64_destroy(&for_sorting);
+    hamt_ba_t_destroy(color);
+    return ret;
+}
+
+
+/**
+ * @brief Given a walk through a SESE region, drop vertices and edges beside
+ *        those in the walk.
+ * @par s (Will be consumed.) A stack storing the path to retain; first and last
+ *        is the entry and the exit node. 
+*/
+void hamt_ug_resolveTangles_threaded_callback_treatwalk(asg_t *sg, ma_ug_t *ug, 
+                                                uint32_t source, uint32_t sink, 
+                                                stacku32_t *s,
+                                                int base_label, int alt_label){
+    uint32_t vu, wu, nv, uu, nu;
+    asg_arc_t *av, *au;
+    asg_t *auxsg = ug->g;
+
+    stacku32_pop(s, &vu); 
+
+    // recover the stored path
+    while (stacku32_pop(s, &wu)){
+        if (wu!=source && wu!=sink){  // update blacklist here
+            ;
+        }
+        
+        hamt_ug_arc_del_selfcircle(sg, ug, wu, base_label);
+        
+        hamt_ug_arc_del(sg, ug, wu, vu, 0);
+        nv = asg_arc_n(auxsg, wu);
+        av = asg_arc_a(auxsg, wu);
+        for (uint32_t i=0; i<nv; i++){
+            if (av[i].v!=vu) {
+                hamt_ug_arc_del(sg, ug, wu, av[i].v, 1);
+                // hamt_ug_utg_softdel(sg, ug, av[i].v, alt_label);
+            }else{
+                uu = vu^1;
+                nu = asg_arc_n(auxsg, uu);
+                au = asg_arc_a(auxsg, uu);
+                for (uint32_t j=0; j<nu; j++){
+                    if (au[j].v!=(wu^1)){
+                        hamt_ug_arc_del(sg, ug, uu, au[j].v, 1);
+                        // hamt_ug_utg_softdel(sg, ug, av[i].v, alt_label);
+                    }
+                }
+            }
+        }
+        vu = wu;
+    }
+
+}
+
+/**
+ * @brief Callback for kt_for. Given a pair of handles, 1) determine if 
+ * they form a single-entry single-exist region, 2) record the path (will not
+ * modify).
+ * @par data struct
+ * @par i # of entry in the input
+ * @par tid # of thread
+*/
+static void hamt_ug_resolveTangles_threaded_callback_step1(void *data, long i, int tid){
+    int verbose = 1;
+    hamt_markt_t *dd = (hamt_markt_t*) data;
+    ma_ug_t *ug = dd->ug;
+    asg_t *auxsg = dd->ug->g;
+
+    uint32_t vu;
+    uint32_t wu;
+
+    uint64_t pair;
+    int max_length, max_coverage, found;
+    uint32_t source, sink;
+
+
+
+    for (uint32_t dir =0; dir<4; dir++){  // try all direction combinations
+        // special case: when entry==exit, 
+        //               do not allow self-loop, and check only one direction.
+        if (dd->entries->a[i]==dd->exits->a[i]){
+            if (dir!=1) continue;  // source->...<sink
+        }
+
+        // if (dd->entries->a[i]+1==993 || dd->entries->a[i]==95) verbose = 2;  // 990
+
+        vu = (dd->entries->a[i] <<1) | (dir&1);
+        wu = (dd->exits->a[i] <<1) | (dir>>1);
+
+        found = 0;
+        if (verbose>1){
+            fprintf(stderr, "[debug::%s] vu %.6d (%d) wu %.6d (%d) | i=%d, tid=%d\n", __func__, 
+                    (int)(vu>>1)+1, (int)(vu&1), (int)(wu>>1)+1, (int)(wu&1), 
+                    (int)i, (int)tid);
+        }
+
+        // determine if it's a entry-exit pair
+        max_length = 0;
+        max_coverage = 0;
+        if (hamt_ug_check_localSourceSinkPair(ug, vu, wu, &max_length, &max_coverage, 
+                        dd->base_label, dd->gc_tangle_max_tig)){
+            source =  vu;
+            sink =  wu;
+            found = 1;
+        }
+
+        // yes, so find a path through the region and save it.
+        if (found){  
+            int pathlen;
+            // note/TODO/bug: this is an arbitrary waterproof, trying to 
+            // prevent weird cases (since we searched both directions 
+            // during traversal to tolerate inversions/loops)
+            int handlemaxlen = ug->u.a[source>>1].len > ug->u.a[sink>>1].len? ug->u.a[source>>1].len : ug->u.a[sink>>1].len;
+            if (((ug->u.a[source>>1].len<50000) && (ug->u.a[sink>>1].len<50000)) ||
+                ( (max_length>500000 && max_length>handlemaxlen)) ||
+                (max_coverage > (ug->utg_coverage[source>>1]*2)) ||
+                (max_coverage > (ug->utg_coverage[sink>>1]  *2))){
+            // if (0){  // (for debug: allow any length and coverage)
+                    if (verbose){
+                        fprintf(stderr, "[debug::%s] pair %.6d (%d) and %.6d (%d), but failed length or cov. Max l %d, max cov %d (handles' are %d and %d)\n", 
+                                            __func__, 
+                                            (int)(source>>1)+1, (int)(source&1), (int)(sink>>1)+1, (int)(sink&1),
+                                            max_length, max_coverage, (int)(ug->utg_coverage[source>>1]), (int)ug->utg_coverage[sink>>1]);
+                    }
+            }else{  // success
+                if (verbose){
+                    fprintf(stderr, "[debug::%s] found pair %.6d (%d) and %.6d (%d)\n", 
+                                            __func__, (int)(source>>1)+1, (int)(source&1), (int)(sink>>1)+1, (int)(sink&1)
+                    );
+                    }
+                // find a path and store it in thread-specific buffers, separated by 0xffffffff
+                hamt_ug_resolveTangles_threaded_callback_markwalk(dd->sg, ug, 
+                            source, sink, &dd->paths[tid], &pathlen, 0, 1);
+                if (pathlen>0){
+                    hamt_ba_t_write(dd->is_handle, 1, source);
+                    hamt_ba_t_write(dd->is_handle, 1, sink);
+                }
+                // if (verbose){
+                //     fprintf(stderr, "[debug::%s] tid=%d, path buffer length now %d\n", 
+                //             __func__, tid, dd->paths[tid].n);
+                // }
+                
+            }
+        }
+
+    }
+}
+
+
+/**
+ * @brief Callback for kt_pipeline; multithread tangle marking and popping.
+ * @note The pipeline is mainly for reducing peak 
+ *       memory usage which is quadratic to the number of entry-exit pairs. 
+ * @note Popping when only given the entry-exit pair is not fast enough on 
+ * single thread, need to parallel it along with the marking (which is 
+ * O(|V|**2) for each disconnected subgraph).
+ 
+*/
+static void *hamt_ug_resolveTangles_threaded_callback(void *data, 
+                                                        int step, void *in){
+    hamt_marknpop_pl_t *p = (hamt_marknpop_pl_t*)data;
+    double startTime = Get_T();
+    int verbose = 1;
+    if (step==0){  // mark pairs, also record the path to retain
+        int ret;
+        // init step data
+        hamt_marknpop_st_t *s = (hamt_marknpop_st_t*)calloc(1, sizeof(*s));
+        s->p = p;
+        s->dd = (hamt_markt_t*) calloc(1, sizeof(hamt_markt_t));
+        s->dd->sg = p->sg;
+        s->dd->ug = p->ug;
+        s->dd->n_threads = p->n_threads;
+        s->dd->base_label = p->base_label;
+        s->dd->gc_tangle_max_tig = p->gc_tangle_max_tig;
+        s->dd->is_handle = p->is_handle;
+        s->dd->paths = (stacku32_t*)calloc(p->n_threads, sizeof(stacku32_t));
+        for (int i=0; i<p->n_threads; i++){
+            stacku32_init(&s->dd->paths[i]);
+        }
+        s->dd->entries = (stacku32_t*)calloc(1, sizeof(stacku32_t));
+        s->dd->exits = (stacku32_t*)calloc(1, sizeof(stacku32_t));
+        stacku32_init(s->dd->entries);
+        stacku32_init(s->dd->exits);
+
+        // fill in handles to be tested
+        {
+            uint32_t entry;
+            uint32_t exit = p->starter + p->offset;
+            for (entry=p->starter; entry<p->ug->g->n_seq*2; entry+=2, p->starter+=2){
+                while (exit<p->ug->g->n_seq*2){
+                    if (p->ug->u.a[entry>>1].subg_label==p->ug->u.a[exit>>1].subg_label){  // &&
+                        stacku32_push(s->dd->entries, entry>>1);
+                        stacku32_push(s->dd->exits, exit>>1);
+                        // if (p->debug_step==1) fprintf(stderr, "GO push %.6d %.6d\n", (int)(entry>>1)+1, (int)(exit>>1)+1);
+                    }else{
+                        ;
+                        // if (p->debug_step==0) fprintf(stderr, "WUT skip push %.6d %.6d | entry label %d, exit label %d, isdtip %d %d\n", 
+                        //     (int)(entry>>1)+1, (int)(exit>>1)+1,
+                        //     (int)p->ug->u.a[entry>>1].subg_label, (int)p->ug->u.a[exit>>1].subg_label,
+                        //     hamt_asgarc_util_isDanglingTip(p->ug->g, entry, 0, 0, p->base_label),
+                        //     hamt_asgarc_util_isDanglingTip(p->ug->g, exit, 0, 0, p->base_label)
+                        //     );
+                    }
+                    exit+=2;
+                    p->offset+=2;
+                    if (s->dd->entries->n==p->bufsize) break;
+                }
+                if (s->dd->entries->n==p->bufsize) break;
+                exit = entry+2;
+                p->offset = 0;
+            }
+            fprintf(stderr, "[debug::%s] step0, dd length %d, new entry starts at %.6d , exit at %.6d\n", 
+                __func__, s->dd->entries->n,  (int)(entry>>1)+1, (int)(exit>>1)+1);
+        }
+        return s;
+    }else if (step==1){
+        hamt_marknpop_st_t *s = (hamt_marknpop_st_t*) in;
+        hamt_marknpop_pl_t *p = s->p;
+        if (s->dd->entries->n>0){  // find SESE and figure out path
+            kt_for(p->n_threads-2<1? 1:p->n_threads-2, hamt_ug_resolveTangles_threaded_callback_step1,
+                        s->dd, s->dd->entries->n);
+            return s;
+        }else{  // end of stream
+            stacku32_destroy(s->dd->entries);
+            stacku32_destroy(s->dd->exits);
+            for (int i=0 ;i<p->n_threads; i++){
+                stacku32_destroy(&s->dd->paths[i]);
+            }
+            free(s->dd->paths);
+            free(s->dd);
+            free(s);
+        }
+
+    }else if (step==2){  // flip 
+        hamt_marknpop_st_t *s = (hamt_marknpop_st_t*) in;
+        hamt_marknpop_pl_t *p = s->p;
+        
+        // SESE regions can only contain or exclude
+        //  each other, but they never partially overlap. 
+        // Here, do not treat SESE that contains any other SESE.
+        stacku32_t tmp;
+        stacku32_init(&tmp);
+        stacku32_t *stack;
+        stacku32_t sancheck_contain;
+        stacku32_init(&sancheck_contain);
+        for (int tid=0; tid<p->n_threads; tid++){
+            int has_contain = 0;
+            stack = &s->dd->paths[tid];
+            for (int i=0; i<stack->n; i++){
+                if (stack->a[i]==UINT32_MAX){
+                    if (hamt_ba_t_get(s->dd->is_handle, stack->a[i-1])){
+                        has_contain-=1;
+                    }
+                    if (has_contain==0 && tmp.n>0){
+                        if (verbose){
+                            fprintf(stderr, "[debug::%s] treated source %.6d (%d) sink %.6d (%d), size=%d, $has_contain=%d\n", 
+                                    __func__, (int)(tmp.a[0]>>1)+1, (int)(tmp.a[0]&1),
+                                    (int)(tmp.a[tmp.n-1]>>1)+1, (int)(tmp.a[tmp.n-1]&1),
+                                    tmp.n,
+                                    has_contain
+                                    );
+                            for (int tmpi=0; tmpi<tmp.n; tmpi++){
+                                fprintf(stderr, "[debug::%s]\t+\t%.6d\n", __func__, 
+                                            (int)(tmp.a[tmpi]>>1)+1);
+                            }
+                        }
+                        // treate
+                        hamt_ug_resolveTangles_threaded_callback_treatwalk(
+                            p->sg, p->ug, 
+                            tmp.a[0], tmp.a[tmp.n-1], &tmp, 
+                            p->base_label, p->base_label^1);
+                        p->treated++;
+                        
+                    }else{
+                        if (verbose){
+                            fprintf(stderr, "[debug::%s] ignore source %.6d (%d) sink %.6d (%d); size=%d, $has_contain=%d\n", 
+                                    __func__, (int)(tmp.a[0]>>1)+1, (int)(tmp.a[0]&1),
+                                    (int)(tmp.a[tmp.n-1]>>1)+1, (int)(tmp.a[tmp.n-1]&1),
+                                    tmp.n, 
+                                    has_contain
+                                    );
+                            for (int tmpi=0; tmpi<sancheck_contain.n; tmpi++){
+                                fprintf(stderr, "[debug::%s]\tm\t%.6d\n", __func__, 
+                                            (int)(sancheck_contain.a[tmpi]>>1)+1);
+                            }
+                        }
+                    }
+                    has_contain = 0;
+                    stacku32_reset(&tmp);
+                    stacku32_reset(&sancheck_contain);
+                }else{
+                    if (hamt_ba_t_get(s->dd->is_handle, stack->a[i]) && 
+                        tmp.n!=0){
+                        has_contain+=1;
+                        stacku32_push(&sancheck_contain, stack->a[i]);
+                    }
+                    stacku32_push(&tmp, stack->a[i]);
+                }
+            }
+        }
+
+        stacku32_destroy(&sancheck_contain);
+        stacku32_destroy(s->dd->entries);
+        stacku32_destroy(s->dd->exits);
+        for (int i=0 ;i<p->n_threads; i++){
+            stacku32_destroy(&s->dd->paths[i]);
+        }
+        free(s->dd->paths);
+        free(s->dd);
+        free(s);
+
+    }else{
+        fprintf(stderr, "[E::%s] does not have such step, check caller code.\n", __func__);
+        exit(1);
+    }
+    return 0;
+}
+
+
+
+/**
+ * @brief Multithreaded tangle popping.
+ * @note Currently O(n**2) for marking; reason is that SESE provides O(|V|)
+ * but it requires ordinary SCC, which on the aux graph does not tolerate 
+ * inversions on the bidirected graph. In practice, if there is a huge tangle
+ * in the assembly graph, SCC regions are usually quite limited. 
+ * @par sg string graph
+ * @par ug unitig/contig graph
+ * @par n_threads # of threads
+ * @par base_label 0 to work with primary graph
+ * @return None; will print stats to stderr.
+*/
+void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step){
+    asg_t *auxsg = ug->g;
+    double startTime = Get_T();
+
+    // prepare input
+    int max_label = hamt_ug_util_BFS_markSubgraph(ug, base_label);
+    hamt_marknpop_pl_t *p = (hamt_marknpop_pl_t*)calloc(1, sizeof(hamt_marknpop_pl_t));
+    p->sg = sg;
+    p->ug = ug;
+    p->n_threads = n_threads;
+    p->bufsize = n_threads*4096;
+    p->base_label = base_label;
+    p->gc_tangle_max_tig = asm_opt.gc_tangle_max_tig;
+    p->is_handle = hamt_ba_t_init(auxsg->n_seq*2);
+    p->debug_step = debug_step;
+
+    // mark and pop
+    kt_pipeline(3, hamt_ug_resolveTangles_threaded_callback, 
+                p, 3);
+
+    // update graph
+    if (p->treated>0){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+        hamt_ug_cleanup_arc_by_labels(sg, ug);
+    }
+
+
+    // final
+    fprintf(stderr, "[M::%s]   cleaning used %.1fs\n", __func__, Get_T()-startTime);
+    fprintf(stderr, "[M::%s] treated %d spots\n", __func__, p->treated);
+
+    // clean up
+    hamt_ba_t_destroy(p->is_handle);
+    free(p);
 }

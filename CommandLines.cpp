@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <sys/time.h>
+#include <sys/resource.h>
 #include "CommandLines.h"
 #include "ketopt.h"
 #include "gitcommit.h"  // if gone, use stamp
@@ -47,8 +48,15 @@ static ko_longopt_t long_options[] = {
 
     { "gc-sb-max", ko_no_argument, 418},  // graph cleaning, max unitig length in superbubbles
     { "force-rs", ko_no_argument, 419},  // aka force-preovec, better named
-    { "probe-gfa", ko_no_argument, 420},
+    { "probe-gfa", ko_optional_argument, 420},  // compile-time probe of debug gfa, can pass prefix. MUST use = (gnu getopt behavior)
     { "use-ha-bin", ko_no_argument, 421}, // use hifiasm bin files - will ignore hamt-specific files and use placeholders.
+    { "noch", ko_no_argument, 422},  // disable contained reads sparing heuristics
+    { "write-binning", ko_no_argument, 423 },  // writes binning fasta files, in addition to the tsv
+
+    { "tsne-perp", ko_required_argument, 424 },  // perplexity of tsne used in binning
+    { "tsne-seed", ko_required_argument, 425 },  // 
+    { "tsne-neighdist", ko_required_argument, 426 },  // 
+    { "no-binning", ko_no_argument, 427 },
     // end of hamt
 
     { "lowQ",          ko_required_argument, 312 },
@@ -61,6 +69,11 @@ double Get_T(void)
   struct timeval t;
   gettimeofday(&t, NULL);
   return t.tv_sec+t.tv_usec/1000000.0;
+}
+double Get_U(void){
+    struct rusage s;
+    getrusage(RUSAGE_SELF, &s);
+    return (double)s.ru_maxrss/1048576.0;  // GB
 }
 
 void Print_H(hifiasm_opt_t* asm_opt)
@@ -76,7 +89,7 @@ void Print_H(hifiasm_opt_t* asm_opt)
     fprintf(stderr, "    --version   show version number\n");
     fprintf(stderr, "  Read selection:\n");
     // fprintf(stderr, "    -S          enable read selection.\n");
-    fprintf(stderr, "    --force-preovec\n");
+    fprintf(stderr, "    --force-rs\n");
     fprintf(stderr, "                enable and force read selection.\n");
     fprintf(stderr, "    --lowq-10\n");
     fprintf(stderr, "                lower 10%% runtime kmer frequency threshold. [%d]\n", asm_opt->lowq_thre_10);
@@ -97,6 +110,7 @@ void Print_H(hifiasm_opt_t* asm_opt)
     fprintf(stderr, "    -n INT      remove tip unitigs composed of <=INT reads [%d]\n", asm_opt->max_short_tip);
     fprintf(stderr, "    -x FLOAT    max overlap drop ratio [%.2g]\n", asm_opt->max_drop_rate);
     fprintf(stderr, "    -y FLOAT    min overlap drop ratio [%.2g]\n", asm_opt->min_drop_rate);
+    fprintf(stderr, "    --noch      disable contained reads sparing heuristics.\n");
     fprintf(stderr, "  Auxiliary:\n");
     fprintf(stderr, "    -e          ban assembly, i.e. terminate before generating string graph\n");
     fprintf(stderr, "    --write-paf dump overlaps (paf).\n");
@@ -160,6 +174,7 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->mode_read_kmer_profile = 0;
     asm_opt->readselection_sort_order = 1;  // smallest first
     asm_opt->bin_base_name = (char*)(DEFAULT_OUTPUT);
+    asm_opt->probebin_base_name = 0;
     asm_opt->preovec_coverage = 150;
     asm_opt->is_ignore_ovlp_cnt = 0;
     asm_opt->is_dump_read_mask = 0;
@@ -178,6 +193,12 @@ void init_opt(hifiasm_opt_t* asm_opt)
     asm_opt->gc_tangle_max_tig = 500;  // set to -1 to disable the limit
     asm_opt->is_aggressive = 0; 
     asm_opt->use_ha_bin = 0;
+    asm_opt->no_containedreads_heuristics = 0;
+    asm_opt->write_binning_fasta = 0;  // defaults to only write a tsv for binning
+    asm_opt->tsne_perplexity = 50;
+    asm_opt->tsne_randomseed = 42; 
+    asm_opt->tsne_neigh_dist = 0.25;
+    asm_opt->no_post_assembly_binning = 0;  // default does binning
     // end of hamt
     asm_opt->bed_inconsist_rate = 0;  // hamt: disable
 }
@@ -539,8 +560,25 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
             asm_opt->is_dump_relevant_reads = 1;
         }
         else if (c == 418) {asm_opt->gc_superbubble_tig_max_length = atoi(opt.arg);}
-        else if (c == 420) {asm_opt->do_probe_gfa = 1;}
+        else if (c == 420) {
+            asm_opt->do_probe_gfa = 1;  
+            if (opt.arg) {
+                asm_opt->probebin_base_name = opt.arg;
+                fprintf(stderr, "[M::%s] may use probe gfa bins at %s\n", __func__, opt.arg);
+            }else{
+                fprintf(stderr, "[M::%s] probe-gfa suffix will fall back to -o or -B, note that to pass a string you need the equal sign.\n", __func__);
+            }
+        }
         else if (c == 421) {asm_opt->use_ha_bin = 1; fprintf(stderr, "[M::%s] use hifiasm bin files\n", __func__);}
+        else if (c == 422) {asm_opt->no_containedreads_heuristics = 1; 
+                            fprintf(stderr, "[M::%s] contained reads sparing heuristics disabled.\n", __func__);}
+        else if (c == 423) {asm_opt->write_binning_fasta = 1;}
+        else if (c == 424) {asm_opt->tsne_perplexity= atoi(opt.arg);}
+        else if (c == 425) {asm_opt->tsne_randomseed= atoi(opt.arg);}
+        else if (c == 426) {asm_opt->tsne_neigh_dist= atof(opt.arg);}
+        else if (c == 427) {asm_opt->no_post_assembly_binning = 1;
+            fprintf(stderr, "[M::%s] Will not do post assembly genome binning.\n", __func__);}
+
         // end of hamt
 		else if (c == 301) asm_opt->flag |= HA_F_VERBOSE_GFA;
 		else if (c == 302) asm_opt->flag |= HA_F_WRITE_PAF;
@@ -582,6 +620,14 @@ int CommandLine_process(int argc, char *argv[], hifiasm_opt_t* asm_opt)
 		}
     }
 
+    // swith order should not matter. need to process some cases here.
+    if (asm_opt->do_probe_gfa){
+        if (!asm_opt->probebin_base_name) {
+            asm_opt->probebin_base_name = asm_opt->bin_base_name;
+            fprintf(stderr, "[M::%s] update probe-gfa prefix to %s\n", __func__, 
+                    asm_opt->bin_base_name);
+        }
+    }
 
     if (argc == opt.ind)
     {

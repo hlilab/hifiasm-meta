@@ -2,8 +2,101 @@
 #define __OVERLAPS_HAMT__
 #include <stdint.h>
 #include <assert.h>
+#include <math.h>
+#include "kvec.h"
 #include "Overlaps.h"
 #include "Process_Read.h"
+
+
+typedef struct {
+    double d1, d2;
+    uint32_t i;
+    uint32_t is_optimal:1, is_ignored:1, weight:30;
+}ddp_t;  // double-double plus; can avoid if casting double to uint32_t. just need this for sorting
+
+
+typedef struct {
+    uint64_t x1, x2;
+}hamt_u128_t;
+static inline int compare_u128_t_use64(const void *a_, const void *b_){
+    // only compare first 64 bits
+    hamt_u128_t *a = (hamt_u128_t*)a_;
+    hamt_u128_t *b = (hamt_u128_t*)b_;
+    if (a->x1 > b->x1) return 1;
+    else if (a->x1 < b->x1) return -1;
+    return 0;
+}
+static inline int compare_u128_t(const void *a_, const void *b_){
+    // compare full 128 bits
+    hamt_u128_t *a = (hamt_u128_t*)a_;
+    hamt_u128_t *b = (hamt_u128_t*)b_;
+    if (a->x1 > b->x1) return 1;
+    else if (a->x1 < b->x1) return -1;
+    else{
+        if (a->x2 > b->x2) return 1;
+        else if (a->x2 < b->x2) return -1;
+    }
+    return 0;
+}
+
+typedef kvec_t(char) chars_t;
+typedef kvec_t(uint8_t) vu8_t;
+typedef kvec_t(uint16_t) vu16_t;
+typedef kvec_t(uint32_t) vu32_t;
+typedef kvec_t(uint64_t) vu64_t;
+typedef kvec_t(int32_t) vi32_t;
+typedef kvec_t(int64_t) vi64_t;
+typedef kvec_t(ddp_t) vddp_t;
+typedef kvec_t(hamt_u128_t) vu128_t;
+
+struct paf_ct_v ;
+typedef struct paf_ct_v paf_ct_v;
+void destroy_paf_ct_v(paf_ct_v *H);
+
+
+static inline double hamt_meand(double *a, size_t n){
+    // https://www.heikohoffmann.de/htmlthesis/node134.html
+    // https://stackoverflow.com/questions/1930454/what-is-a-good-solution-for-calculating-an-average-where-the-sum-of-all-values-e
+    double c = 0;
+    uint32_t t=1;
+    for (size_t i=0; i<n; i++){
+        c += (a[i]-c)/t;
+        t++;
+    }
+    return c;
+}
+static inline double hamt_stdd(double *a, size_t n, double mean){
+    double d=0;
+    size_t t=1;
+    for (size_t i=0; i<n; i++){
+        d = d*(t-1)/t + pow((a[i]-mean), 2)/t;
+        t++;
+    }
+    return sqrt(d);
+}
+static inline double *transpose2D(double *mat, int d1, int d2){
+    double *ret = (double*)calloc(d1*d2, sizeof(double));
+    for (int i=0; i<d1; i++){
+        for (int j=0; j<d2; j++){
+            ret[j*d1+i] = mat[i*d2+j];
+        }
+    }
+    return ret;
+}
+static inline void znorm2D(double **mat, int d1, int d2){
+    double *matT = transpose2D(*mat, d1, d2);
+    for (int i=0 ;i<d2; i++){
+        double mean = hamt_meand(matT+i*d1, d1);
+        double std = hamt_stdd(matT+i*d1, d1, mean);
+        for (int j=0; j<d1; j++){
+            matT[i*d1+j] -=mean;
+            matT[i*d1+j] /=std;
+        }
+    }
+    free(*mat);
+    *mat = transpose2D(matT, d2, d1);
+    free(matT);
+}
 
 typedef struct {
     char *a;
@@ -95,7 +188,8 @@ int hamt_ug_pop_tinyFlatCircles(asg_t *sg, ma_ug_t *ug, int base_label);
 
 
 int hamt_ug_resolveTangles(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
-void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step);
+int hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step);
+int hamt_ug_disconnect_long_contig_pairs_by_cov(asg_t *sg, ma_ug_t *ug);
 int hamt_ug_pop_unevenInvertBubble(asg_t *sg, ma_ug_t *ug, int base_label, int alt_label);
 
 // (hap)
@@ -169,7 +263,22 @@ void hamt_update_coverage(ma_ug_t *ug, asg_t *read_g,
 
 void hamt_utg_scc_debugprintext(ma_ug_t *ug);
 void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug);
-void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread);
+vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread);
 int hamt_ug_delete_unconnected_single_read_contigs(asg_t *sg, ma_ug_t *ug);
+void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads, 
+                        char *output_prefix, int write_binning_fasta);
 
+
+paf_ct_v* hamt_index_pafs_multithread(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
+                    ma_sub_t *coverage_cut,
+                    long long n_reads, int batchsize, int n_threads );
+int hamt_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_read, 
+                                  ma_sub_t *coverage_cut, 
+                                  R_to_U* ruIndex, int max_hang, int min_ovlp);
+int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources, 
+                             ma_hit_t_alloc* const reverse_sources, 
+                             ma_sub_t *coverage_cut,
+                             const long long n_reads, paf_ct_v *paf_h_cis, paf_ct_v *paf_h_trans);
+void hamt_symmetrize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads);
+void hamt_normalize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads);
 #endif // __OVERLAPS_HAMT__

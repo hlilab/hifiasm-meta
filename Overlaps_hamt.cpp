@@ -1,3 +1,4 @@
+#include <sys/stat.h>
 #include <stdint.h>
 #include <math.h>
 #define __STDC_FORMAT_MACROS 1  // cpp special (ref: https://stackoverflow.com/questions/14535556/why-doesnt-priu64-work-in-this-code)
@@ -9,13 +10,27 @@
 #include "CommandLines.h" 
 #include "Overlaps_hamt.h"
 #include "ksort.h"
+#include "kvec.h"
 #include "htab.h"
 #include "kthread.h"
+#include "t-sne.h"
+#include "khashl.h"
 
-#define HAMT_MAX(x, y) ((x >= y)?(x):(y))  // same
-#define HAMT_MIN(x, y) ((x <= y)?(x):(y))  // same
-#define HAMT_DIFF(x, y) ((HAMT_MAX((x), (y))) - (HAMT_MIN((x), (y))))  // it's in Correct.h but don't want to include so
+#define HAMT_PI 3.141592653589793
+#define HAMT_TWOPI 6.283185307179586
+#define HAMT_MAX(x, y) ((x >= y)?(x):(y)) 
+#define HAMT_MIN(x, y) ((x <= y)?(x):(y))
+#define HAMT_DIFF(x, y) ((HAMT_MAX((x), (y))) - (HAMT_MIN((x), (y))))
 #define UTG_LEN(ug, vu) ((ug)->u.a[(vu)>>1].len)  // vu has the direction bit
+
+#define paf_ht_eq(a, b) ((a)==(b))
+#define paf_ht_hash(a) ((a))
+KHASHL_MAP_INIT(static klib_unused, paf_ht_t, paf_ht, uint64_t, uint16_t, paf_ht_hash, paf_ht_eq)
+#define PAF_CT_PRE 12
+#define PAF_CT_PRE_M ((1<<(PAF_CT_PRE))-1)
+#define paf_ct_eq(a, b) ((a>>PAF_CT_PRE)==(b>>PAF_CT_PRE))
+#define paf_ct_hash(a) ((a>>PAF_CT_PRE))
+KHASHL_MAP_INIT(static klib_unused, paf_ct_t, paf_ct, uint64_t, uint32_t, paf_ct_hash, paf_ct_eq)
 
 KDQ_INIT(uint64_t)
 KDQ_INIT(uint32_t)
@@ -28,6 +43,72 @@ typedef kvec_t(char*) kvec_strings_t;
 #define HAMT_ALTER_LABEL 1
 void hamt_ug_util_BFS_markSubgraph_trailing(ma_ug_t *ug_old, ma_ug_t *ug_new, int base_label);
 
+uint16_t index5NF[1024]={
+0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 
+16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 
+32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 31, 
+47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 15, 
+62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 58, 
+77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 43, 
+92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 88, 103, 104, 105, 27, 
+106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 73, 117, 118, 119, 11, 
+120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 113, 131, 132, 133, 54, 
+134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 99, 145, 146, 147, 39, 
+148, 149, 150, 151, 152, 153, 154, 141, 155, 156, 157, 84, 158, 159, 160, 23, 
+161, 162, 163, 164, 165, 166, 167, 127, 168, 169, 170, 69, 171, 172, 173, 7, 
+174, 175, 176, 177, 178, 179, 180, 164, 181, 182, 183, 109, 184, 185, 186, 50, 
+187, 188, 189, 190, 191, 192, 193, 151, 194, 195, 196, 95, 197, 198, 199, 35, 
+200, 201, 202, 190, 203, 204, 205, 137, 206, 207, 208, 80, 209, 210, 211, 19, 
+212, 213, 214, 177, 215, 216, 217, 123, 218, 219, 220, 65, 221, 222, 223, 3, 
+224, 225, 226, 223, 227, 228, 229, 173, 230, 231, 232, 119, 233, 234, 235, 61, 
+236, 237, 238, 211, 239, 240, 241, 160, 242, 243, 244, 105, 245, 246, 247, 46, 
+248, 249, 250, 199, 251, 252, 253, 147, 254, 255, 256, 91, 257, 258, 247, 30, 
+259, 260, 261, 186, 262, 263, 264, 133, 265, 266, 267, 76, 268, 269, 235, 14, 
+270, 271, 272, 220, 273, 274, 275, 170, 276, 277, 278, 116, 279, 280, 267, 57, 
+281, 282, 283, 208, 284, 285, 286, 157, 287, 288, 289, 102, 290, 291, 256, 42, 
+292, 293, 294, 196, 295, 296, 297, 144, 298, 299, 289, 87, 300, 301, 244, 26, 
+302, 303, 304, 183, 305, 306, 307, 130, 308, 309, 278, 72, 310, 311, 232, 10, 
+312, 313, 314, 217, 315, 316, 317, 167, 318, 319, 307, 112, 320, 321, 264, 53, 
+322, 323, 324, 205, 325, 326, 327, 154, 328, 329, 297, 98, 330, 331, 253, 38, 
+332, 333, 334, 193, 335, 336, 327, 140, 337, 338, 286, 83, 339, 340, 241, 22, 
+341, 342, 343, 180, 344, 345, 317, 126, 346, 347, 275, 68, 348, 349, 229, 6, 
+350, 351, 352, 214, 353, 354, 343, 163, 355, 356, 304, 108, 357, 358, 261, 49, 
+359, 360, 361, 202, 362, 363, 334, 150, 364, 365, 294, 94, 366, 367, 250, 34, 
+368, 369, 361, 189, 370, 371, 324, 136, 372, 373, 283, 79, 374, 375, 238, 18, 
+376, 377, 352, 176, 378, 379, 314, 122, 380, 381, 272, 64, 382, 383, 226, 2, 
+384, 385, 383, 222, 386, 387, 349, 172, 388, 389, 311, 118, 390, 391, 269, 60, 
+392, 393, 375, 210, 394, 395, 340, 159, 396, 397, 301, 104, 398, 399, 258, 45, 
+400, 401, 367, 198, 402, 403, 331, 146, 404, 405, 291, 90, 406, 399, 246, 29, 
+407, 408, 358, 185, 409, 410, 321, 132, 411, 412, 280, 75, 413, 391, 234, 13, 
+414, 415, 381, 219, 416, 417, 347, 169, 418, 419, 309, 115, 420, 412, 266, 56, 
+421, 422, 373, 207, 423, 424, 338, 156, 425, 426, 299, 101, 427, 405, 255, 41, 
+428, 429, 365, 195, 430, 431, 329, 143, 432, 426, 288, 86, 433, 397, 243, 25, 
+434, 435, 356, 182, 436, 437, 319, 129, 438, 419, 277, 71, 439, 389, 231, 9, 
+440, 441, 379, 216, 442, 443, 345, 166, 444, 437, 306, 111, 445, 410, 263, 52, 
+446, 447, 371, 204, 448, 449, 336, 153, 450, 431, 296, 97, 451, 403, 252, 37, 
+452, 453, 363, 192, 454, 449, 326, 139, 455, 424, 285, 82, 456, 395, 240, 21, 
+457, 458, 354, 179, 459, 443, 316, 125, 460, 417, 274, 67, 461, 387, 228, 5, 
+462, 463, 377, 213, 464, 458, 342, 162, 465, 435, 303, 107, 466, 408, 260, 48, 
+467, 468, 369, 201, 469, 453, 333, 149, 470, 429, 293, 93, 471, 401, 249, 33, 
+472, 468, 360, 188, 473, 447, 323, 135, 474, 422, 282, 78, 475, 393, 237, 17, 
+476, 463, 351, 175, 477, 441, 313, 121, 478, 415, 271, 63, 479, 385, 225, 1, 
+480, 479, 382, 221, 481, 461, 348, 171, 482, 439, 310, 117, 483, 413, 268, 59, 
+484, 475, 374, 209, 485, 456, 339, 158, 486, 433, 300, 103, 487, 406, 257, 44, 
+488, 471, 366, 197, 489, 451, 330, 145, 490, 427, 290, 89, 487, 398, 245, 28, 
+491, 466, 357, 184, 492, 445, 320, 131, 493, 420, 279, 74, 483, 390, 233, 12, 
+494, 478, 380, 218, 495, 460, 346, 168, 496, 438, 308, 114, 493, 411, 265, 55, 
+497, 474, 372, 206, 498, 455, 337, 155, 499, 432, 298, 100, 490, 404, 254, 40, 
+500, 470, 364, 194, 501, 450, 328, 142, 499, 425, 287, 85, 486, 396, 242, 24, 
+502, 465, 355, 181, 503, 444, 318, 128, 496, 418, 276, 70, 482, 388, 230, 8, 
+504, 477, 378, 215, 505, 459, 344, 165, 503, 436, 305, 110, 492, 409, 262, 51, 
+506, 473, 370, 203, 507, 454, 335, 152, 501, 430, 295, 96, 489, 402, 251, 36, 
+508, 469, 362, 191, 507, 448, 325, 138, 498, 423, 284, 81, 485, 394, 239, 20, 
+509, 464, 353, 178, 505, 442, 315, 124, 495, 416, 273, 66, 481, 386, 227, 4, 
+510, 476, 376, 212, 509, 457, 341, 161, 502, 434, 302, 106, 491, 407, 259, 47, 
+511, 472, 368, 200, 508, 452, 332, 148, 500, 428, 292, 92, 488, 400, 248, 32, 
+511, 467, 359, 187, 506, 446, 322, 134, 497, 421, 281, 77, 484, 392, 236, 16, 
+510, 462, 350, 174, 504, 440, 312, 120, 494, 414, 270, 62, 480, 384, 224, 0, 
+};
 
 float cosine_similarity(float *a, float *b, int l){
     float d=0, A=0, B=0;
@@ -550,6 +631,7 @@ typedef struct {
 /**
  * @par bitsize the precise array length. Allocation is 8-bit blocks, 
  *      length sancheck is precise.
+ * @func Allocate memory; will zero out.
 */
 hamt_ba_t *hamt_ba_t_init(uint32_t bitsize){
     hamt_ba_t *d = (hamt_ba_t*)calloc(1, sizeof *d);
@@ -563,7 +645,13 @@ void hamt_ba_t_destroy(hamt_ba_t *d){
     free(d->a);
     free(d);
 }
+
+/**
+ * @func Reallocate, will zero out new allocation. 
+*/
 void hamt_ba_t_resize(hamt_ba_t *d, uint32_t bitsize){
+    uint32_t prev_size = d->m;
+    uint8_t prev_last = d->a[d->m-1];
     d->m = bitsize/8 +1 ;
     d->mm = bitsize;
     d->a = (uint8_t*)realloc(d->a, d->m);
@@ -571,6 +659,8 @@ void hamt_ba_t_resize(hamt_ba_t *d, uint32_t bitsize){
         fprintf(stderr, "[E::%s] realloc failed\n", __func__);
         exit(1);
     }
+    d->a[prev_size-1] = prev_last;
+    memset(d->a+prev_size, 0, d->m - prev_size);
 }
 
 /**
@@ -2725,7 +2815,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
     linked = 0;
     int passed = 1;
     if (hamt_asgarc_util_get_the_one_target(auxsg, w1[0], &u1, 0, 0, base_label)<0){
-        fprintf(stderr, "ERROR %s u1\n", __func__);
+        fprintf(stderr, "[E::%s]ERROR u1\n", __func__);
         exit(1);
     }
     if (hamt_asgarc_util_countSuc(auxsg, u1, 0, 0, base_label)<=1){
@@ -2756,7 +2846,7 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
     for (san=0; san<20; san++){
         // get the target in the single edge, sancheck topo
         if (hamt_asgarc_util_get_the_one_target(auxsg, w1[0], &w_tmp, 0, 0, base_label)<0){
-            fprintf(stderr, "error1 %s\n", __func__);
+            fprintf(stderr, "[E::%s]error1 \n", __func__);
             exit(1);
         }
         if (w_tmp==v0){return nb_cut;}  // prevent circling back to handle
@@ -2831,11 +2921,11 @@ int hamt_ug_util_popSimpleBiBubbleChain(asg_t *sg, ma_ug_t *ug, uint32_t v0,
             uint32_t tmp_v1, tmp_v2;
             if (suc1==1 && suc2==1){
                 if (hamt_asgarc_util_get_the_one_target(auxsg, w2[0], &tmp_v1, 0, 0, base_label)<0){
-                    fprintf(stderr, "ERROR %s, tmp_v1\n", __func__);
+                    fprintf(stderr, "[E::%s]ERROR, tmp_v1\n", __func__);
                     exit(1);
                 }
                 if (hamt_asgarc_util_get_the_one_target(auxsg, w2[1], &tmp_v2, 0, 0, base_label)<0){
-                    fprintf(stderr, "ERROR %s, tmp_v2\n", __func__);
+                    fprintf(stderr, "[E::%s]ERROR tmp_v2\n", __func__);
                     exit(1);
                 }
                 if (hamt_asgarc_util_countPre(auxsg, tmp_v1, 0, 0, base_label)<=2 && hamt_asgarc_util_countPre(auxsg, tmp_v2, 0, 0, base_label)<=2){
@@ -3070,7 +3160,7 @@ int hamt_ugasg_util_findendSinglePath_allowSimpleBubble(ma_ug_t *ug, uint32_t v0
             }
         }else{  // step to the next vertex
             if (hamt_asgarc_util_get_the_one_target_ignoreDanglingTip(g, v, &w, 0, 0, base_label)<0){
-                fprintf(stderr, "ERROR AT %s\n", __func__);
+                fprintf(stderr, "[E::%s] ERROR\n", __func__);
                 exit(1);
             }
             if (color[w>>1]){  
@@ -3963,7 +4053,8 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
     // NOTE
     //     Do not cut if the non-circular part only as one or a few unitigs
 
-    int verbose = 0;  // debug
+    int verbose = 0;
+    // int minl = 50000;
     double startTime = Get_T();
 
     asg_t *auxsg = ug->g;
@@ -3982,21 +4073,25 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
         if (hamt_asgarc_util_countPre(auxsg, w, 0, 0, base_label)<2){
             continue;
         }
+        // if (ug->u.a[v>>1].len<minl || ug->u.a[w>>1].len<minl) continue;
 
         cov[2] = 0;
         av = asg_arc_a(auxsg, w^1);
         for (uint32_t i=0; i<asg_arc_n(auxsg, w^1); i++){  // collect the largest coverage of w's predecessor (except v which will be accounted by cov[0])
-            if ((av[i].v>>1)==(v>>1)){  // ignore v
+            if ((av[i].v>>1)==(v>>1)){  // ignore self
                 continue;
             }
             if (av[i].del){continue;}
             if (base_label>=0 && (auxsg->seq_vis[av[i].v>>1]!=base_label)) {continue;}
-            // covtmp = get_ug_coverage(&ug->u.a[av[i].v>>1], sg, coverage_cut, sources, ruIndex, primary_flag);
+            // if (ug->u.a[av[i].v>>1].len<minl) continue;
+
             covtmp = ug->utg_coverage[av[i].v>>1];
             if (covtmp>cov[2]){
                 cov[2] = covtmp;
             }
         }
+        if (cov[2]==0) continue;  // no child node were checked
+                                  //
         cov[0] = ug->utg_coverage[v>>1];
         cov[1] = ug->utg_coverage[w>>1];
         radix_sort_ovhamt32(cov, cov+3);
@@ -4011,6 +4106,7 @@ void hamt_asgarc_ugCovCutDFSCircle(asg_t *sg, ma_ug_t *ug, int base_label)
         if (hamt_asgarc_detect_circleDFS(auxsg, v, w, 0, base_label)){  // note: v and w is ug with direction
             // check the non-circular part, if it has only a few edges, do not cut
             if (hamt_asgarc_count_leads_to_howmany(auxsg, v^1, 10)<10){
+                if (verbose) fprintf(stderr, "[debug::%s] ignore\n", __func__);
                 ;
             }else{  // cut
                 hamt_ug_arc_del(sg, ug, v, w, 1);
@@ -4709,7 +4805,7 @@ void hamt_asgarc_markBridges_DFS_v0(asg_t *sg, uint32_t v, uint32_t v_parent, in
 */
 int hamt_asgarc_markBridges_DFS(asg_t *sg, uint32_t root,
                                 uint8_t *visited, int *tin, int *low, int base_label) {
-    int verbose = 1;
+    int verbose = 0;
     int nb_bridge = 0;
     
     // for traversing graph
@@ -4875,7 +4971,10 @@ void hamt_ug_covCutByBridges(asg_t *sg, ma_ug_t *ug, int base_label)
         if (base_label>=0 && ( auxsg->seq_vis[v>>1]!=base_label || auxsg->seq_vis[w>>1]!=base_label) ) {continue;}
         if (verbose>1) {fprintf(stderr, "[debug::%s] checking at utg%.6d vs utg%.6d\n", __func__, (int)(v>>1)+1, (int)(w>>1)+1);}
 
-        // check unitig coverage
+        // check node length, no trust for coverage estimation in short nodes
+        // if (ug->u.a[v>>1].len<50000 && ug->u.a[w>>1].len<50000) continue;
+
+        // check node coverage
         cov_v = ug->utg_coverage[v>>1];
         cov_w = ug->utg_coverage[w>>1];
         if (cov_v<cov_w){
@@ -10850,7 +10949,7 @@ int hamt_ug_get_all_elementary_circuits_circuit(ma_ug_t *ug, int *sgscc_labels,
 // Enumerate _all_ elementary circuits.
 // SCC and use Johnson's method
 void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
-    int verbose = 1;
+    int verbose = 0;
     asg_t *auxsg = ug->g;
     int n_scc0;
     int *labels = hamt_asggraph_scc(auxsg, &n_scc0);
@@ -10913,14 +11012,23 @@ void hamt_ug_get_all_elementary_circuits(ma_ug_t *ug){
 // FUNC
 //     Given an array of unitig/contig IDs and the graph, 
 // RETURN
-//     Returns the sequence, its length stored in seq_l.
+//     Returns the sequence (heap allocation), 
+//     with its length stored in seq_l.
 char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, int *seq_l){
     int verbose = 0;
     int seq_m = 3000000, seq_n=0;
-    char *seq = (char*)malloc(seq_m); assert(seq);
+    char *seq = (char*)malloc(seq_m); 
     int seqtmp_m = 1000000;
-    char *seqtmp = (char*)malloc(seq_m); assert(seqtmp);
-    
+    char *seqtmp = (char*)malloc(seq_m); 
+    if (!seq || !seqtmp){
+        fprintf(stderr, "[E::%s] malloc failed. seq_m=%d\n", 
+                __func__, seq_m);
+        if (seq) free(seq);
+        if (seqtmp) free(seqtmp);
+        *seq_l=0;
+        return 0;
+    }
+   
     asg_t *auxsg = ug->g;
     ma_utg_t *p;
     char *s;
@@ -10940,7 +11048,14 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
         if (vu&1){  // reverse strand
             if (p->len>=seqtmp_m){
                 seqtmp_m = p->len+1;
-                seqtmp = (char*)realloc(seqtmp, seqtmp_m); assert(seqtmp);
+                seqtmp = (char*)realloc(seqtmp, seqtmp_m); 
+                if (!seqtmp){
+                    fprintf(stderr, "[E::%s] realloc failed, seqtmp_m is %d\n", __func__, (int)seqtmp_m);
+                    if (seq) free(seq);
+                    if (seqtmp) free(seqtmp);
+                    *seq_l = 0;
+                    return 0;
+                }
             }
             for (j=p->len-1, j2=0; j>=0; j--){
                 seqtmp[j2] = seqcmp(p->s[j]);
@@ -10960,7 +11075,14 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
         if (i!=l-1){
             if (seq_n + p->len - arclen>=seq_m){
                 seq_m += p->len - arclen;
-                seq = (char*)realloc(seq, seq_m); assert(seq);
+                seq = (char*)realloc(seq, seq_m); 
+                if (!seq){
+                    fprintf(stderr, "[E::%s] realloc failed-b, seq_m is %d\n", __func__, (int)seq_m);
+                    if (seq) free(seq);
+                    if (seqtmp) free(seqtmp);
+                    *seq_l = 0;
+                    return 0;
+                }
             }
             sprintf(seq+seq_n, "%.*s", (int)(p->len-arclen), s+arclen);
             seq_n += p->len-arclen;
@@ -10989,7 +11111,14 @@ char *hamt_ug_get_path_sequence(ma_ug_t *ug, uint32_t *r, int l, int is_circ, in
         if (i==l-1){
             if (seq_n + p->len - arclen - arclen_last>=seq_m){
                 seq_m += p->len - arclen - arclen_last;
-                seq = (char*)realloc(seq, seq_m); assert(seq);
+                seq = (char*)realloc(seq, seq_m); 
+                if (!seq){
+                    fprintf(stderr, "[E::%s] realloc failed-c, seq_m is %d\n", __func__, (int)seq_m);
+                    if (seq) free(seq);
+                    if (seqtmp) free(seqtmp);
+                    *seq_l = 0;
+                    return 0;
+                }
             }
             if (p->len-arclen-arclen_last>=0){
                 if (verbose) {fprintf(stderr, "[debug::%s]   - last status: type add, len=%d, arclen=%d, arclen_last=%d\n", 
@@ -11027,32 +11156,34 @@ static void hamt_ug_get_path_sequence_parallel_callback(void *data, long cid, in
 }
 
 /**
- * @brief Paralleled hamt_ug_get_path_sequence. 
- * @par seqs_ll_p Output, seq lengths. Address of a pointer - will point it 
- *      to the newly allocated output.
- * @par seqs_p Output, seqs. Similar.
- * @return An array of strings.
+ * @func Paralleled hamt_ug_get_path_sequence, store results.
+ * @par seqs_ll_p Stores outputs, seq lengths.
+ * @par seqs_p Output, seqs, newly allocated.
 */
 void hamt_ug_get_path_sequence_parallel(ma_ug_t *ug, stacku32_t *s, 
                                           int n_paths, int n_threads, 
-                                          int **seqs_ll_p, char ***seqs_p){
-    // allocate
-    *seqs_ll_p = (int*)malloc(sizeof(int)*n_paths);
-    *seqs_p = (char**)malloc(sizeof(char*)*n_paths);
-
+                                          int *seqs_ll_p, char **seqs_p){
     // collect
     hamt_getseq_t *d = (hamt_getseq_t*)calloc(1, sizeof(hamt_getseq_t));
     d->ug = ug;
     d->paths = s;
-    d->offsets = (int*)calloc(n_paths, sizeof(int));
-    d->seqs = *seqs_p;
-    d->seqs_ll = *seqs_ll_p;
+    d->offsets = (int*)calloc(n_paths, sizeof(int)); assert(d->offsets);
+    d->seqs = seqs_p;
+    d->seqs_ll = seqs_ll_p;
 
     int offset=0, idx=0, l=0;
     int seq_l;   
-    while (offset<s->n){
+    while (idx<n_paths){//while (offset<s->n){
+        if (offset>=s->n){
+            fprintf(stderr, "[E::%s] offset OOB reading, check the path stack. Aborting.\n", __func__);
+            fprintf(stderr, "[E::%s] n_paths=%d, dump of path stack:\n", __func__, n_paths);
+            for (int i=0; i<s->n; i++){
+                fprintf(stderr, "[dump::%s] i=%d val=%d\n", __func__, i, (int)s->a[i]);
+            }
+            exit(1);
+        }
         d->offsets[idx] = offset;
-        l = s->a[offset];
+        l = s->a[offset];  // packed as: [n_tigs, ID_tig1, ID_tig2, ...., ID_tign, n_tigs2, ID_tig1, ...]
         offset += l+1;
         idx++;
     }
@@ -11263,8 +11394,6 @@ int hamt_ug_sum_lengths_of_unitigs(uint32_t *a, int n, ma_ug_t *ug, int is_path,
 // NOTE
 //     `s` is filled like so: array length1, value1, value2...., array length2, value1, value2, ... 
 //     Long contig is always preferred over path-finding.  
-    //     Long contig is always preferred over path-finding.  
-//     Long contig is always preferred over path-finding.  
 void hamt_ug_opportunistic_elementary_circuits_helper_deduplicate(stacku32_t *s, ma_ug_t *ug){
     int verbose = 0;
     int of1=0, of2=0, of1idx=0, of2idx=1;
@@ -11462,9 +11591,9 @@ int hamt_ug_opportunistic_elementary_circuits_helper_deduplicate_minhash(stacku3
 
     // collect sequences
     time = Get_T();
-    int *seqs_ll;
-    char **seqs;
-    hamt_ug_get_path_sequence_parallel(ug, s, n_paths, n_thread, &seqs_ll, &seqs);
+    int *seqs_ll = (int*)calloc(n_paths, sizeof(int)); assert(seqs_ll);
+    char **seqs = (char**)malloc(sizeof(char*)*n_paths); assert(seqs);
+    hamt_ug_get_path_sequence_parallel(ug, s, n_paths, n_thread, seqs_ll, seqs);
     fprintf(stderr, "[T::%s] got the sequences, used %.1fs\n", __func__, Get_T()-time);
 
     // sketch and pariwise
@@ -11568,7 +11697,9 @@ void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ,
 
     fprintf(fp, ">rc.%d", pathID);
     for (i=0; i<l; i++){
-        fprintf(fp, " ctg%.6d%c", (int)(r[i]>>1)+1, "-+"[r[i]&1]);
+        fprintf(fp, " s%d.ctg%.6d%c%c", (int)ug->u.a[r[i]>>1].subg_label, 
+                (int)(r[i]>>1)+1, "lc"[ug->u.a[r[i]>>1].circ],
+                "-+"[r[i]&1]);
     }
     fprintf(fp, "\n");
     
@@ -11583,9 +11714,12 @@ void hamt_ug_write_path_to_fasta(ma_ug_t *ug, uint32_t *r, int l, int is_circ,
 //     This function does not try to enumerate all combinations
 //      as there are too many; instead it tries to get as many different circuits
 //      as possible, then deduplicate using read overlap information.
+// RET
+//     List of long contigs >=100kb used in the deduplicated circles.
+//     To be consumed by binning functions.
 // PRE-CONDITION NOTE
 //     Unitig graph's sequence must be collected.   
-void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread){
+vu32_t *hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thread){
     double time = Get_T();
     int is_print_found = 0;  // 0 to print, 1 to write a p_ctg2 file.
     FILE *fp = 0;
@@ -11629,12 +11763,14 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
             memset(color, 0, sizeof(uint8_t)*auxsg->n_seq*2);
             
             ret = hamt_asg_get_one_cycle_with_constraint(ug, root, labels, weights, color, 
-                                                        1000000, 100, &report_stack);
+                                                        500000, 100, &report_stack);
             if (ret) { // found a new cycle
+                fprintf(stderr, "[dbg::%s] cyc from idx %d to %d in report stack\n", 
+                        __func__, idx, report_stack.n);
                 total_report+=1;
                 // udpate mask
                 int tmpi=0, tmpl;
-                uint32_t *tmpa = &report_stack.a[idx];
+                uint32_t *tmpa = report_stack.a+idx;
                 while (tmpi<report_stack.n-idx){
                     tmpl = tmpa[tmpi];
                     for (int i=tmpi; i<tmpl; i++){
@@ -11642,6 +11778,7 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
                     }
                     tmpi+=tmpl+1;
                 }
+                idx = report_stack.n;
             }
         }
     }
@@ -11649,21 +11786,20 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
     
     int of=0, l=0, ofidx=0;
 
-    // // dump all found circuits, no deduplication
-    // (commented out because not useful)
-    // time = Get_T();
-    // if (!is_print_found){
-    //     sprintf(fname, "%s.rescue.all.fa", asm_opt.output_file_name);
-    //     fp = fopen(fname, "w"); assert(fp);
-    //     while (of<report_stack.n){
-    //         l = report_stack.a[of];
-    //         hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
-    //         of = of+1+l;
-    //         ofidx++;
-    //     }
-    //     fclose(fp);
-    // }
-    // fprintf(stderr, "[M::%s] wrote all rescued circles, used %.2fs\n", __func__, Get_T()-time);
+    // dump all found circuits, no deduplication
+    time = Get_T();
+    if (!is_print_found){
+        sprintf(fname, "%s.rescue.all.fa", asm_opt.output_file_name);
+        fp = fopen(fname, "w"); assert(fp);
+        while (of<report_stack.n){
+            l = report_stack.a[of];
+            hamt_ug_write_path_to_fasta(ug, report_stack.a+of+1, l, 1, ofidx, fp);
+            of = of+1+l;
+            ofidx++;
+        }
+        fclose(fp);
+    }
+    fprintf(stderr, "[M::%s] wrote all rescued circles, used %.2fs\n", __func__, Get_T()-time);
 
     // deduplication and dump
     time = Get_T();
@@ -11682,7 +11818,7 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
         if (is_print_found){
             fprintf(stderr, "[debug::%s] ===circ%d:\n", __func__, ofidx+1);
             for (int i=0; i<l; i++){
-                fprintf(stderr, "[debug::%s]   utg%.6d%c\n", __func__, 
+                fprintf(stderr, "[debug::%s]   tig%.6d%c\n", __func__, 
                         (int)(report_stack.a[of+1+i]>>1)+1, "+-"[report_stack.a[of+1+i]&1]);
             }
         }else{
@@ -11700,7 +11836,16 @@ void hamt_ug_opportunistic_elementary_circuits(asg_t *sg, ma_ug_t *ug, int n_thr
     free(color);
     free(used);
     free(scc_counts);
+
+    vu32_t *lt = (vu32_t*)malloc(sizeof(vu32_t));
+    kv_init(*lt); 
+    kv_resize(uint32_t, *lt, 32);
+    for (uint32_t i=0; i<report_stack.n; i++){
+        if (ug->u.a[report_stack.a[i]>>1].len>=100000) 
+            kv_push(uint32_t, *lt, report_stack.a[i]>>1);
+    }
     stacku32_destroy(&report_stack);
+    return lt;
 }
 
 
@@ -11755,6 +11900,8 @@ typedef struct {
     stacku32_t *entries;  // persumed entry vertices, to be tested; do NOT have the direction bit
     stacku32_t *exits;  // (similar)
     stacku32_t *paths;  // length=n_threads, an array of stacks to store paths through tangles
+    vu128_t *paths_sten;  // stores entry-exit pairs that are actually used,
+                              // to be sorted and ensure stable tangle popping order.
     hamt_ba_t *is_handle; // a bit array, 0 not entry/exit, 1 yes
     ma_ug_t *ug;  // will modify
     asg_t *sg; 
@@ -11798,7 +11945,7 @@ int hamt_ug_resolveTangles_threaded_callback_markwalk(asg_t *sg, ma_ug_t *ug,
                                                 stacku32_t *pathholder,
                                                 int *pathlength,
                                                 int base_label, int alt_label){
-    int verbose = 1;
+    int verbose = 0;
     uint32_t vu, nv, wu, uu, nu;
     asg_arc_t *av;
     asg_arc_t *au;
@@ -11953,7 +12100,7 @@ int hamt_ug_resolveTangles_threaded_callback_markwalk(asg_t *sg, ma_ug_t *ug,
         }
         san++;
         if (san>1000){
-            fprintf(stderr, "[E::%s] too many steps\n", __func__);
+            fprintf(stderr, "[W::%s] too many steps, abort this try (source was utg%.6d, sink was utg%.6d)\n", __func__, (int)(source>>1)+1, (int)(sink>>1)+1);
             ret = 1;
             goto finish;
         }
@@ -12044,7 +12191,7 @@ void hamt_ug_resolveTangles_threaded_callback_treatwalk(asg_t *sg, ma_ug_t *ug,
  * @par tid # of thread
 */
 static void hamt_ug_resolveTangles_threaded_callback_step1(void *data, long i, int tid){
-    int verbose = 1;
+    int verbose = 0;
     hamt_markt_t *dd = (hamt_markt_t*) data;
     ma_ug_t *ug = dd->ug;
     asg_t *auxsg = dd->ug->g;
@@ -12111,12 +12258,20 @@ static void hamt_ug_resolveTangles_threaded_callback_step1(void *data, long i, i
                                             __func__, (int)(source>>1)+1, (int)(source&1), (int)(sink>>1)+1, (int)(sink&1)
                     );
                     }
-                // find a path and store it in thread-specific buffers, separated by 0xffffffff
+                // Find a path and store it in thread-specific buffers, 
+                // separated by 0xffffffff.
+                uint64_t tmpstart = dd->paths[tid].n;  // marks the start of a segment in the path buffer
                 hamt_ug_resolveTangles_threaded_callback_markwalk(dd->sg, ug, 
                             source, sink, &dd->paths[tid], &pathlen, 0, 1);
                 if (pathlen>0){
                     hamt_ba_t_write(dd->is_handle, 1, source);
                     hamt_ba_t_write(dd->is_handle, 1, sink);
+                    kv_push(hamt_u128_t, dd->paths_sten[tid], 
+                            ((hamt_u128_t){.x1=(((uint64_t)source)<<32 | sink) , 
+                             .x2=(tmpstart <<32 | tid)
+                             }
+                            )
+                    );
                 }
                 // if (verbose){
                 //     fprintf(stderr, "[debug::%s] tid=%d, path buffer length now %d\n", 
@@ -12143,7 +12298,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                                                         int step, void *in){
     hamt_marknpop_pl_t *p = (hamt_marknpop_pl_t*)data;
     double startTime = Get_T();
-    int verbose = 1;
+    int verbose = 0;
     if (step==0){  // mark pairs, also record the path to retain
         int ret;
         // init step data
@@ -12157,8 +12312,11 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
         s->dd->gc_tangle_max_tig = p->gc_tangle_max_tig;
         s->dd->is_handle = p->is_handle;
         s->dd->paths = (stacku32_t*)calloc(p->n_threads, sizeof(stacku32_t));
+        s->dd->paths_sten = (vu128_t*)calloc(p->n_threads, sizeof(vu128_t));
         for (int i=0; i<p->n_threads; i++){
             stacku32_init(&s->dd->paths[i]);
+            kv_init(s->dd->paths_sten[i]);
+            kv_resize(hamt_u128_t, s->dd->paths_sten[i], 16);
         }
         s->dd->entries = (stacku32_t*)calloc(1, sizeof(stacku32_t));
         s->dd->exits = (stacku32_t*)calloc(1, sizeof(stacku32_t));
@@ -12192,7 +12350,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                 exit = entry+2;
                 p->offset = 0;
             }
-            fprintf(stderr, "[debug::%s] step0, dd length %d, new entry starts at %.6d , exit at %.6d\n", 
+            if (verbose) fprintf(stderr, "[debug::%s] step0, dd length %d, new entry starts at %.6d , exit at %.6d\n", 
                 __func__, s->dd->entries->n,  (int)(entry>>1)+1, (int)(exit>>1)+1);
         }
         return s;
@@ -12206,10 +12364,14 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
         }else{  // end of stream
             stacku32_destroy(s->dd->entries);
             stacku32_destroy(s->dd->exits);
+            free(s->dd->exits);
+            free(s->dd->entries);
             for (int i=0 ;i<p->n_threads; i++){
                 stacku32_destroy(&s->dd->paths[i]);
+                kv_destroy(s->dd->paths_sten[i]);
             }
             free(s->dd->paths);
+            free(s->dd->paths_sten);
             free(s->dd);
             free(s);
         }
@@ -12217,6 +12379,17 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
     }else if (step==2){  // flip 
         hamt_marknpop_st_t *s = (hamt_marknpop_st_t*) in;
         hamt_marknpop_pl_t *p = s->p;
+        // To ensure stable tangle popping order, sort entry-exit pairs here.
+        // Order is arbitrary (by contig IDs).
+        vu128_t orderbuf;
+        kv_init(orderbuf);
+        kv_resize(hamt_u128_t, orderbuf, 16);
+        for (int tid=0; tid<p->n_threads; tid++){
+            for (int i=0; i<s->dd->paths_sten[tid].n; i++){
+                kv_push(hamt_u128_t, orderbuf, s->dd->paths_sten[tid].a[i]);
+            }
+        }
+        qsort(orderbuf.a, orderbuf.n, sizeof(hamt_u128_t), compare_u128_t_use64);
         
         // SESE regions can only contain or exclude
         //  each other, but they never partially overlap. 
@@ -12226,10 +12399,23 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
         stacku32_t *stack;
         stacku32_t sancheck_contain;
         stacku32_init(&sancheck_contain);
-        for (int tid=0; tid<p->n_threads; tid++){
+        if (verbose) {
+            fprintf(stderr, "[dbg::%s] oderbuf length=%d\n", __func__, (int)orderbuf.n);
+            for (int i_buf=0; i_buf<orderbuf.n; i_buf++){
+                fprintf(stderr, "[dbg::%s]   %d : %d / %d\n", __func__, 
+                        i_buf,
+                        (int)((uint32_t)(orderbuf.a[i_buf].x1>>32)), 
+                        (int)((uint32_t)orderbuf.a[i_buf].x1)
+                        );
+            }
+        }
+        for (int i_buf=0; i_buf<orderbuf.n; i_buf++){
+            uint32_t tid =  (uint32_t)orderbuf.a[i_buf].x2;
+            uint32_t buf_st = orderbuf.a[i_buf].x2>>32;
+
             int has_contain = 0;
             stack = &s->dd->paths[tid];
-            for (int i=0; i<stack->n; i++){
+            for (int i=buf_st; i<stack->n; i++){
                 if (stack->a[i]==UINT32_MAX){
                     if (hamt_ba_t_get(s->dd->is_handle, stack->a[i-1])){
                         has_contain-=1;
@@ -12247,7 +12433,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                                             (int)(tmp.a[tmpi]>>1)+1);
                             }
                         }
-                        // treate
+                        // treat
                         hamt_ug_resolveTangles_threaded_callback_treatwalk(
                             p->sg, p->ug, 
                             tmp.a[0], tmp.a[tmp.n-1], &tmp, 
@@ -12271,6 +12457,7 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
                     has_contain = 0;
                     stacku32_reset(&tmp);
                     stacku32_reset(&sancheck_contain);
+                    break;
                 }else{
                     if (hamt_ba_t_get(s->dd->is_handle, stack->a[i]) && 
                         tmp.n!=0){
@@ -12282,13 +12469,19 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
             }
         }
 
+        kv_destroy(orderbuf);
         stacku32_destroy(&sancheck_contain);
         stacku32_destroy(s->dd->entries);
+        free(s->dd->entries);
         stacku32_destroy(s->dd->exits);
+        free(s->dd->exits);
         for (int i=0 ;i<p->n_threads; i++){
             stacku32_destroy(&s->dd->paths[i]);
+            kv_destroy(s->dd->paths_sten[i]);
         }
+        kv_destroy(tmp);
         free(s->dd->paths);
+        free(s->dd->paths_sten);
         free(s->dd);
         free(s);
 
@@ -12311,9 +12504,9 @@ static void *hamt_ug_resolveTangles_threaded_callback(void *data,
  * @par ug unitig/contig graph
  * @par n_threads # of threads
  * @par base_label 0 to work with primary graph
- * @return None; will print stats to stderr.
+ * @return # spots treated; will print stats to stderr.
 */
-void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step){
+int hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int base_label, int debug_step){
     asg_t *auxsg = ug->g;
     double startTime = Get_T();
 
@@ -12323,7 +12516,7 @@ void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int 
     p->sg = sg;
     p->ug = ug;
     p->n_threads = n_threads;
-    p->bufsize = n_threads*4096;
+    p->bufsize = 48*4096;  // must not be variable
     p->base_label = base_label;
     p->gc_tangle_max_tig = asm_opt.gc_tangle_max_tig;
     p->is_handle = hamt_ba_t_init(auxsg->n_seq*2);
@@ -12344,8 +12537,1376 @@ void hamt_ug_resolveTangles_threaded(asg_t *sg, ma_ug_t *ug, int n_threads, int 
     // final
     fprintf(stderr, "[M::%s]   cleaning used %.1fs\n", __func__, Get_T()-startTime);
     fprintf(stderr, "[M::%s] treated %d spots\n", __func__, p->treated);
+    int ret = p->treated;
 
     // clean up
     hamt_ba_t_destroy(p->is_handle);
     free(p);
+    return ret;
 }
+
+
+/**
+ * @brief Disconnect two long contigs if their coverages are very different.
+ * @return # of treatments.
+*/
+int hamt_ug_disconnect_long_contig_pairs_by_cov(asg_t *sg, ma_ug_t *ug){
+    int lt = 200000;   // length threshold
+    int lt_tip = 100000;  // less stringent for tips
+    int ct_maxmin = 30;  // coverage threshold, minimum of the longer of the two
+    int ct_maxmin_tip = 10;   // less stringent if one is a tip
+    int ct_minratio = 3;  // coverage ratio threshold,  not inclusive
+
+    int n_treated = 0;
+    double T = Get_T();
+    uint32_t vu, wu, lv, lw, cv, cw;  // id, id, length, length, coverage, coverage
+    int vu_istip, wu_istip;
+    uint32_t nv;
+    asg_arc_t *av;
+    asg_t *auxsg = ug->g;
+
+    int tlt, tct;  // tmp lt, tmp ct-maxmin
+    for (vu=0; vu<auxsg->n_seq*2; vu++){
+        lv = ug->u.a[vu>>1].len;
+        vu_istip = hamt_asgarc_util_isTip(auxsg, vu, 0,0, -1);
+        
+        nv = asg_arc_n(auxsg, vu);
+        av = asg_arc_a(auxsg, vu);
+        for (int i=0; i<nv; i++){
+            if (av[i].del) continue;
+            wu = av[i].v;
+            lw = ug->u.a[wu>>1].len;
+            wu_istip = hamt_asgarc_util_isTip(auxsg, wu, 0,0, -1);
+
+            cv = ug->utg_coverage[vu>>1];
+            cw = ug->utg_coverage[wu>>1];
+
+            // check length and coverage
+            if (vu_istip){
+                tlt = lt_tip;  tct = ct_maxmin_tip;
+            }else{
+                tlt = lt;  tct = ct_maxmin;
+            }
+            if (lv<tlt || cv<tct) continue;
+            if (wu_istip){
+                tlt = lt_tip;  tct = ct_maxmin_tip;
+            }else{
+                tlt = lt;  tct = ct_maxmin;
+            }
+            if (lw<tlt || cw<tct) continue;
+            //   (coverage ratio)
+            float ratio;
+            if (cv>cw) ratio = ((float)cv)/cw;
+            else ratio = ((float)cw)/cv;
+            if (ratio<=ct_minratio) continue;
+
+            // delete the arc
+            hamt_ug_arc_del_between(sg, ug, vu, wu, 1, 0); 
+            n_treated++;
+        }
+    }
+
+    // update graph
+    if (n_treated>0){
+        asg_cleanup(sg);
+        asg_cleanup(auxsg);
+    }
+
+    fprintf(stderr, "[M::%s] treated %d, used %.1fs.\n", __func__, n_treated, 
+            Get_T()-T);
+    return n_treated;
+}
+
+/**
+ * @par buf At least is 512 long.
+ * @func Collect canonical 5-mer profile of the sequence.
+ * 
+*/
+void hamt_5NF_profile_from_seq_core(char *seq, uint32_t seq_l, double *buf){
+    memset(buf, 0, sizeof(double)*512);
+    uint16_t mer=0;
+    uint16_t mer_rev = 0;
+    uint32_t mer_l=0;
+    uint16_t c;
+    uint16_t mer_mask = (uint16_t)(1<<10)-1;
+
+    uint32_t tot = 0;
+    for (uint32_t i=0; i<seq_l-5+1; i++){
+        c = (uint16_t)seq_nt4_table[(int)seq[i]];
+        if (c<4){
+            mer <<= 2;
+            mer |= c;
+            mer &= mer_mask;
+            //mer_rev>>=2;
+            //mer_rev = c<<8; 
+            //mer_rev &=mer_mask;
+            //fprintf(stderr, "dbg %d %d\n", (int)mer, (int)mer_rev);
+            if (mer_l==4){
+                buf[index5NF[mer]]++;
+                tot++;
+            }else mer_l++;
+        }else{
+            mer = mer_l = 0;
+        }
+    }
+    for (int i=0; i<512; i++){
+        buf[i] /= tot;
+    }
+}
+typedef struct{
+    ma_ug_t *ug;
+    uint64_t *tigIDs;  // will only use the right 32bits
+                       // (is this wrong if different endianess??)
+    uint32_t tigIDs_l;
+    double *mat;
+}hamt_get5nf_t;
+static void hamt_5NFwithcov_profile_from_seq_callback(void *data, long jobID, int threadID){
+    hamt_get5nf_t *s = (hamt_get5nf_t*)data;
+    uint32_t v = (uint32_t)s->tigIDs[jobID];
+    char *seq = s->ug->u.a[v].s;
+    uint32_t seq_l = s->ug->u.a[v].len;
+    double *buf = s->mat+(513*jobID);
+    buf[0] = log10((double)s->ug->utg_coverage[v]);  // note: this needs to be collect. hamt ug regen always does it.
+    hamt_5NF_profile_from_seq_core(seq, seq_l, buf+1);
+}
+void hamt_5NF_profile_gen(ma_ug_t *ug, uint64_t *candidates, uint32_t candidates_l, 
+        int n_threads, double **mat){
+    hamt_get5nf_t s;
+    s.ug = ug;
+    s.tigIDs = candidates;
+    s.tigIDs_l = candidates_l;
+    s.mat = *mat;
+    kt_for(n_threads, hamt_5NFwithcov_profile_from_seq_callback, &s, candidates_l);
+
+    // normalize
+    znorm2D(mat, (int)candidates_l, 513);
+
+}
+
+int compare_ddp_t(const void *a_, const void *b_){
+    ddp_t *a = (ddp_t*)a_;
+    ddp_t *b = (ddp_t*)b_;
+    if (a->is_optimal && !b->is_optimal) return -1;
+    else if (!a->is_optimal && b->is_optimal) return 1;
+
+    if (a->d1 > b->d1) return 1;
+    else if (a->d1 < b->d1) return -1;
+    else{
+        if (a->d1 < b->d1) return 1;  // reverse sort
+        else if (a->d1 > b->d1) return -1;
+    }
+    return 0;
+}
+void hamt_simple_binning_pick_neighbors(FILE *fp, char *bin_dir_prefix, ma_ug_t *ug, 
+                                        vu64_t *candidates, double *emb,
+                                        double radius1, double radius2, 
+                                        int *counter_tot, int*counter_mul){  
+
+    vddp_t itvls;
+    kv_init(itvls);
+    kv_resize(ddp_t, itvls, 16);
+
+    // (upper 32 bits of candidates were used for sorting; 
+    // contig ID and are always ui32 in this function,
+    // so we just rely on unsigned truncation.)
+
+    // blocking candidates:
+    //    - block: wrt idx of the candidates buffer, is used for all iterations 
+    //    - the .is_ignored property will be reset for each clustering step,
+    //      as we re-collect angle intervals for each new seed.
+    //    (will need to check && update both)
+    int verbose = 0;
+
+    uint8_t *block = (uint8_t*)calloc(candidates->n, 1);  // can recycle upper 32bits of candidates instead, but doesn't matter
+    assert(block);
+
+    int I = 0; // binID
+
+    uint32_t seedID, otherID;
+    double seedx, seedy, x, y, r, t;
+    double boundary=radius2*2;
+    for (int32_t i=candidates->n-1; i>=0; i--){  // seed from the longest candidate contigs
+        if (verbose) fprintf(stderr, "[dbg::%s] seed ctg%.6d, i is %d\n", 
+                __func__, (int)((uint32_t)candidates->a[i])+1, (int)i);
+        if (block[i]) continue;
+        itvls.n = 0;
+
+        seedID = candidates->a[i];
+        seedx = emb[2*i];
+        seedy = emb[2*i+1];
+
+        for (int32_t j=i-1; i>=1 && j>=0; j--){
+            if (block[j]) continue;
+
+            // to polar
+            x = emb[2*j] - seedx;  // shift origin point wrt seed
+            y = emb[2*j+1] - seedy;
+            r = sqrt(pow(x, 2) + pow(y, 2));
+
+            if (r<boundary){
+                t = atan(y/(x+0.000000001));
+                if (x<0) t+=HAMT_PI;
+                else if (x>=0 && y<0) t+=HAMT_TWOPI;
+
+                // get range of available angle
+                double theta = acos(1-pow(r, 2)/(2*pow(radius2, 2)));
+                double relative_angle = (HAMT_PI-theta)/2;
+                double st = t-relative_angle;
+                double en = t+relative_angle;
+                kv_push(ddp_t, itvls, ((ddp_t){
+                                        .d1=st, 
+                                        .d2=en, .i=(uint32_t)j,
+                                        .is_optimal=r<radius1?(uint8_t)1:(uint8_t)0, 
+                                        .is_ignored=0}));
+                if (st<0){  // trying to patch where it wraps around. maybe have bug
+                    kv_push(ddp_t, itvls, ((ddp_t){
+                                        .d1=st+HAMT_TWOPI, 
+                                        .d2=en+HAMT_TWOPI, .i=(uint32_t)j,
+                                        .is_optimal=r<radius1?(uint8_t)1:(uint8_t)0, 
+                                        .is_ignored=0}));
+                }
+            }
+        }
+        if (verbose) fprintf(stderr, "[dbg::%s]    itvls len=%d\n",__func__, (int)itvls.n);
+
+        // sort, try optimal solution, then remove containment and duplicates and see if suboptimal exists
+        qsort(itvls.a, itvls.n, sizeof(ddp_t), compare_ddp_t);
+        // (check if there's optimal choice, if so, we are done)
+        {
+            int n = 0;
+            for (int tmpi=0; tmpi<itvls.n; tmpi++){
+                if (block[itvls.a[tmpi].i]) continue;
+                if (itvls.a[tmpi].is_optimal) n++;
+                else break;
+            }
+            if (n>0){  // write content and update blacklist, then goes to the next seed
+                if (verbose) fprintf(stderr, "[dbg::%s]     optimal\n", __func__);
+                if (counter_tot) (*counter_tot)++;
+                fprintf(fp, "bin%d.opt\ts%d.ctg%.6d%c", I, (int)ug->u.a[seedID].subg_label, 
+                            seedID+1, "lc"[ug->u.a[seedID].circ]);
+                block[i] = 1;
+                FILE *fp_bin = 0;
+                if (bin_dir_prefix){
+                    char *bin_fn = (char*)malloc(strlen(bin_dir_prefix)+50);
+                    sprintf(bin_fn, "%s/bin%d.opt.fa", bin_dir_prefix, I);
+                    fp_bin = fopen(bin_fn, "w");
+                    assert(fp_bin);
+                    free(bin_fn);
+                    uint32_t v = seedID;
+                    fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                    fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                }
+
+                uint32_t i_can;
+                for (i_can=0; i_can<n; i_can++){
+                    if (block[itvls.a[i_can].i]) continue;
+                    uint32_t v = candidates->a[itvls.a[i_can].i];
+                    fprintf(fp, "\ts%d.ctg%.6d%c", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                    if (fp_bin){
+                        fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                        fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                    }
+                    block[itvls.a[i_can].i] = 1;
+                }
+                fprintf(fp, "\n");
+                if (fp_bin) fclose(fp_bin);
+                I++;
+                if (i_can>1)
+                    if (counter_mul) (*counter_mul)++;  // neighbor(s) + seed itself
+                continue;
+            }
+        }
+        // (If we reach here, no candidates were available in seed's vicinity.
+        //  We will try finding a circle that intersects seed and contain all 
+        //  nearby candidates; if there are more than one circle or candidates
+        //  are within the neighborhood cannot be covered by only one such circle, 
+        //  we deny all solutions.)
+        // (remove interval containments in the "available angles" intervals)
+        for (int iseg=0; iseg<itvls.n; iseg++){
+            if (block[itvls.a[iseg].i]) continue;
+            if (itvls.a[iseg].is_ignored) continue;
+            int jseg = iseg+1;
+            double end = itvls.a[iseg].d2;
+            itvls.a[iseg].weight = 1;
+            while (jseg<itvls.n && itvls.a[jseg].d1<end){
+                if (block[itvls.a[jseg].i] || itvls.a[jseg].is_ignored) {jseg++; continue;}
+                if (itvls.a[jseg].d2<end){
+                    itvls.a[jseg].is_ignored = 1;
+                    itvls.a[iseg].weight++;
+                }
+                jseg++;
+            }
+        }
+
+        // (slide through sorted intervals to find the highest coverage)
+        // (If we allow multiple circles to be selected, we can repurpose 
+        //  the .is_optimal property to indicate who is currently
+        //  within the window's span. When we see a new high score, push 
+        //  to a stack. )
+        // The requirement is the suboptimal choice should contain
+        //  all neighboring points. Therefore here we just count and see if 
+        //  we ever reach the highest score.
+        //  Note that this REQUIRES the interval lists was collected from 
+        //  valid neighbors (i.e. no bounding box, calculate distance wrt seed). 
+        //  Although in practic I guess this doesn't matter, binning mistakes are 
+        //  from elsewhere...
+        int best = -1;  // known best coverage
+        int cov = 0;   // current coverage
+        double left;  // left of the current window
+        int i_left_window = 0;  // left most window that hasn't moved out yet
+        for (int iseg=0; iseg<itvls.n; iseg++){
+            if (itvls.a[iseg].is_ignored || block[itvls.a[iseg].i]) continue;
+            left = itvls.a[iseg].d1;
+            cov += itvls.a[iseg].weight;
+            // check if some window on the left has moved out
+            while (1){
+                if (itvls.a[i_left_window].d2<left){
+                    cov -= itvls.a[i_left_window].weight;
+                    i_left_window++;
+                }else break;
+            }
+            // check score
+            best = best>cov? best : cov;
+        }
+        if (best>=itvls.n){
+            if (verbose) fprintf(stderr, "[dbg::%s]     suboptimal\n", __func__);
+            if (counter_tot) (*counter_tot)++;
+            fprintf(fp, "bin%d.sub\ts%d.ctg%.6d%c", I, (int)ug->u.a[seedID].subg_label, 
+                        seedID+1, "lc"[ug->u.a[seedID].circ]);
+            block[i] = 1;
+
+            FILE *fp_bin = 0;
+            if (bin_dir_prefix){
+                char *bin_fn = (char*)malloc(strlen(bin_dir_prefix)+50);
+                sprintf(bin_fn, "%s/bin%d.sub.fa", bin_dir_prefix, I);
+                fp_bin = fopen(bin_fn, "w");
+                assert(fp_bin);
+                free(bin_fn);
+                uint32_t v = seedID;
+                fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+            }
+
+            uint32_t i_can=0;
+            for (uint32_t i_can=0; i_can<itvls.n; i_can++){
+                if (block[itvls.a[i_can].i]) continue;
+                uint32_t v = candidates->a[itvls.a[i_can].i];
+                fprintf(fp, "\ts%d.ctg%.6d%c", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                if (fp_bin){
+                    fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                    fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                }
+                block[itvls.a[i_can].i] = 1;
+            }
+            fprintf(fp, "\n");
+            if (fp_bin) fclose(fp_bin);
+            I++;
+            if (i_can>1)
+                if (counter_mul) (*counter_mul)++;  // neighbor(s) + seed itself
+            continue;
+        }
+
+        // If we reach here, put the seed contig alone in a bin if it is long.
+        // (if the contig is short, do nothing; bins initiated from other seeds might
+        // want to grab it.) 
+        if (verbose) fprintf(stderr, "[dbg::%s]     fall-through\n", __func__);
+        if ((candidates->a[i]>>32)>500000){
+            if (verbose) fprintf(stderr, "[dbg::%s]     write because long (%d)\n", __func__, 
+                    (int)(candidates->a[i]>>32));
+            if (counter_tot) (*counter_tot)++;
+            fprintf(fp, "bin%d.sub\ts%d.ctg%.6d%c\n", I, (int)ug->u.a[seedID].subg_label, 
+                        seedID+1, "lc"[ug->u.a[seedID].circ]);
+
+            if (bin_dir_prefix){
+                uint32_t v = seedID;
+                char *bin_fn = (char*)malloc(strlen(bin_dir_prefix)+50);
+                sprintf(bin_fn, "%s/bin%d.thro.fa", bin_dir_prefix, I);
+                FILE *fp_bin = fopen(bin_fn, "w");
+                assert(fp_bin);
+                free(bin_fn);
+                fprintf(fp_bin, ">s%d.ctg%.6d%c\n", (int)ug->u.a[v].subg_label, v+1, "lc"[ug->u.a[v].circ]);
+                fprintf(fp_bin, "%.*s\n", (int)ug->u.a[v].len, ug->u.a[v].s);
+                fclose(fp_bin);
+            }
+            block[i] = 1;
+            I++;
+        }
+    }    
+    free(block);
+    kv_destroy(itvls);
+
+}
+
+void hamt_helper_write_tab_joined_darray(FILE *fp, double *a, uint32_t n){
+    if (n==0) return;
+    fprintf(fp, "%f", a[0]);
+    for (int i=1; i<n; i++){
+        fprintf(fp, "\t%f", a[i]);
+    }
+    fprintf(fp, "\n");
+}
+/**
+ * @func Post-assembly, post-circle-resuce binning based on bhtsne.
+*/
+void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads, 
+                        char *output_prefix, int write_binning_fasta){
+    // Take contigs >=100kb and is not [>=1Mb and circular] and is not used by 
+    //  circle rescue step (after deduplication).
+    // Make a 2D feature matrix {n_contigs, n_features}, where features are:
+    //    - coverage (hifiasm's estimation, tot bases / contig length)
+    //    - canonical 5-mer profile (no adjustments to frequencies, 
+    //      unlike the n=103 TNF used in various binners, since tSNE seems
+    //      indifferent to the difference. Prominent problem lies elsewhere.
+    //      Also does not matter too much whether we use 4-mer or 5-mer.) 
+    double T = Get_T();
+    int verbose = 0;
+    
+    asg_t *auxsg = ug->g;
+    vu64_t nl;  // "neighbor list"
+    kv_init(nl); 
+    kv_resize(uint64_t, nl, 32);
+
+    // collect candidates
+    radix_sort_ovhamt32(blacklist->a, blacklist->a+blacklist->n);
+    uint32_t b_p=0;  // blacklist pointer
+    for (uint32_t v=0; v<auxsg->n_seq; v++){
+        if (ug->u.a[v].len>=100000){
+            while (v>blacklist->a[b_p]) 
+                b_p++;
+            int ban = 0;
+            for (uint32_t i=b_p; i<blacklist->n; i++){
+                if (blacklist->a[i]==v) {
+                    ban = 1;
+                    break;
+                }
+                if (blacklist->a[i]>v) break;
+            }
+            if (!(ug->u.a[v].len>=1000000 && ug->u.a[v].circ) && !ban){
+                kv_push(uint64_t, nl, (((uint64_t)ug->u.a[v].len)<<32)|v );  // for sorting
+            }
+        }
+    }
+    fprintf(stderr, "[M::%s] Will try to bin on %d contigs (skipped %d because blacklist).\n", 
+            __func__, (int)nl.n, (int)blacklist->n);
+    radix_sort_ovhamt64(nl.a, nl.a+nl.n);
+
+    // coverage and 5NF profile, and z-score normalize it
+    double *pf = (double*)calloc(513*nl.n, sizeof(double));
+    assert(pf);
+    hamt_5NF_profile_gen(ug, nl.a, nl.n, n_threads, &pf);
+
+    // call tSNE
+    double *emb = ts_fit(nl.n, 513, pf, 2, 0.5, asm_opt.tsne_perplexity, asm_opt.tsne_randomseed);
+
+    // (debug: write embedding)
+    if (verbose)
+    {
+        char *fn = (char*)malloc(strlen(output_prefix)+50);
+        assert(fn);
+
+        sprintf(fn, "%s.bins.featuremat", output_prefix);
+        FILE *fp = fopen(fn, "w");
+        for (int tmpi=0; tmpi<nl.n; tmpi++){
+            uint32_t tmpv = (uint32_t)nl.a[tmpi];
+            fprintf(fp, "s%d.ctg%.6d%c\t", (int)ug->u.a[tmpv].subg_label, 
+                    (int)(tmpv+1), "lc"[ug->u.a[tmpv].circ]
+                    );
+            hamt_helper_write_tab_joined_darray(fp, pf+tmpi*513, 513);
+        }
+
+        fclose(fp);
+
+        sprintf(fn, "%s.bins.embedding", output_prefix);
+        fp = fopen(fn, "w");
+        for (int tmpi=0; tmpi<nl.n; tmpi++){
+            uint32_t tmpv = (uint32_t)nl.a[tmpi];
+            fprintf(fp, "s%d.ctg%.6d%c\t", (int)ug->u.a[tmpv].subg_label, 
+                    (int)(tmpv+1), "lc"[ug->u.a[tmpv].circ]
+                    );
+            hamt_helper_write_tab_joined_darray(fp, emb+tmpi*2, 2);
+        }
+        fclose(fp);
+        free(fn);
+    }
+
+    // parse the embedding
+    free(pf);
+    char *fn = (char*)malloc(strlen(output_prefix)+20);
+    assert(fn);
+    sprintf(fn, "%s.bins.tsv", output_prefix);
+    FILE *fp = fopen(fn, "w"); 
+    assert(fp);
+    if (write_binning_fasta){
+        sprintf(fn, "%s.bins", output_prefix);
+        mkdir(fn, S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH);  // 755
+    }
+    int tot_bins=0, tot_bins_multi=0;
+    hamt_simple_binning_pick_neighbors(fp, write_binning_fasta? fn : 0,
+                                       ug, &nl, emb, 
+                                       asm_opt.tsne_neigh_dist, asm_opt.tsne_neigh_dist*0.8, 
+                                       &tot_bins, &tot_bins_multi);
+    fclose(fp);
+    free(fn);
+
+    // cleanup
+    kv_destroy(nl);
+    free(emb);
+    fprintf(stderr, "[M::%s] Binning used %.2fs. %d bins (%d have more than 1 contig).\n", 
+            __func__, Get_T()-T, tot_bins, tot_bins_multi);
+
+}
+
+
+
+typedef struct {
+    //hamt_ba_t *todel;  // note to self: must not use bit array, will data race;
+                         // struct bit field will ub data race 
+    uint8_t *todel2;// array to log which read should be deleted
+    ma_hit_t_alloc* sources;
+    ma_sub_t *coverage_cut; 
+    R_to_U *ruIndex;
+    int max_hang;
+    int min_ovlp;
+}hamt_mahitcontadv_t;
+
+static void hit_contained_advance_callback(void *data, 
+                                    long jobID,   // is readID
+                                    int threadID){  // for kt_for
+    hamt_mahitcontadv_t *s = (hamt_mahitcontadv_t*)data;  
+    if (s->coverage_cut[jobID].del) return;
+
+    //int dbg_print = 0;
+    //if (jobID==67310 || jobID==96791 || jobID==161897) dbg_print = 1;
+
+    ma_hit_t *h = NULL;
+    ma_sub_t *sq = NULL;
+    ma_sub_t *st = NULL;
+    int32_t r;
+    uint32_t tn;
+    asg_arc_t t;
+    //int printed = 0;
+    for (long long j=0; j<(long long)s->sources[jobID].length; j++) {
+        h = &(s->sources[jobID].buffer[j]);
+        //check the corresponding two reads 
+        tn = Get_tn(*h);
+		sq = &(s->coverage_cut[jobID]);
+        st = &(s->coverage_cut[tn]);
+        if(sq->del || st->del) continue;  // "may have trio bugs"
+        if(h->del) continue;  // "may have trio bugs"
+        r = ma_hit2arc(h, sq->e - sq->s, st->e - st->s, 
+                    s->max_hang, asm_opt.max_hang_rate, 
+                    s->min_ovlp, &t);
+        if (r == MA_HT_QCONT){
+            //
+            // need to consider a rare case when updating R_to_U: 
+            // identical reads will be considered as QCONT in both directions..
+            // (this was not a problem in the original function due to every 
+            // containment encounter triggers .del marking in both direction; 
+            // here we collect in one direction and only mark when all are 
+            // collected.)
+            //
+            // A bad solution for now: if tn is smaller than qn and hit is 
+            // between identical reads, choose to do nothing.
+            int is_special_case = 0;
+            if (tn<jobID){
+                if (sq->s==0 && st->s==0 && sq->e==st->e &&
+                    sq->e==Get_READ_LENGTH(R_INF, jobID) &&
+                    st->e==Get_READ_LENGTH(R_INF, tn)){
+
+                    is_special_case = 1;
+                    //fprintf(stderr, "[W::%s] saw a pair of identical reads: "
+                    //        "%.*s (len %d) and %.*s (len %d) | sancheck: "
+                    //        "sq-s %d sq-e %d st-s %d st-e %d \n", __func__, 
+                    //        (int)Get_NAME_LENGTH(R_INF, jobID), Get_NAME(R_INF, jobID),
+                    //        (int)Get_READ_LENGTH(R_INF, jobID),
+                    //        (int)Get_NAME_LENGTH(R_INF, tn), Get_NAME(R_INF, tn),
+                    //        (int)Get_READ_LENGTH(R_INF, tn),
+                    //        (int)sq->s, (int)sq->e, (int)st->s, (int)st->e
+                    //        );
+
+                }
+            }
+            if (!is_special_case){
+                s->todel2[jobID] = 1;//hamt_ba_t_write(s->todel, 1, Get_qn(*h));
+                h->del = 1;
+                uint32_t tmpleft=jobID, tmpright, tmpisunitig;
+                set_R_to_U(s->ruIndex, Get_qn(*h), Get_tn(*h), 0);  // safe in this direction
+            }
+ 
+            //if (!printed){
+            //    fprintf(stderr, "[dbg::%s] QCONT qn %d tn %d\n", __func__, 
+            //            (int)Get_qn(*h), (int)Get_tn(*h));
+            //    printed=1;
+            //}
+        }else if (r == MA_HT_TCONT){
+            h->del = 1;  // DO NOTHING about the target: let it happen as QCONT when tn is treated as self
+        }
+    }
+}
+
+int hamt_ma_hit_contained_advance(ma_hit_t_alloc* sources, long long n_read, 
+                                  ma_sub_t *coverage_cut, 
+                                  R_to_U* ruIndex, int max_hang, int min_ovlp)
+{
+    // ma_hit_contained_advance improved for speed.
+    double startTime0 = Get_T();
+    double startTime = Get_T();
+    int verbose = 0;
+
+    uint8_t *todel2 = (uint8_t*)calloc(n_read, 1);
+
+    int ret0 = 0;
+    int ret = 0;
+	int32_t r;
+	long long i, j, m;
+	asg_arc_t t;
+    ma_hit_t *h = NULL;
+    ma_sub_t *sq = NULL;
+    ma_sub_t *st = NULL;
+
+    hamt_mahitcontadv_t dworker;
+    dworker.todel2 = todel2;
+    dworker.sources = sources;
+    dworker.coverage_cut = coverage_cut;
+    dworker.ruIndex = ruIndex;
+    dworker.max_hang = max_hang;
+    dworker.min_ovlp = min_ovlp;
+
+    // (To guarantee that set_R_to_U's functionality can be
+    // in threads (reallocation avoided beforehand) )
+    if (ruIndex->len<n_read){
+        fprintf(stderr, "[W::%s] Expanding R_to_U buffer, this might be unexpected go check code. old size %d, n_read %d\n", 
+                __func__, (int)ruIndex->len, (int)n_read);
+        ruIndex->index = (uint32_t*)realloc(ruIndex->index, n_read*sizeof(uint32_t));
+        memset(ruIndex->index + ruIndex->len, 
+                -1, 
+                sizeof(uint32_t)*(n_read - ruIndex->len));
+        ruIndex->len = n_read;
+    }
+
+    // mark things
+    kt_for(asm_opt.thread_num, hit_contained_advance_callback, 
+            &dworker, n_read);
+    int tot_marked = 0;
+    for (int i=0; i<n_read; i++){
+        tot_marked += (int)todel2[i];
+    }
+    fprintf(stderr, "[T::%s] step1: used %.2f s, marked %d in bit array\n", 
+            __func__, Get_T()-startTime, tot_marked);
+    startTime = Get_T();
+
+    // delete things
+    // No need to search in the opposite direction when deleting, we have all the 
+    // marks, so one pass for paf and one pass for coverage_cut should be enough.
+    uint64_t tot_del = 0, tot_tried_reads=0;
+    for (uint32_t i=0; i<n_read; i++){
+        if (coverage_cut[i].del) continue;
+        tot_tried_reads++;
+
+        ma_hit_t_alloc *x = &sources[i];
+        int just_del_all = todel2[i];
+        if (just_del_all){
+            for (int j=0; j<x->length; j++){
+                if (!x->buffer[j].del) tot_del++;
+                x->buffer[j].del = 1;
+            }
+        }else{
+            // self is not deleted, but need to 
+            // check whether any target is a dangling hit
+            for (int j=0; j<x->length; j++){
+                uint32_t tn = Get_tn(x->buffer[j]);
+                if (todel2[tn]){
+                    if (!x->buffer[j].del) tot_del++;
+                    x->buffer[j].del = 1;
+                }
+            }
+        }
+    }
+    free(todel2);
+    fprintf(stderr, "[T::%s] step2: used %.2f s; deleted %" PRIu64 " (tried %" PRIu64 "reads))\n", 
+            __func__, Get_T()-startTime, tot_del, tot_tried_reads);
+
+    // update index
+    startTime = Get_T();
+    transfor_R_to_U(ruIndex);
+    fprintf(stderr, "[T::%s] step2.5 used %.2f s\n", __func__, Get_T()-startTime); 
+
+    // mark reads that have no non-contained neighbors and drop them
+    startTime = Get_T();
+    for (i = 0; i < n_read; ++i) 
+    {
+        m = 0;
+        for (j = 0; j < (long long)sources[i].length; j++)
+        {
+            ma_hit_t *h = &(sources[i].buffer[j]);
+            if(h->del) continue;
+            ///both the qn and tn have not been deleted
+            if(coverage_cut[Get_qn(*h)].del != 1 && coverage_cut[Get_tn(*h)].del != 1)
+            {
+                h->del = 0;
+                m++;
+            }
+            else
+            {
+                h->del = 1;
+            }
+        }
+
+        ///if sources[i].length == 0, that means all overlapped reads with read i are the contained reads
+        if(m == 0)
+        {
+            //fprintf(stderr, "[dbg::%s] del %d\n", __func__, (int)i);
+            ret++;
+            coverage_cut[i].del = 1;
+        }
+    }
+    fprintf(stderr, "[T::%s] step3 used %.2f s\n", __func__, 
+                Get_T()-startTime);
+
+    fprintf(stderr, "[M::%s] dropped %d reads, used total of %0.2f s\n\n", __func__, ret, Get_T()-startTime0);
+    return ret;
+}
+uint16_t get_i_from_paf_index(paf_ht_t *h, uint32_t qn, uint32_t tn, int which){
+    // find the i in (reverse_)sources[tn].buffer[i] such that tn of it equals qn.
+    // which: 0 for cis, 1 for trans
+    // return (uint16_t)-1 if not found.
+    khint_t key = paf_ht_get(h, ((uint64_t)qn)<<32 | tn );
+    if (key!=kh_end(h)){
+        uint16_t ret = kh_val(h, key);
+        if ((ret&1) == which)
+            return ret>>1;
+    }
+    return (uint16_t)-1;
+}
+
+
+paf_ht_t* hamt_index_pafs(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
+                    ma_sub_t *coverage_cut,
+                    long long n_reads){
+    // Need to have quick access to indcies in pafs. Searching is too costly.
+    // This produces one hashtable, pairing entries sources and reverse sources.
+    // Key is packed read IDs: qn<<32|tn
+    // value is: (index on the *current side*)<<1 | is_trans
+
+    double T = Get_T();
+    paf_ht_t *h = paf_ht_init();
+    khint_t key;
+    int absent;
+    uint64_t hash, tmp;
+
+    ma_hit_t_alloc *paf;
+    ma_hit_t *v;
+    uint32_t tn;
+    uint64_t tot = 0;
+    for (uint16_t is_trans=0; is_trans<=1; is_trans++){
+        if (!is_trans) paf = sources;
+        else paf = reverse_sources;
+        if (!paf) continue;
+        
+        for (uint32_t qn=0; qn<n_reads; qn++){
+            //if (coverage_cut[qn].del) continue;  // TODO: check this
+            for (uint16_t i=0; i<paf[qn].length; i++){
+                if (paf[qn].buffer[i].del) continue;
+                v = &paf[qn].buffer[i];
+                tn = Get_tn(*v);
+                hash = ((uint64_t)qn)<<32 | tn; 
+                key = paf_ht_put(h, hash, &absent);
+                if (!absent){
+                    fprintf(stderr, "[W::%s] overlap qn-tn pair "
+                            "not unique? qn %d (sancheck %d) tn %d i %d. "
+                            "hash upper 32 %" PRIu32 " lower 32 %" PRIu32 ".Dump: \n", 
+                            __func__, (int)qn, (int)Get_qn(*v), (int)tn, (int)i, (uint32_t)(hash>>32), (uint32_t) hash);
+                    for (int j=0; j<paf[qn].length; j++){
+                        fprintf(stderr, "qn->tn: tn = %d\n", (int)Get_tn(paf[qn].buffer[j]));
+                    }
+                    for (int j=0; j<paf[tn].length; j++){
+                        fprintf(stderr, "tn->qn: tn = %d\n", (int)Get_tn(paf[tn].buffer[j]));
+                    }
+                    continue;
+                }
+                kh_val(h, key) = i<<1 | is_trans;
+                tot++;
+            }
+        }
+    }
+    fprintf(stderr, "[T::%s] inserted %" PRIu64 ", used %.2f s\n", 
+            __func__, tot, Get_T()-T);
+    return h;
+}
+
+
+struct paf_ct_v{
+    int prefix_l;
+    paf_ct_t **hs;
+};
+paf_ct_v *init_paf_ct_v(int prefix_l){
+    paf_ct_v *H = (paf_ct_v*)calloc(1, sizeof(paf_ct_v));
+    H->prefix_l = prefix_l;
+    H->hs = (paf_ct_t**)calloc(1<<H->prefix_l, sizeof(paf_ct_t*));
+    for (int i=0; i<1<<H->prefix_l; i++){
+        H->hs[i] = paf_ct_init();
+    }
+    return H;
+}
+void destroy_paf_ct_v(paf_ct_v *H){
+    for (int i=0; i<1<<H->prefix_l; i++){
+        paf_ct_destroy(H->hs[i]);
+    }
+    free(H->hs);
+    free(H);
+}
+
+typedef struct{
+    int n_threads;
+    int prefix_l;
+    uint64_t prefix_mask;
+    int sancheck_countermax;
+    ma_hit_t_alloc *paf;
+    uint64_t is_trans;
+    uint32_t batchsize, start, n_reads;
+    paf_ct_v *H;
+}hamt_paf_ht_v_pl_t;  // pipeline struct
+ 
+typedef struct{
+    hamt_paf_ht_v_pl_t *pl;
+    vu64_t *ahashes;  // (1<<prefix_l) arrays, not piggyback because not enough bits
+    vu32_t *aindices; // (1<<prefix_l) arrays
+}hamt_paf_ht_v_ps_t; // pipeline step struct
+
+void destroy_hamt_paf_ht_v_ps_t(hamt_paf_ht_v_ps_t* s){
+    for (int i=0; i<=s->pl->prefix_mask; i++){
+        kv_destroy(s->ahashes[i]);
+        kv_destroy(s->aindices[i]);
+    }
+    free(s->ahashes);
+    free(s->aindices);
+    free(s);
+}
+ 
+static void hamt_index_pafs_multithread_pipeline_worker(void *data, long prefixID, int tID){
+    hamt_paf_ht_v_ps_t *s = (hamt_paf_ht_v_ps_t*)data;
+    vu64_t *v = &s->ahashes[prefixID];
+    vu32_t *vi = &s->aindices[prefixID];
+    paf_ct_t *h = s->pl->H->hs[prefixID];
+    khint_t key;
+    int absent, prefix_l = s->pl->prefix_l;
+    uint64_t sanhash;
+
+    for (size_t i=0; i<v->n; i++){
+        key = paf_ct_put(h, v->a[i], &absent);
+        if (!absent){
+            fprintf(stderr, "[E::%s] slot not empty, query is %" PRIu64 "\n", 
+                    __func__, v->a[i]);
+        }
+        //kh_key(h, key) = v->a[i] ;
+        kh_val(h, key) = vi->a[i];
+    }
+}
+static void *hamt_index_pafs_multithread_pipeline(void *data, int step, void *in){
+    hamt_paf_ht_v_pl_t *p = (hamt_paf_ht_v_pl_t*)data;
+    double T0;
+    int verbose = 0;
+    if (step==0){
+        uint32_t tot = 0, qn, tn;
+        uint64_t hash, prefix;
+        ma_hit_t_alloc *h;
+        ma_hit_t *hh;
+        hamt_paf_ht_v_ps_t *s = (hamt_paf_ht_v_ps_t*)calloc(1, sizeof(hamt_paf_ht_v_ps_t));
+        s->pl = p;
+        s->ahashes = (vu64_t*)calloc(1<<p->prefix_l, sizeof(vu64_t));
+        s->aindices = (vu32_t*)calloc(1<<p->prefix_l, sizeof(vu32_t));
+        for (int i=0; i<1<<p->prefix_l; i++){
+            kv_init(s->ahashes[i]);
+            kv_resize(uint64_t, s->ahashes[i], 128);
+            kv_init(s->aindices[i]);
+            kv_resize(uint32_t, s->aindices[i], 128);
+        }
+        // collect values
+        uint32_t i;
+        for (i=p->start; i<p->n_reads && i<p->start+p->batchsize; i++){
+            h = &p->paf[i];
+            int tmpl = h->length;
+            if (h->length > UINT32_MAX/*p->sancheck_countermax*/){
+                fprintf(stderr, "[W::%s] Too many targets at read#%d (%.*s): %" PRIu64 ". "
+                        "Indexing will truncate wrt current sorting order.\n", 
+                        __func__, (int)i, (int)Get_NAME_LENGTH(R_INF, i), 
+                        Get_NAME(R_INF, i), (uint64_t)h->length
+                        );
+                tmpl = p->sancheck_countermax;
+            }
+            for (uint32_t j=0; j<tmpl; j++){
+                hh = &h->buffer[j];
+                //if (hh->del) continue; // note: commented out because ha(v0.13)'s function doesn't check this.
+
+                qn = Get_qn(*hh);
+                tn = Get_tn(*hh);
+                hash = ((uint64_t)qn)<<32 | tn;
+                prefix = hash & p->prefix_mask;
+                //hash = (hash>>p->prefix_l)<<p->prefix_l | j;
+                kv_push(uint64_t, s->ahashes[prefix], hash);
+                kv_push(uint32_t, s->aindices[prefix], j);
+                tot++;
+            }
+        }
+        p->start = i;
+        if (tot==0){
+            destroy_hamt_paf_ht_v_ps_t(s);
+        }else{
+            if (verbose) fprintf(stderr, "[dbg::%s] step1 start=%d\n", __func__, (int)p->start);
+            return s;
+        }
+    }else if (step==1){
+        hamt_paf_ht_v_ps_t *s = (hamt_paf_ht_v_ps_t*)in;
+        kt_for(s->pl->n_threads, hamt_index_pafs_multithread_pipeline_worker, s, 1<<s->pl->prefix_l);
+        destroy_hamt_paf_ht_v_ps_t(s);
+    }else{
+        fprintf(stderr, "[E::%s] pipeline doesn't have this step, check code.\n", __func__);
+        exit(1);
+    }
+    return 0;
+}
+paf_ct_v* hamt_index_pafs_multithread(ma_hit_t_alloc *sources, ma_hit_t_alloc *reverse_sources,
+                    ma_sub_t *coverage_cut,
+                    long long n_reads, int batchsize, int n_threads ){
+    double T = Get_T();
+
+    ma_hit_t_alloc *paf;
+    ma_hit_t *v;
+
+    paf_ct_v *H = init_paf_ct_v(PAF_CT_PRE);
+
+    hamt_paf_ht_v_pl_t pl;
+    pl.n_threads = n_threads;
+    pl.prefix_l = PAF_CT_PRE;
+    pl.prefix_mask = (1<<PAF_CT_PRE)-1;
+    //pl.sancheck_countermax = (1<<(PAF_CT_PRE-1)) -1;  // need 1bit for is_trans
+    pl.sancheck_countermax = PAF_CT_PRE_M;
+    pl.batchsize = batchsize;
+    pl.n_reads= n_reads;
+    pl.H = H;
+
+    for (uint64_t is_trans=0; is_trans<=1; is_trans++){
+        if (!is_trans) paf = sources;
+        else paf = reverse_sources;
+        if (!paf) continue;
+
+        pl.paf = paf;
+        pl.start = 0;
+        pl.is_trans = is_trans;
+
+        kt_pipeline(2, hamt_index_pafs_multithread_pipeline, &pl, 2);
+    }
+
+    return H;
+}
+
+int get_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn){
+    uint64_t hash = ((uint64_t)qn)<<32 | tn;
+    paf_ct_t *hh = h->hs[hash&PAF_CT_PRE_M];
+    khint_t key = paf_ct_get(hh, hash);
+    if (key==kh_end(hh)){
+        return -1;
+    }else{
+        //uint64_t tmp = PAF_CT_PRE_M & kh_key(hh, key);
+        uint32_t tmp = kh_val(hh, key);
+        return (int)tmp;
+    }
+}
+int insert_paf_index_ct(paf_ct_v *h, uint32_t qn, uint32_t tn, uint32_t idx){
+    int absent;
+    int silent = 0;
+
+    uint64_t hash = ((uint64_t)qn)<<32 | tn;
+    paf_ct_t *hh = h->hs[hash&PAF_CT_PRE_M];
+    khint_t key = paf_ct_put(hh, hash, &absent);
+    if (!absent && !silent){
+        fprintf(stderr, "[W::%s] inserted to non-empty slot. qn %d tn %d\n", 
+                __func__, (int)qn, (int)tn);
+    }
+    //kh_key(hh, key) = ((hash)>>PAF_CT_PRE)<<PAF_CT_PRE | idx;
+    kh_val(hh, key) = idx;
+    return absent;
+}
+
+
+
+typedef struct {
+    ma_hit_t_alloc *sources;
+    const ma_hit_t_alloc* reverse_sources; 
+    //paf_ht_t *paf_h;
+    paf_ct_v *paf_h_cis;
+    paf_ct_v *paf_h_trans;
+    double *dTs_trans;  // per-thread timer 
+    double *dTs_any;
+}hamt_cleanweakhit_t;
+static void hamt_clean_weak_ma_hit_t_worker(void *data, long jobID, int tID){  // Callback for kt_for
+    hamt_cleanweakhit_t *s = (hamt_cleanweakhit_t*) data;
+    uint32_t rID = jobID, qn, tn_weak, tn_strong, qs, qe;  
+    ma_hit_t_alloc *h = &s->sources[rID];
+    const ma_hit_t_alloc *hr;
+
+    double dT_trans = 0, dT_any = Get_T();
+    khint_t key;
+    uint64_t hash;
+    int absent;
+    for (uint32_t i=0; i<h->length; i++){
+        if (h->buffer[i].del) continue;
+        if (h->buffer[i].ml==0){  // is weak overlap
+            qn = Get_qn(h->buffer[i]);  // qn should be just rID
+            tn_weak = Get_tn(h->buffer[i]);
+            qs = Get_qs(h->buffer[i]);
+            qe = Get_qe(h->buffer[i]);
+            
+            // (`inline int check_weak_ma_hit`. 
+            // The following is need to be checked multiple times because we want to make
+            // sure that the strong overlap supporting the deletion should  
+            // explicitly come from implied other haplotype. This is doen by checking 
+            // if tn_strong -> tn_weak is a trans overlap. It is not required 
+            // that tn_strong -> tn_weak exists in the cis overlaps.)
+            //
+            // The check can't be reduced to a pre-built array, either do linear/binary search
+            // or make a hashtable.
+            int can_delete = 0, is_trans, idx;
+            int san_jj1=-1, san_jj2=-1, tn1=-1, tn2=-1;
+
+            for (int j=0; j<h->length; j++){
+                if (j==i) continue;
+                if (!h->buffer[j].del && 
+                    h->buffer[j].ml==1 &&  // is strong
+                    Get_qs(h->buffer[j]) <=qs && Get_qe(h->buffer[j])>=qe
+                   ){ 
+                    tn_strong = Get_tn(h->buffer[j]);
+                    int is_found = 0;
+                    double Ttmp = Get_T();
+
+//                    // method1: search
+//                    hr = &s->reverse_sources[tn_strong];
+//                    for (int jj=0; jj<hr->length; jj++){
+//                        if (hr->buffer[jj].del) continue;
+//                        if (Get_tn(hr->buffer[jj])==tn_weak){
+//                            is_found = 1;
+//                            san_jj1 = jj;
+//                            tn1 = tn_strong;
+//                            break;
+//                        }
+//                    } 
+                    // method2: hashtable
+                    //hash = ((uint64_t)tn_strong)<<32 | tn_weak;
+                    //key = paf_ht_get(s->paf_h, hash);
+                    idx = get_paf_index_ct(s->paf_h_trans, tn_strong, tn_weak);
+                    //if (key!=kh_end(s->paf_h) && (kh_val(s->paf_h, key)&1) ){
+                    if (idx!=-1){
+                        is_found = 1;
+                        //san_jj2 = (int)(kh_val(s->paf_h, key) >>1);
+                        san_jj2 = idx;
+                        tn2 = tn_strong;
+                    }
+
+                    dT_trans+=Get_T()-Ttmp;
+                    if (is_found){
+                        can_delete = 1;
+                        break;
+                    }
+                }
+            }
+//            if (san_jj1!=san_jj2){
+//                fprintf(stderr, "[dbg::%s] jj1 %d jj2 %d, qn %d tn_weak %d, "
+//                        "tn_strong1 %d tn_strong2 %d\n", 
+//                        __func__, san_jj1, san_jj2, qn, tn_weak, tn1, tn2);
+//            }
+
+            if (!can_delete) continue;
+
+            // now mark self overlap and the other way around
+            int sancheck = 0;
+//            hr = &s->sources[tn_weak];
+//            for (int j=0; j<hr->length; j++){
+//                if (Get_tn(hr->buffer[j])==qn) {
+//                    hr->buffer[j].bl = 0;
+//                    sancheck = 1;
+//                    break;
+//                }
+//            }
+            hash = ((uint64_t)tn_weak)<<32 | qn;
+            //key = paf_ht_get(s->paf_h, hash);
+            idx = get_paf_index_ct(s->paf_h_cis, tn_weak, qn);
+            //if (key!=kh_end(s->paf_h)){
+            if (idx!=-1){
+                //uint16_t jj = kh_val(s->paf_h, key);
+                uint16_t jj = (uint16_t)idx;
+                //if (!(jj&1)){
+                if (1/*!is_trans*/){
+                    //s->sources[tn_weak].buffer[jj>>1].bl = 0;  // last bit indicates cis/trans
+                    s->sources[tn_weak].buffer[idx].bl = 0;
+                    sancheck = 1;
+                }
+            }
+            if (!sancheck){
+                fprintf(stderr, "[E::%s] qn->tn exists but tn->qn not found or is trans?"
+                        "qn=%d tn=%d\n", 
+                        __func__, (int)qn, (int)tn_weak);
+                //exit(1);
+            }else{  // the other way around was fine, go delete self
+                h->buffer[i].bl = 0;
+            }
+        }
+
+    }
+    s->dTs_trans[tID] += dT_trans;
+    s->dTs_any[tID] += Get_T()-dT_any;
+}
+
+/**
+ * @func For each cis-overlap of each read, 
+ *        if it has at least one strong overlap and the target read of 
+ *        that strong overlap does not trans-overlap with the current target, 
+ *        mark-delete the current overlap.
+*/
+int hamt_clean_weak_ma_hit_t2(ma_hit_t_alloc* const sources, 
+                             ma_hit_t_alloc* const reverse_sources, 
+                             ma_sub_t *coverage_cut, 
+                             const long long n_reads,
+                             paf_ct_v *paf_h_cis, 
+                             paf_ct_v *paf_h_trans){
+    // threaded `clean_weak_ma_hit_t`
+    
+    int verbose = 0;
+    int n_treated;
+    int n_threads = asm_opt.thread_num;
+    uint32_t i, j, qn, tn;
+
+    double T = Get_T();
+    double T0 = T;
+
+    // collect indexing
+    //paf_ct_v *paf_h_cis = hamt_index_pafs_multithread(sources, 0, 
+    //        coverage_cut, n_reads, 2048, asm_opt.thread_num);
+    //paf_ct_v *paf_h_trans = hamt_index_pafs_multithread(0, reverse_sources, 
+    //        coverage_cut, n_reads, 2048, asm_opt.thread_num);
+    hamt_cleanweakhit_t data;
+    data.sources = sources;
+    data.reverse_sources = reverse_sources;
+    data.dTs_trans = (double*)calloc(n_threads, sizeof(double));
+    data.dTs_any = (double*)calloc(n_threads, sizeof(double));
+    data.paf_h_cis = paf_h_cis;
+    data.paf_h_trans = paf_h_trans;
+    kt_for(n_threads, hamt_clean_weak_ma_hit_t_worker, &data, n_reads);
+
+    double dT_trans=0, dT_any = 0;
+    for (int i=0; i<n_threads; i++){
+        dT_trans+=data.dTs_trans[i];
+        dT_any+=data.dTs_any[i];
+    }
+    free(data.dTs_trans);
+    free(data.dTs_any);
+    fprintf(stderr, "[T::%s] step 1 used %.2f s. (cpu time %f s, trans check used %f s)\n", 
+            __func__, Get_T()-T, dT_any, dT_trans);
+
+    T = Get_T();
+    // i think if we don't need to report n_treated, and that ha functions before 
+    // this function call do not have unrealized changes of .bl makrings, 
+    // the following block can be put inside the kt_for callback. 
+    n_treated = 0;
+    for (int i=0; i<n_reads; i++){
+        for (j=0; j<sources[i].length; j++){
+            if (sources[i].buffer[j].del) continue;
+            if (sources[i].buffer[j].bl==0){
+                sources[i].buffer[j].del = 1;
+                n_treated++;
+            }else{
+                sources[i].buffer[j].del = 0;
+            }
+        }
+    }
+    //destroy_paf_ct_v(paf_h);
+    fprintf(stderr, "[T::%s] step2 used %.2f s (should be short, otherwise read comments.\n", 
+            __func__, Get_T()-T);
+
+    fprintf(stderr, "[M::%s] treated %d, used %.2f s\n", __func__, 
+                n_treated, Get_T()-T0);
+    return n_treated;
+}
+
+
+typedef struct {
+    ma_hit_t_alloc *paf;
+    paf_ct_v *H;
+    uint64_t *cnt1, *cnt2;  // for sancheck
+}normalize_paf_s_t;
+
+static void hamt_normalize_paf_worker(void *data, long jobID, int tID){
+    normalize_paf_s_t *s = (normalize_paf_s_t*)data;
+    uint32_t rID = jobID, qn, tn;
+    uint32_t ql, ql_rev;
+    ma_hit_t_alloc *h = &s->paf[rID];
+    ma_hit_t *hh, *hh_rev;
+    int is_del;
+
+    uint64_t cnt1=0, cnt2 = 0;
+    for (uint32_t i=0; i<h->length; i++){
+        // (((ha doesn't require an unset .del of self here)))
+        if (h->buffer[i].del) continue;
+
+        hh = &h->buffer[i];
+        qn = Get_qn(*hh);
+        tn = Get_tn(*hh);
+
+        // does the opposite exist?
+        int j=get_paf_index_ct(s->H, tn, qn);
+        if (j<0) {
+            fprintf(stderr, "[E::%s] ovlp from the other way around not found."
+                    "Will be fatal for later functions, check code now\n", __func__);
+            exit(1);
+        }
+
+        is_del = 0;
+        hh = &h->buffer[i];
+        hh_rev = &s->paf[tn].buffer[j];
+        if (hh->del || hh_rev->del) is_del = 1;
+
+        ql =     Get_qe(*hh)     - Get_qs(*hh);
+        ql_rev = Get_qe(*hh_rev) - Get_qs(*hh_rev);
+
+        // always only update when qn<tn to avoid data race
+        if (qn<tn){
+            if (ql>=ql_rev){  // overwrite tn's
+                set_reverse_overlap(hh_rev, hh);
+                cnt1++;
+            }else{  // overwrite self(shorter)
+                set_reverse_overlap(hh, hh_rev);
+                cnt2++;
+            }
+        }
+        hh->del = is_del;
+        hh_rev->del = is_del;
+    }
+    s->cnt1[tID]+=cnt1;
+    s->cnt2[tID]+=cnt2;
+}
+
+
+
+typedef struct {
+    ma_hit_t_alloc *paf;
+    paf_ct_v *H;
+    vu64_t *qni;
+    uint64_t *cnt;
+}symmetrize_paf_s_t;
+
+static void hamt_symmetrize_paf_worker(void *data, long rID, int tID){
+    symmetrize_paf_s_t *s = (symmetrize_paf_s_t*)data;
+    ma_hit_t_alloc *h =  &s->paf[rID];
+    uint32_t qn=rID, tn;
+    int idx;
+    uint64_t tmp;
+    for (uint16_t i=0; i<h->length; i++){
+        tn = Get_tn(h->buffer[i]);
+        idx = get_paf_index_ct(s->H, tn, qn);
+        if (idx<0){
+            tmp = ((uint64_t)qn)<<32 | i;
+            kv_push(uint64_t, s->qni[tID], tmp);
+            s->cnt[tID]++;
+        }
+    }
+}
+static void hamt_symmetrize_by_del_paf_worker(void *data, long rID, int tID){
+    symmetrize_paf_s_t *s = (symmetrize_paf_s_t*)data;
+    ma_hit_t_alloc *h =  &s->paf[rID];
+    uint32_t qn=rID, tn;
+    int idx;
+    uint64_t tmp;
+    for (uint16_t i=0; i<h->length; i++){
+        tn = Get_tn(h->buffer[i]);
+        idx = get_paf_index_ct(s->H, tn, qn);
+        if (idx<0){
+            h->buffer[i].del = 1;
+            s->cnt[tID]++;
+        }
+    }
+}
+void hamt_symmetrize_paf_add_new_entry(ma_hit_t_alloc *paf, paf_ct_v *H, 
+                                        uint32_t qn, uint32_t qi){
+    ma_hit_t ele;
+    set_reverse_overlap(&ele, &paf[qn].buffer[qi]);
+    paf[qn].buffer[qi].del = 1;
+    ele.del = 1;
+    uint32_t tn = Get_qn(ele);
+    add_ma_hit_t_alloc(&paf[tn], &ele);
+    insert_paf_index_ct(H, tn, qn, paf[tn].length-1);
+}
+void hamt_symmetrize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads){
+    // Symmetrize uses weirdly lot of memory? Switching to mark single entries
+    // as deleted. (Was insert the counterpart then mark boths as deleted.)
+    double T0 = Get_T();
+    symmetrize_paf_s_t s;
+    s.paf = paf;
+    s.H = H;
+    s.qni = (vu64_t*)calloc(n_threads, sizeof(vu64_t));
+    s.cnt = (uint64_t*)calloc(n_threads, sizeof(uint64_t));
+    for (int i=0; i<n_threads; i++){
+        kv_init(s.qni[i]);
+        kv_resize(uint64_t, s.qni[i], 64);
+    }
+
+    // collect asym entries
+    kt_for(n_threads, hamt_symmetrize_by_del_paf_worker, &s, n_reads);
+    for (int i=0; i<n_threads; i++){s.cnt[0]+=s.cnt[i];}
+    fprintf(stderr, "[M::%s] step1, total %" PRIu64 " . used %.2f s\n",
+            __func__, s.cnt[0], Get_T()-T0);
+
+    //T0 = Get_T();
+    //for (int i=0; i<n_threads; i++){
+    //    radix_sort_ovhamt64(s.qni[i].a, s.qni[i].a+s.qni[i].n);
+    //}
+    //fprintf(stderr, "[M::%s] step1b, sorting used %.2f s (for cache efficiency, "
+    //        "maybe doesn't matter. remove if takes a long time)\n", 
+    //        __func__, Get_T()-T0);
+
+    //// create new entries and update hashtables
+    //T0 = Get_T();
+    //uint32_t qn, qi;
+    //for (int i=0; i<n_threads; i++){
+    //    for (int j=0; j<s.qni[i].n; j++){
+    //        qn = s.qni[i].a[j]>>32;
+    //        qi = (uint32_t)s.qni[i].a[j];
+    //        hamt_symmetrize_paf_add_new_entry(paf, H, qn, qi);
+    //    }
+    //}
+    //fprintf(stderr, "[M::%s] step2, used %.2f s\n", __func__, Get_T()-T0);
+
+
+    for (int i=0; i<n_threads; i++){
+        kv_destroy(s.qni[i]);
+    }
+    free(s.qni);
+    free(s.cnt);
+}
+
+void hamt_normalize_paf(ma_hit_t_alloc *paf, paf_ct_v *H, long long n_reads, int n_threads){
+    // Rewrite hamt_normalize_ma_hit_t_single_side_advance
+    // Use paf indexing.
+    // Different from ha's function: the lack of counterpart ovlp should be
+    //  already accounted for before calling this function. The ha's function
+    //  does that and the normalization at the same time. This might lead to 
+    //  minor differences? (not sure)
+
+    double T0 = Get_T();    
+    int verbose = 0;
+
+    normalize_paf_s_t s;
+    s.paf = paf;
+    s.H = H;
+    s.cnt1 = (uint64_t*)calloc(n_threads, sizeof(uint64_t));
+    s.cnt2 = (uint64_t*)calloc(n_threads, sizeof(uint64_t));
+
+    kt_for(n_threads, hamt_normalize_paf_worker, &s, n_reads);
+    for (int i=1; i<n_threads; i++){
+        s.cnt1[0] += s.cnt1[i];
+        s.cnt2[0] += s.cnt2[i];
+    }
+    fprintf(stderr, "[M::%s] type1 %" PRIu64 ", type2 %" PRIu64 ", used %.2f s\n", 
+            __func__, s.cnt1[0], s.cnt2[0], Get_T()-T0);
+    free(s.cnt1);
+    free(s.cnt2);
+}
+

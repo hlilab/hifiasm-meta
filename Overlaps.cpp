@@ -1625,14 +1625,33 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
     ma_sub_t *sq = NULL;
     ma_sub_t *st = NULL;
 
+    //int dbgprint, dbgprint2;
 
     for (i = 0; i < n_read; ++i) 
     {
+        //dbgprint = (i==38032)  || (i==67310) || (i==120968);
+        //if (dbgprint) {
+        //    fprintf(stderr, "[dbg::%s] saw rID qn=%d, printing all targets:\n", 
+        //            __func__, (int)i);
+        //    for (j=0; j<sources[i].length; j++){
+        //        uint32_t tmptn = Get_tn(sources[i].buffer[j]);
+        //        fprintf(stderr, "[dbg::%s] tn %d covcutdel %d strong %d el %d ovlpdel %d\n", __func__, 
+        //            (int)tmptn, (int)coverage_cut[tmptn].del, 
+        //            (int)sources[i].buffer[j].ml, 
+        //            (int)sources[i].buffer[j].el,
+        //            (int)sources[i].buffer[j].del);
+        //    }
+        //}
         if(coverage_cut[i].del) continue;
 
         for (j = 0; j < (long long)sources[i].length; j++)
         {
             h = &(sources[i].buffer[j]);
+            uint32_t tn = Get_tn(*h);
+            //dbgprint2 = (tn==38032)  || (tn==67310) || (tn==120968);
+            //if (dbgprint||dbgprint2) fprintf(stderr, "[dbg::%s]   ckpt1 j=%d qn=%d tn=%d\n", __func__,
+            //                    (int)j, (int)i, (int)Get_tn(*h));
+
             //check the corresponding two reads 
 		    sq = &(coverage_cut[Get_qn(*h)]);
             st = &(coverage_cut[Get_tn(*h)]);
@@ -1641,14 +1660,10 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
             if(h->del) continue;
             /****************************may have trio bugs********************************/
             r = ma_hit2arc(h, sq->e - sq->s, st->e - st->s, max_hang, asm_opt.max_hang_rate, min_ovlp, &t);
+            //if (dbgprint || dbgprint2) fprintf(stderr, "[dbg::%s]   ckpt2, r=%d\n", __func__, (int)r);
             ///r could not be MA_HT_SHORT_OVLP or MA_HT_INT
             if (r == MA_HT_QCONT) 
             {
-                if (verbose){
-                    fprintf(stderr, "[debug::%s] query contained: %.*s - %.*s\n", __func__,
-                            (int)Get_NAME_LENGTH(R_INF, h->qns>>32), Get_NAME(R_INF, h->qns>>32),
-                            (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn));
-                }
                 h->del = 1;
                 delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
         
@@ -1656,43 +1671,25 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
                 set_R_to_U(ruIndex, Get_qn(*h), Get_tn(*h), 0);
 
                 ret0++;
+                //if (dbgprint || dbgprint2)fprintf(stderr, "[dbg::%s] QCONT qn %d tn %d\n", __func__, 
+                //        (int)Get_qn(*h), (int)Get_tn(*h));
 
-                // if(delete_all_edges_carefully(sources, coverage_cut, max_hang, min_ovlp, 
-                // Get_qn(*h))==0)
-                // {
-                //     set_R_to_U(ruIndex, Get_qn(*h), Get_tn(*h), 0);
-                // }
-                // sq->del = 1;
-                // set_R_to_U(ruIndex, Get_qn(*h), Get_tn(*h), 0);
             }
 		    else if (r == MA_HT_TCONT) 
             {
-                if (verbose){
-                    fprintf(stderr, "[debug::%s] target contained: %.*s - %.*s\n", __func__,
-                            (int)Get_NAME_LENGTH(R_INF, h->qns>>32), Get_NAME(R_INF, h->qns>>32),
-                            (int)Get_NAME_LENGTH(R_INF, h->tn), Get_NAME(R_INF, h->tn));
-                }
                 h->del = 1;
                 delete_single_edge(sources, coverage_cut, Get_tn(*h), Get_qn(*h));
 
                 delete_all_edges(sources, coverage_cut, Get_tn(*h));
                 set_R_to_U(ruIndex, Get_tn(*h), Get_qn(*h), 0);
 
-                ret0++;
-
-                // if(delete_all_edges_carefully(sources, coverage_cut, max_hang, 
-                // min_ovlp, Get_tn(*h)) == 0)
-                // {
-                //     set_R_to_U(ruIndex, Get_tn(*h), Get_qn(*h), 0);
-                //     no_fully_tn_num++;
-                // }
-                // st->del = 1;
-                // set_R_to_U(ruIndex, Get_tn(*h), Get_qn(*h), 0);
+                //if (dbgprint || dbgprint2) fprintf(stderr, "[dbg::%s] TCONT qn %d tn %d\n", __func__, 
+                //        (int)Get_qn(*h), (int)Get_tn(*h));
             }
         }
     }
 
-    fprintf(stderr, "[debug::%s] ret0: %d, used %.2f s\n", __func__, ret0, Get_T()-startTime);
+    fprintf(stderr, "[debug::%s] # QCONT: %d, used %.2f s\n", __func__, ret0, Get_T()-startTime);
 
     transfor_R_to_U(ruIndex);
 
@@ -1719,6 +1716,7 @@ R_to_U* ruIndex, int max_hang, int min_ovlp)
         ///if sources[i].length == 0, that means all overlapped reads with read i are the contained reads
         if(m == 0)
         {
+            fprintf(stderr, "[dbg::%s] del %d\n", __func__, (int)i);
             ret++;
             coverage_cut[i].del = 1;
         }
@@ -3262,20 +3260,7 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     //     Note that this doesn't need the region to be very low coverage overally,
     //        and the above plot is a real case - there's only 2 phasing variants.
     // NOTE
-    //     Doesn't use v1's criteria at all.
-    // IMPLEMENTATION NOTE
-    //     Ideally it's clearer if we can get the locations of the phasing variants.
-    //     However this info only existed in ovec stage with no absolute coordiantes.
-    //     Alternatively, here we check all intra-haplotype targets of readC,
-    //       and if ANY of them is not of the same hap comparing to ALL of the readC's parents, 
-    //       readC will be protected from containment collapsing.
-    // IMPLEMENTATION potential BUG / TODO
-    //     If we are *extremely* unlucky, say, C is very short, C's non-containment targets
-    //       are also very short comparing to the C's parents. Then we might not be able to 
-    //       realize haplotypeD by checking C's immediate targets. 
-    //     We *might* be able to mitigate this by checking 2nd level neighbours, but it's still arbitrary,
-    //       and implies that we expect a narrow length distribution from hifi reads.
-    //       Need a real example to improve this.
+    //     If coverage is apparently sufficient, this can be harmful.
     // FUNC
     //     Drop arcs to protect certain shorter reads from being considered as contained.
     //     This function won't touch the reads. Only arcs.
@@ -3298,6 +3283,7 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
     // early termination
     if (coverage_cut[i_r].del) {return;}
     if (R_INF.mask_readnorm[i_r] & 1){return;}
+    if (sources[i_r].length>10) {return;}
     
     // aux
     ma_hit_t_alloc *h = &sources[i_r];
@@ -4075,7 +4061,27 @@ int max_hang, int min_ovlp)
 		    }
             else
             {
-                fprintf(stderr, "error\n");
+                fprintf(stderr, "[E::%s]error, dangling bad overlap. r is %d , ql %d tl %d\n", 
+                        __func__, r, ql, tl);
+                ma_hit_t *h_san=0;
+                uint32_t tn = Get_tn(*h);
+                uint32_t qn = Get_qn(*h);
+                for (int jj=0; jj<sources[tn].length; jj++){
+                    if (Get_tn(sources[tn].buffer[jj])==qn) {
+                        h_san = &sources[tn].buffer[jj];
+                        break;
+                    }
+                }
+                if (!h_san){
+                    fprintf(stderr, "sancheck: self is %d, target %d, the other way around is not found!\n", 
+                            (int)qn, (int)tn);
+                }else{
+                    fprintf(stderr, "(sancheck: self is %d, target %d, r of the other way around is %d , self coverage cut del=%d, opposite covcut del=%d)\n", 
+                        (int)qn, (int)tn, 
+                        ma_hit2arc(h_san, tl, ql, max_hang, asm_opt.max_hang_rate, min_ovlp, &t),
+                        (int)coverage_cut[Get_qn(*h)].del, (int)coverage_cut[Get_tn(*h)].del
+                       );
+                }
             }
         }
     }
@@ -4943,7 +4949,7 @@ uint32_t startNode, uint32_t endNode, int max_dist, buf_t* bub)
         uint32_t nw = asg_arc_n(g, w);
         if(nw != 2)
         {
-            fprintf(stderr, "error\n");
+            fprintf(stderr, "[E::%s]error\n", __func__);
         }
         NodeLen_second[0] = NodeLen_second[1] = NodeLen_second[2] = -1;
         if(asg_is_single_edge(g, aw[0].v, w>>1) <= 2 && asg_is_single_edge(g, aw[1].v, w>>1) <= 2)
@@ -5184,7 +5190,7 @@ uint32_t addition_node_length)
         av = asg_arc_a(g, v);
         if(nv!=2 || nw != 2)
         {
-            fprintf(stderr, "error\n");
+            fprintf(stderr, "[E::%s]error\n", __func__);
         }
 
         if(!if_node_exist(nodes, length, (v>>1)))
@@ -5838,7 +5844,7 @@ long long* vLen, long long* wLen, uint32_t* endNode)
                 }
                 else
                 {
-                    fprintf(stderr, "error\n");
+                    fprintf(stderr, "[E::%s]error\n", __func__);
                 }
                 ///(*endNode) = vv>>1;
                 (*endNode) = vv;
@@ -5884,7 +5890,7 @@ long long* vLen, long long* wLen, uint32_t* endNode)
                 }
                 else
                 {
-                    fprintf(stderr, "error\n");
+                    fprintf(stderr, "[E::%s]error\n", __func__);
                 }
 
                 //(*endNode) = ww>>1;
@@ -6030,7 +6036,7 @@ uint32_t startNode, uint32_t endNode)
                }
                else
                {
-                   fprintf(stderr, "error\n");
+                   fprintf(stderr, "[E::%s]error\n", __func__);
                }
                
            }
@@ -6317,7 +6323,7 @@ int test_cross(asg_t *g, uint32_t* nodes, uint32_t length,
         }
         else
         {
-            fprintf(stderr, "ERROR at %s:%d\n", __FILE__, __LINE__);
+            fprintf(stderr, "[E::%s]ERROR at %s:%d\n", __func__, __FILE__, __LINE__);
         }
         
         if(asg_arc_a(g, N_list[2])[0].v == (N_list[0]^1))
@@ -6330,7 +6336,7 @@ int test_cross(asg_t *g, uint32_t* nodes, uint32_t length,
         }
         else
         {
-            fprintf(stderr, "ERROR at %s:%d\n", __FILE__, __LINE__);
+            fprintf(stderr, "[E::%s]ERROR at %s:%d\n", __func__, __FILE__, __LINE__);
         }
 
         if(N_list[3] != N_list[4])
@@ -10943,7 +10949,7 @@ ma_sub_t *coverage_cut, kvec_asg_arc_t_warp* edge, int max_hang, int min_ovlp)
                 l = asg_arc_len(t_f);
             }
         }
-        if(l == (uint32_t)-1) fprintf(stderr, "ERROR\n");
+        if(l == (uint32_t)-1) fprintf(stderr, "[E::%s]ERROR\n", __func__);
         /*******************************for debug************************************/
 
 
@@ -11005,7 +11011,7 @@ ma_sub_t *coverage_cut, kvec_asg_arc_t_warp* edge, int max_hang, int min_ovlp)
                     l = asg_arc_len(t_f);
                 }
             }
-            if(l == (uint32_t)-1) fprintf(stderr, "ERROR\n");
+            if(l == (uint32_t)-1) fprintf(stderr, "[E::%s]ERROR\n", __func__);
             /*******************************for debug************************************/
 
 
@@ -11085,7 +11091,7 @@ ma_sub_t *coverage_cut, kvec_asg_arc_t_warp* edge, int max_hang, int min_ovlp)
                 }
             }
 
-            if(k == edge->a.n) fprintf(stderr, "ERROR\n");
+            if(k == edge->a.n) fprintf(stderr, "[E::%s]ERROR 1\n", __func__);
         } 
 
         av = asg_arc_a(read_g, v);
@@ -11111,7 +11117,7 @@ ma_sub_t *coverage_cut, kvec_asg_arc_t_warp* edge, int max_hang, int min_ovlp)
                     break;
                 }
             }
-            if(k == edge->a.n) fprintf(stderr, "ERROR\n");
+            if(k == edge->a.n) fprintf(stderr, "[E::%s]ERROR 2\n", __func__);
         }
 
         if(pE->el == 1 && aE->el == 1) continue;
@@ -11190,7 +11196,7 @@ uint32_t src, uint32_t dest_idx)
     return (uint32_t)-1;
 }
 
-void get_specific_edge(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
+int get_specific_edge(ma_hit_t_alloc* sources, ma_sub_t *coverage_cut, 
 R_to_U* ruIndex, kvec_asg_arc_t_warp* edge, asg_t* read_g, int max_hang, 
 int min_ovlp, uint32_t query, uint32_t target, asg_arc_t* t)
 {
@@ -11230,9 +11236,12 @@ int min_ovlp, uint32_t query, uint32_t target, asg_arc_t* t)
                 break;
             }
         }
-        if(k == edge->a.n) fprintf(stderr, "sbsbsbsbsbsbERROR\n");
+        if(k == edge->a.n){
+            return -1;
+            //fprintf(stderr, "[E::%s] thing missing when shouldn't\n", __func__);
+        } 
     }
-
+    return 0;
 }
 
 uint32_t polish_unitig(ma_utg_t* collection, asg_t* read_g, ma_hit_t_alloc* sources, 
@@ -11253,10 +11262,12 @@ ma_sub_t *coverage_cut, kvec_asg_arc_t_warp* edge, int max_hang, int min_ovlp)
         v = (uint64_t)(collection->a[i])>>32;
         afte = (uint64_t)(collection->a[i+1])>>32;
 
-        get_specific_edge(sources, coverage_cut, NULL, edge, pre_i == i-1? read_g:NULL, max_hang, min_ovlp, 
+        int san = get_specific_edge(sources, coverage_cut, NULL, edge, pre_i == i-1? read_g:NULL, max_hang, min_ovlp, 
         v^1, pre^1, &pE);
-        get_specific_edge(sources, coverage_cut, NULL, edge, read_g, max_hang, min_ovlp, 
+        if (san<0) continue;
+        san = get_specific_edge(sources, coverage_cut, NULL, edge, read_g, max_hang, min_ovlp, 
         v, afte, &aE);
+        if (san<0) continue;
         
         if(pE.el == 1 && aE.el == 1)
         {
@@ -12121,6 +12132,11 @@ void clean_weak_ma_hit_t(ma_hit_t_alloc* sources, ma_hit_t_alloc* reverse_source
             //if this is a weak overlap
             if(sources[i].buffer[j].ml == 0)  // is weak
             {   
+                // if the current overlap of the self read is weak,
+                // and we can find any strong overlap (whose target DOES have 
+                // trans-overlap with the current ovlp's target)
+                // for the self read, 
+                // mark the current ovlp and mark-delete it in the next top code block.
                 placeholder1 = check_weak_ma_hit(&(sources[qn]), reverse_sources, tn, 
                                                  Get_qs(sources[i].buffer[j]), Get_qe(sources[i].buffer[j]));
                 if(!placeholder1
@@ -17648,7 +17664,7 @@ long long min_edge_length, ma_hit_t_alloc* reverse_sources, R_to_U* ruIndex)
     uint32_t nw = asg_arc_n(g, w);
     if(nw != 2)
     {
-        fprintf(stderr, "error\n");
+        fprintf(stderr, "[E::%s]error\n", __func__);
     }
     NodeLen_second[0] = NodeLen_second[1] = NodeLen_second[2] = -1;
     if(asg_is_single_edge(g, aw[0].v, w>>1) <= 2 && asg_is_single_edge(g, aw[1].v, w>>1) <= 2)
@@ -21125,7 +21141,7 @@ void debug_visit_flag(uint8_t* visit, uint32_t contigNum)
     uint32_t k;
     for (k = 0; k < contigNum; k++)
     {
-        if(visit[k] != 0) fprintf(stderr, "ERROR visit\n");
+        if(visit[k] != 0) fprintf(stderr, "[E::%s]ERROR visit\n", __func__);
     }
 }
 
@@ -21174,7 +21190,8 @@ buf_t* b_0, uint32_t cId)
     }
 
 
-    if(x_vecs->a.n != xLen) fprintf(stderr, "ERROR: different length\n");
+
+    if(x_vecs->a.n != xLen) fprintf(stderr, "[E::%s]ERROR: different length\n", __func__);
     return xLen;
 }
 
@@ -21210,7 +21227,7 @@ inline uint32_t check_duplicate(Hap_Align_warp* u_buffer, uint32_t x_pos, uint32
         } 
     }
 
-    if(x_pos == (uint32_t)-1) fprintf(stderr, "ERROR: cannot found y\n");
+    if(x_pos == (uint32_t)-1) fprintf(stderr, "[E::%s]ERROR: cannot found y\n", __func__);
     
     return 0;
 }
@@ -23973,7 +23990,7 @@ void debug_utg_graph(ma_ug_t *ug, asg_t* read_g, int require_equal_nv, int test_
                 }
             }
             if(k == nv) fprintf(stderr ,"******error, j: %u, k: %u, nv: %u\n", j, k, nv);
-            if(l != (uint32_t)(result->a[j])) fprintf(stderr ,"ERROR Length\n");
+            if(l != (uint32_t)(result->a[j])) fprintf(stderr ,"[E::%s]ERROR Length\n", __func__);
             totalLen = totalLen + l;
         }
 
@@ -23988,7 +24005,7 @@ void debug_utg_graph(ma_ug_t *ug, asg_t* read_g, int require_equal_nv, int test_
 
         if(totalLen != result->len)
         {
-            fprintf(stderr ,"ERROR Total Length, i: %u\n", i);
+            fprintf(stderr ,"[E::%s] ERROR Total Length, i: %u\n", __func__, i);
         } 
                 
 
@@ -24262,7 +24279,7 @@ void merge_ug_nodes(ma_ug_t *ug, asg_t* read_g, kvec_t_u64_warp* array)
             if(aw[i].del) continue;
             if(aw[i].v == (v^1)) break;
         }
-        if(i == nw) fprintf(stderr, "ERROR at %s:%d\n", __FILE__, __LINE__);
+        if(i == nw) fprintf(stderr, "[E::%s] ERROR at %s:%d\n", __func__, __FILE__, __LINE__);
         kmp = kmp | (uint64_t)(aw[i].ol);
 
 
@@ -24293,7 +24310,7 @@ void merge_ug_nodes(ma_ug_t *ug, asg_t* read_g, kvec_t_u64_warp* array)
             if(aw[i].del) continue;
             if(aw[i].v == (v^1)) break;
         }
-        if(i == nw) fprintf(stderr, "ERROR at %s:%d\n", __FILE__, __LINE__);
+        if(i == nw) fprintf(stderr, "[E::%s] ERROR at %s:%d\n", __func__, __FILE__, __LINE__);
         kmp = kmp | (uint64_t)(aw[i].ol);
 
 
@@ -24958,7 +24975,7 @@ asg_t *copy_graph(asg_t* src, int round)
         
         if(src->seq[v>>1].del != rg->seq[v>>1].del)
         {
-            fprintf(stderr, "ERROR1\n");
+            fprintf(stderr, "[E::%s]ERROR1\n", __func__);
         }
 
         uint32_t nv = asg_arc_n(src, v);
@@ -24966,7 +24983,7 @@ asg_t *copy_graph(asg_t* src, int round)
         ///if(nv != rnv)
         if(get_real_length(src, v, NULL) != get_real_length(rg, v, NULL))
         {
-            fprintf(stderr, "ERROR2\n");
+            fprintf(stderr, "[E::%s]ERROR2\n", __func__);
         }
 
         for (i = 0; i < nv; i++)
@@ -24976,14 +24993,14 @@ asg_t *copy_graph(asg_t* src, int round)
             memset(&backward, 0, sizeof(backward));
             if(get_arc(rg, (forward.ul>>32), forward.v, &backward)!=1)
             {
-                fprintf(stderr, "ERROR3\n");
+                fprintf(stderr, "[E::%s]ERROR3\n", __func__);
             }
 
             if(forward.del != backward.del || forward.el != backward.el || 
                forward.no_l_indel != backward.no_l_indel || forward.ol != backward.ol ||
                forward.strong != backward.strong || forward.ul != backward.ul || forward.v != backward.v)
             {
-                fprintf(stderr, "ERROR4\n");
+                fprintf(stderr, "[E::%s]ERROR4\n", __func__);
                 fprintf(stderr, "forward, del: %u, el: %u, no_l_indel: %u, ol: %u, strong: %u, ul: %u, v: %u\n",
                 (uint32_t)forward.del, (uint32_t)forward.el, (uint32_t)forward.no_l_indel, 
                 (uint32_t)forward.ol, (uint32_t)forward.strong,
@@ -25005,14 +25022,14 @@ asg_t *copy_graph(asg_t* src, int round)
             memset(&backward, 0, sizeof(backward));
             if(get_arc(src, (forward.ul>>32), forward.v, &backward)!=1)
             {
-                fprintf(stderr, "ERROR5\n");
+                fprintf(stderr, "[E::%s]ERROR5\n", __func__);
             }
 
             if(forward.del != backward.del || forward.el != backward.el || 
                forward.no_l_indel != backward.no_l_indel || forward.ol != backward.ol ||
                forward.strong != backward.strong || forward.ul != backward.ul || forward.v != backward.v)
             {
-                fprintf(stderr, "ERROR6\n");
+                fprintf(stderr, "[E::%s]ERROR6\n", __func__);
             }
         }
         
@@ -25346,21 +25363,32 @@ char* output_file_name, long long n_read, ma_hit_t_alloc* reverse_sources, R_to_
     return 1;
 }
 int hamt_load_debug_graph(asg_t** sg, ma_hit_t_alloc** sources, ma_sub_t** coverage_cut, 
-char* output_file_name, ma_hit_t_alloc** reverse_sources, R_to_U* ruIndex, long long total_reads)
+                          char* output_file_name, 
+                          ma_hit_t_alloc** reverse_sources, 
+                          R_to_U* ruIndex, long long total_reads)
 {
-    // (companion monky patch of the function above)
     FILE* fp = NULL;
     char* gfa_name = (char*)malloc(strlen(output_file_name)+55);
+
     sprintf(gfa_name, "%s.all.probe.source.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.reverse.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.coverage_cut.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.ruIndex.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
+
     sprintf(gfa_name, "%s.all.probe.asg_t.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {fprintf(stderr, "[W::%s] do not have %s\n", __func__, gfa_name);free(gfa_name); return 0;}
+    fclose(fp);
 
     if((*sources)!=NULL) destory_ma_hit_t_alloc((*sources), total_reads);
     if((*reverse_sources)!=NULL) destory_ma_hit_t_alloc((*reverse_sources), total_reads);
@@ -25413,14 +25441,19 @@ char* output_file_name, ma_hit_t_alloc** reverse_sources, R_to_U* ruIndex, long 
     char* gfa_name = (char*)malloc(strlen(output_file_name)+55);
     sprintf(gfa_name, "%s.all.debug.source.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.reverse.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.coverage_cut.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.ruIndex.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
     sprintf(gfa_name, "%s.all.debug.asg_t.bin", output_file_name);
     fp = fopen(gfa_name, "r"); if(!fp) {free(gfa_name); return 0;}
+    fclose(fp);
 
 
     if((*sources)!=NULL)
@@ -26377,7 +26410,7 @@ void set_R_to_U(R_to_U* x, uint32_t rID, uint32_t uID, uint32_t is_Unitig)
         x->len = rID + 1;
 	}
 
-	x->index[rID] = uID & (uint32_t)(0x7fffffff);
+	x->index[rID] = uID & (uint32_t)(0x7fffffff);  // 31bit mask
 	x->index[rID] = x->index[rID] | (uint32_t)(is_Unitig<<31);
 }
 
@@ -26397,33 +26430,56 @@ void get_R_to_U(R_to_U* x, uint32_t rID, uint32_t* uID, uint32_t* is_Unitig)
 
 void transfor_R_to_U(R_to_U* x)
 {
+    // Update index for all reads, such that 
+    // contained reads or alike will have index value
+    // pointing to the "longest" parent read.
+    // For example, in a nested containment A->B->C 
+    // where A is the longest, initial R_to_U might be 
+    // B=>A and C=>B. After update, R_to_U should record
+    // B=>A and C=>A.
     uint64_t i = 0;
     uint32_t rID, uID, is_Unitig;
+    vu32_t san; kv_init(san); kv_resize(uint32_t, san, 16);
     for (i = 0; i < x->len; i++)
     {
-        // fprintf(stderr, "    at i %d\n", (int)i); fflush(stderr);
+        san.n = 0;
         rID = i;
         get_R_to_U(x, rID, &uID, &is_Unitig);
-        // fprintf(stderr, "        rID %" PRIu32 " uID %" PRIu32" \n", rID, uID); fflush(stderr);
-        // fprintf(stderr, "        index uID %" PRIu32" \n", x->index[rID]); fflush(stderr);
         if(uID == (uint32_t)-1) continue;
         if(is_Unitig == 1) continue;
 
 
         ///here i/rID is contained in uID
+        kv_push(uint32_t, san, rID&0x7fffffff);
+        kv_push(uint32_t, san, uID&0x7fffffff);
         rID = uID;
         while (1)
         {
             get_R_to_U(x, rID, &uID, &is_Unitig);
-            // fprintf(stderr, "        rID %" PRIu32 " uID %" PRIu32" \n", rID, uID); fflush(stderr);
-            // fprintf(stderr, "        index uID %" PRIu32" \n", x->index[rID]); fflush(stderr);
             if(uID == (uint32_t)-1) break;
             if(is_Unitig == 1) break;
+
+            int is_bad = 0;
+            for (int j=0; j<san.n; j++){
+                if ((uID&0x7fffffff)==san.a[j]){
+                    fprintf(stderr, "[E::%s] bad trial of indexing, current uID is %d. dump:\n", 
+                            __func__, (int)(uID&0x7fffffff));
+                    is_bad = 1;
+                }
+            }
+            if (is_bad){
+                for (int j=0; j<san.n; j++)
+                    {fprintf(stderr, "rID %d\n", (int)(san.a[j]));}
+                break;
+            }
+            kv_push(uint32_t, san, uID&0x7fffffff);
+
             rID = uID;
         }
 
         set_R_to_U(x, i, rID, 0);
     }
+    kv_destroy(san);
 
 
     /**
@@ -28238,7 +28294,7 @@ uint32_t is_bubble_check, uint32_t is_primary_check)
                             kv_push(asg_arc_t, recover_edges.a, av[k]);
                             if(asg_get_arc(r_g, av[k].v^1, av[k].ul>>32^1, &t)==0)
                             {
-                                fprintf(stderr, "error\n");
+                                fprintf(stderr, "[E::%s]error\n", __func__);
                             } 
                             kv_push(asg_arc_t, recover_edges.a, t);
                         }
@@ -28252,7 +28308,7 @@ uint32_t is_bubble_check, uint32_t is_primary_check)
                             kv_push(asg_arc_t, recover_edges.a, av[k]);
                             if(asg_get_arc(r_g, av[k].v^1, av[k].ul>>32^1, &t)==0)
                             {
-                                fprintf(stderr, "error\n");
+                                fprintf(stderr, "[E::%s]error\n", __func__);
                             } 
                             kv_push(asg_arc_t, recover_edges.a, t);
                         }
@@ -29807,7 +29863,7 @@ int max_hang, int min_ovlp)
             index = get_specific_overlap(&(sources[tn]), tn, qn);
             if(index == -1)
             {
-                fprintf(stderr, "ERROR 0: qn: %u, tn: %u\n", qn, tn);
+                fprintf(stderr, "[E::%s]ERROR 0: qn: %u, tn: %u\n", __func__, qn, tn );
                 continue;
             } 
 
@@ -29815,7 +29871,7 @@ int max_hang, int min_ovlp)
 
             if(sources[i].buffer[j].del != sources[tn].buffer[index].del)
             {
-                fprintf(stderr, "ERROR 2: qn: %u, tn: %u\n", qn, tn);
+                fprintf(stderr, "[E::%s]ERROR 2: qn: %u, tn: %u\n", __func__, qn, tn);
             }
 
             h = &(sources[i].buffer[j]);
@@ -29832,8 +29888,8 @@ int max_hang, int min_ovlp)
                                 asm_opt.max_hang_rate, min_ovlp, &t_1);
             t_0.ul=t_0.v=t_1.ul=t_1.v = 0;
             if(r_0 < 0 && r_1 < 0) continue;
-            if((t_0.ul>>32) != (t_1.v^1)) fprintf(stderr, "ERROR 3: qn: %u, tn: %u\n", qn, tn);
-            if((t_1.ul>>32) != (t_0.v^1)) fprintf(stderr, "ERROR 4: qn: %u, tn: %u\n", qn, tn);
+            if((t_0.ul>>32) != (t_1.v^1)) fprintf(stderr, "[E::%s]ERROR 3: qn: %u, tn: %u\n", __func__, qn, tn);
+            if((t_1.ul>>32) != (t_0.v^1)) fprintf(stderr, "[E::%s]ERROR 4: qn: %u, tn: %u\n", __func__, qn, tn);
         }
     }
 
@@ -29896,17 +29952,14 @@ KRADIX_SORT_INIT(pafbuffer_sort_qns, ma_hit_t, mahit_qns_key, member_size(ma_hit
 typedef struct{
     long long n_read;
     ma_hit_t_alloc *x;
-    int is_ignore_breakeven;
 }pafbuffer_sort_qns_aux_t;
 static void sort_paf_buffers_by_qns_worker(void *data, long i_read, int tid){  // callback for kt_for
     pafbuffer_sort_qns_aux_t *aux = (pafbuffer_sort_qns_aux_t*)data;
     uint32_t buf_l = aux->x[i_read].length;
-    if (aux->is_ignore_breakeven && buf_l<LINEAR_BF_BREAKEVEN_POINT) return;  //  linear search was used, order is fine
-
     ma_hit_t *buf = aux->x[i_read].buffer;
     radix_sort_pafbuffer_sort_qns(buf, buf+buf_l);
 }
-void sort_paf_buffers_by_qns(ma_hit_t_alloc *source, long long n_read, int is_ignore_breakeven_threshold){
+void sort_paf_buffers_by_qns(ma_hit_t_alloc *source, long long n_read){
     // FUNC
     //     Used to restore the ordering (key is qns) after binary search.
     double startTime = Get_T();
@@ -29914,7 +29967,6 @@ void sort_paf_buffers_by_qns(ma_hit_t_alloc *source, long long n_read, int is_ig
     pafbuffer_sort_qns_aux_t aux;
     aux.x = source;
     aux.n_read = n_read;
-    aux.is_ignore_breakeven = is_ignore_breakeven_threshold;
     kt_for(n_cpu, sort_paf_buffers_by_qns_worker, &aux, n_read);
 }
 
@@ -30167,47 +30219,88 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 	asg_t *sg = *sg_ptr;
     ma_ug_t *hamt_ug = 0;
     int simplereport[5];
+    int acc;
+    int cleanID = 0;
+    vu32_t *long_tigs_in_resuce;
+    double T0;
+
+    paf_ct_v *pafidx_cis, *pafidx_trans;
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+
     // extra rescues and others
     if (asm_opt.is_mode_low_cov){
         hamt_smash_haplotype(sources, reverse_sources, n_read);
     }
 
     if (debug_g && (asm_opt.do_probe_gfa==1)) {
-        fprintf(stderr, "[M::%s] go to probe gfa\n", __func__);
+        fprintf(stderr, "[M::%s] jump to proble dbg gfa\n", __func__);
         goto probe;
     }
     if(debug_g && !asm_opt.write_new_graph_bins) goto debug_gfa;
     fprintf(stderr, "[M::%s] no debug gfa\n", __func__);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
     renew_graph_init(sources, reverse_sources, sg, coverage_cut, ruIndex, n_read);
     reset_paf_buffers_sorting_marks_targetID(sources, n_read);
     reset_paf_buffers_sorting_marks_targetID(reverse_sources, n_read);
 
-    asm_opt.get_specific_overlap_is_use_bf = 1; 
-    sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
-    hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
-    
-    memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
+    // generate a indexing for pafs, in order to avoid get_specific_overlap calls
+    T0 = Get_T();
+    pafidx_cis = hamt_index_pafs_multithread(sources, 0, coverage_cut, n_read, 
+                                            2048, asm_opt.thread_num) ;
+    pafidx_trans = hamt_index_pafs_multithread(0, reverse_sources, coverage_cut, n_read, 
+                                            2048, asm_opt.thread_num) ;
+    fprintf(stderr, "[M::%s] generated paf index, used %.2f s\n", __func__, Get_T()-T0);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+
+    T0 = Get_T();
+    hamt_symmetrize_paf(sources, pafidx_cis, n_read, asm_opt.thread_num);
+    hamt_symmetrize_paf(reverse_sources, pafidx_trans, n_read, asm_opt.thread_num);
+    fprintf(stderr, "[M::%s] symmetrize used %.2f s total.\n", __func__, Get_T()-T0);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
     asm_opt.get_specific_overlap_is_use_bf = 0; 
-    sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // hamt_clean_weak_ma_hit_t(sources, reverse_sources, n_read);  // threaded
+    //sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
+    //hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
+    //hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
+    hamt_normalize_paf(sources, pafidx_cis, n_read, asm_opt.thread_num);
+    hamt_normalize_paf(reverse_sources, pafidx_trans, n_read, asm_opt.thread_num);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+
+    memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));
+
+
+
+
+
+    hamt_clean_weak_ma_hit_t2(sources, reverse_sources, coverage_cut, n_read, 
+            pafidx_cis, pafidx_trans);  
     ma_hit_sub(min_dp, sources, n_read, readLen, mini_overlap_length, &coverage_cut);
-    
-    asm_opt.get_specific_overlap_is_use_bf = 0; //////sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());   
+
+
+
+
+
     detect_chimeric_reads_conservative(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);  // detect_chimeric_reads(sources, n_read, readLen, coverage_cut, asm_opt.max_ov_diff_final * 2.0);
     ma_hit_cut(sources, n_read, readLen, mini_overlap_length, &coverage_cut);
     ma_hit_flt(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
-    asm_opt.get_specific_overlap_is_use_bf = 0;
-    hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
-    hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+    if (!asm_opt.no_containedreads_heuristics){
+        asm_opt.get_specific_overlap_is_use_bf = 0;
+        hamt_hit_contained_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+        hamt_hit_contained_drop_singleton_multi(sources, reverse_sources, n_read, readLen, coverage_cut);
+    } else {
+        fprintf(stderr, "[M::%s] skipped conatined reads sparing heuristics.\n", __func__);
+    }
 
-    asm_opt.get_specific_overlap_is_use_bf = 0; //////sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  // hamt_threaded_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex);  // TODO
-    asm_opt.get_specific_overlap_is_use_bf = 0;
+    hamt_ma_hit_contained_advance(sources, n_read, coverage_cut, ruIndex, max_hang_length, mini_overlap_length);  
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
+
+    // cleanup unuseful index
+    destroy_paf_ct_v(pafidx_cis);
+    destroy_paf_ct_v(pafidx_trans);
 
     sg = ma_sg_gen(sources, n_read, coverage_cut, max_hang_length, mini_overlap_length);
 
@@ -30228,6 +30321,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     asg_cut_tip(sg, asm_opt.max_short_tip);
     
     fprintf(stderr, "[M::%s] ====== initial clean ======\n", __func__);
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
     if(clean_round > 0)
     {
         double cut_step;
@@ -30302,7 +30396,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     asg_arc_del_simple_circle_untig(sources, coverage_cut, sg, 100, 0);
 
     fprintf(stderr, "\n\n********** checkpoint: r_utg **********\n");
-
+    fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
     if ((asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.write_new_graph_bins)
     {
         /*******************************for debug***************************************/
@@ -30333,7 +30427,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             double time;
             hamt_asg_reset_seq_label(sg, 0);
 
-            int cleanID = 0;
 
             hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
@@ -30346,7 +30439,8 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // topo pre clean
             fprintf(stderr, "[M::%s] ======= preclean =======\n", __func__);
-            int acc = 0;
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+            acc = 0;
             for (int i=0; i<10; i++){
                 time = Get_T();
                 if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "before_initTopo_clnA", cleanID);}
@@ -30382,6 +30476,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             
             fprintf(stderr, "\n\n********** checkpoint: p_utg **********\n\n");
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "p_utg", "utg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, -1);
 
@@ -30437,6 +30532,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // resolve complex bubble
             fprintf(stderr, "\n\n[M::%s] ======= complex bubbles =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             int nb_complex_bubble_cut;
             for (int round_resolve=0; round_resolve<5; round_resolve++){
                 time = Get_T();
@@ -30465,6 +30561,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
             }
 
             fprintf(stderr, "\n\n[M::%s] ======= circle cut and topo cleans =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             time = Get_T();
             {
                 int tot=0;
@@ -30477,17 +30574,27 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] treated %d, used %.1fs\n", __func__, tot, Get_T()-time);
             }
-
+            if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
+                hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
+            }
+probe:
+            if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+            hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             // resolve tangle
             fprintf(stderr, "\n\n[M::%s] ======= tangles =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             int nb_tangle_cut, nb_tip;
-            for (int round_resolve=0; round_resolve<5; round_resolve++){
+            for (int round_resolve=0; round_resolve<5; ){
                 time = Get_T();
+                round_resolve++;
                 /*if (asm_opt.write_debug_gfa)*/ {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
                 
                 time = Get_T();
-                // nb_tangle_cut = hamt_ug_resolveTangles(sg, hamt_ug, 0, 1);
-                hamt_ug_resolveTangles_threaded(sg, hamt_ug, asm_opt.thread_num, 0, round_resolve);
+                nb_tangle_cut = hamt_ug_resolveTangles_threaded(sg, hamt_ug, asm_opt.thread_num, 0, round_resolve);
+                if (nb_tangle_cut>0) {
+                    round_resolve--;
+                    fprintf(stderr, "[M::%s] segment #1: will extend one round\n", __func__);
+                }
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #1: %.1fs\n", __func__, Get_T()-time);
 
@@ -30505,14 +30612,17 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #4: %.1fs\n", __func__, Get_T()-time);
 
-                if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before-brute", cleanID); cleanID++;}
-                
                 time = Get_T();
                 hamt_ug_drop_redundant_nodes_bruteforce(sg, hamt_ug, 200000, 0, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 hamt_circle_cleaning(sg, hamt_ug, 0);
                 hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
                 fprintf(stderr, "[M::%s] segment #5: %.1fs\n", __func__, Get_T()-time);
+
+                time = Get_T();
+                nb_tangle_cut += hamt_ug_disconnect_long_contig_pairs_by_cov(sg, hamt_ug); 
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+                fprintf(stderr, "[M::%s] segment #6: %.1fs\n", __func__, Get_T()-time);
 
                 fprintf(stderr, "[M::%s] round %d, cut %d, used %.1fs\n", __func__, round_resolve, nb_tangle_cut, Get_T()-time);
                 if (nb_tangle_cut==0){
@@ -30522,6 +30632,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             // rescues
             fprintf(stderr, "\n\n[M::%s] ======= rescues and coverage-based cut =======\n", __func__);
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
             time = Get_T();
             {
                 int tot=0;
@@ -30600,6 +30711,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
         }  
 
         fprintf(stderr, "\n\n********** checkpoint: p_ctg **********\n\n");
+        fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
         // p_ctg and a_ctg
         if (!asm_opt.is_use_exp_graph_cleaning){
@@ -30621,52 +30733,34 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 0);
             hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "a_ctg", "ctg",
                                      sources, ruIndex, max_hang_length, mini_overlap_length, 1);
-            if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
-                hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
-            }
+            //if (asm_opt.do_probe_gfa<0){  // --probe-gfa specified but bin files do no yet exist
+            //    hamt_write_debug_graph(sg, sources, coverage_cut, output_file_name, n_read, reverse_sources, ruIndex);
+            //}
             
             fprintf(stderr, "\n\n********** checkpoint: post-assembly **********\n\n");
-
-            // path finding-based circle rescue
-            kvec_asg_arc_t_warp new_rtg_edges;
-            kv_init(new_rtg_edges.a);
-            ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
-                      sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
-            hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
-            kv_destroy(new_rtg_edges.a);
-
-
-            // post pctg fixes (trinucleotide profiles etc)
-probe:
-            ;
-#if 0
-            if (debug_g && (asm_opt.do_probe_gfa==1)){  // we got here by `goto`, need to generate ug
-                hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
-                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);  // lazy way of initing the trailing subgraph IDs
+//probe:
+            fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
+            if (!asm_opt.no_post_assembly_binning){
+                if (!hamt_ug) hamt_ug = hamt_ug_gen(sg, coverage_cut, sources, ruIndex, 0);
+                hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
+    
+                // path finding-based circle rescue
+                kvec_asg_arc_t_warp new_rtg_edges;
+                kv_init(new_rtg_edges.a);
+                ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
+                          sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
+                long_tigs_in_resuce = hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
+                kv_destroy(new_rtg_edges.a);
+                
+                // simple binning
+                hamt_simple_binning(hamt_ug, long_tigs_in_resuce, asm_opt.thread_num, 
+                        asm_opt.output_file_name, asm_opt.write_binning_fasta);
+                kv_destroy(*long_tigs_in_resuce);
+            }else{
+                fprintf(stderr, "[M::%s] skipped binning. \n", __func__);
             }
-            for (int i=0; i<5; i++){
-                fprintf(stderr, "========================%d\n", i);
-                if (hamt_ug_popLooseTangles(sg, hamt_ug, 30000)){
-                    hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-                }else{break;}
-            }
-            hamt_ug_popLooseTangles_v2(sg, hamt_ug, 10);
-            // for (int i=0; i<3; i++){
-            //     hamt_ug_seq_simple(sg, hamt_ug, coverage_cut, sources, ruIndex, max_hang_length, mini_overlap_length);
-            //     if (!hamt_ug_finalprune(sg, hamt_ug)) {
-            //         fprintf(stderr, "[M::%s] leave final aggresive cleaning (i=%d)\n", __func__, i);
-            //         break;
-            //     }
-            //     hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
-            // }
-            // hamt_ug_destroy(hamt_ug);
-            
 
-            // hamt_output_unitig_graph_advance(sg, coverage_cut, asm_opt.output_file_name, "post_ctg", "ctg",
-            //                          sources, ruIndex, max_hang_length, mini_overlap_length, 0);
-            hamt_output_unitig_graph_advance_debug(sg, hamt_ug, coverage_cut, asm_opt.output_file_name, "post_ctg", "ctg",
-                                     sources, ruIndex, max_hang_length, mini_overlap_length, 0);
-#endif
+
         if (hamt_ug) {hamt_ug_destroy(hamt_ug);}
         else {fprintf(stderr, "WARNING: ug did not exist, were you using --probe-gfa?\n");}
         }
@@ -30701,15 +30795,19 @@ long long bubble_dist, int read_graph, int write)
     if ( (asm_opt.flag & HA_F_VERBOSE_GFA) || asm_opt.do_probe_gfa)
     {
         fprintf(stderr, "try loading bin files of assembly graph...\n");
+        fflush(stderr);
         if(asm_opt.do_probe_gfa){
-            loaded_debug_gfa = hamt_load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);    
+            loaded_debug_gfa = hamt_load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.probebin_base_name, &reverse_sources, &ruIndex, n_read);    
             if (!loaded_debug_gfa){  // fallback
                 fprintf(stderr, "--probe-gfa loading failed, fallback to try --dbg-gfa...\n");
                 asm_opt.do_probe_gfa = -1;
                 loaded_debug_gfa = load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);
             }
         }else{
+            double T = Get_T();
             loaded_debug_gfa = load_debug_graph(&sg, &sources, &coverage_cut, asm_opt.bin_base_name, &reverse_sources, &ruIndex, n_read);
+            fprintf(stderr, "[M::%s] load_debug_graph(--dbg-gfa) used %.2f s\n", 
+                    __func__, Get_T()-T); fflush(stderr);
         }
         if(loaded_debug_gfa)
         {

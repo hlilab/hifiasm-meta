@@ -300,10 +300,20 @@ void write_All_reads(All_reads* r, char* read_file_name)
 
 	//  hamt modification - include misc info at the end of bin files
 	char* str_cmd = (char*)malloc(1000*sizeof(char));
+    int str_cmd_l = 999;
 	sprintf(str_cmd, "hamt version=%s, ha base version=%s, ", HAMT_VERSION, HA_VERSION);
 	sprintf(str_cmd+strlen(str_cmd), "CMD=");
-	for (int j = 0; j < asm_argcv.ha_argc; ++j)
-		sprintf(str_cmd+strlen(str_cmd), " %s", asm_argcv.ha_argv[j]);
+    {
+        int acc =0;
+    	for (int j = 0; j < asm_argcv.ha_argc; ++j){
+            acc+= strlen(asm_argcv.ha_argv[j]);
+            if (acc>=str_cmd_l){
+                str_cmd_l =  str_cmd_l  + (str_cmd_l >>1);
+                str_cmd = (char*)realloc(str_cmd, str_cmd_l);
+            }
+	    	sprintf(str_cmd+strlen(str_cmd), " %s", asm_argcv.ha_argv[j]);
+        }
+    }
 	
 	// get local time
 	time_t rawtime;

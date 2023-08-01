@@ -491,6 +491,39 @@ ha_ovec_buf_t *ha_ovec_init(int is_final, int save_ov)
 	return b;
 }
 
+void hamt_ovec_shrink_clist(Candidates_list *cl, 
+                        long long cl_size, 
+                        long long chain_size){  // Candidates_list
+    if (chain_size>0 && chain_size<cl->chainDP.size){
+        resize_Chain_Data(&cl->chainDP, chain_size);
+    }
+    if (cl_size<cl->size){
+        cl->size = cl_size;
+        REALLOC(cl->list, cl_size);
+        cl->length = cl->length>cl_size? cl_size : cl->length;
+    }
+}
+void hamt_ovec_shrink_olist(overlap_region_alloc *ol, 
+                        long long ol_size){  // overlap_region_alloc
+    if (ol_size>=ol->size) 
+        return;
+    for (long long i=ol_size+1; i<ol->size; i++){
+        destory_fake_cigar(&ol->list[i].f_cigar);
+        destory_window_list_alloc(&ol->list[i].boundary_cigars);
+        if (ol->list[i].w_list_size!=0)
+            free(ol->list[i].w_list);
+    }
+    REALLOC(ol->list, ol_size);
+    ol->size = ol_size;
+    ol->length = ol->length>ol_size? ol_size : ol->length;
+}
+void ha_ovec_simple_shrink_alloc(ha_ovec_buf_t *b, 
+                                long long target_size){
+    hamt_ovec_shrink_clist(&b->clist, target_size, -1);
+    hamt_ovec_shrink_olist(&b->olist, target_size);
+    hamt_ovec_shrink_olist(&b->olist_hp, target_size);
+}
+
 void ha_ovec_destroy(ha_ovec_buf_t *b)
 {
 	destory_UC_Read(&b->self_read);
@@ -534,6 +567,11 @@ int64_t ha_ovec_mem(const ha_ovec_buf_t *b)
 {
 	int64_t i, mem = 0, mem_clist, mem_olist;
 	mem_clist = b->clist.size * sizeof(k_mer_hit) + b->clist.chainDP.size * 7 * 4;
+
+    //fprintf(stderr, "[dbg::%s] window_list size: %d\n", __func__, (int)sizeof(window_list));
+    //fprintf(stderr, "[dbg::%s] olist size: %d \n", __func__, (int)b->olist.size);
+    int tot1 = 0, tot2 = 0, tot3 = 0;
+
     
 	mem_olist = b->olist.size * sizeof(overlap_region);
 	for (i = 0; i < (int64_t)b->olist.size; ++i) {
@@ -541,7 +579,11 @@ int64_t ha_ovec_mem(const ha_ovec_buf_t *b)
 		mem_olist += r->w_list_size * sizeof(window_list);
 		mem_olist += r->f_cigar.size * 8;
 		mem_olist += r->boundary_cigars.size * sizeof(window_list);
+        tot1 += r->w_list_size;
+        tot2 += r->f_cigar.size;
+        tot3 += r->boundary_cigars.size;
 	}
+    //fprintf(stderr, "[dbg::%s] sizes: %d %d %d\n", __func__, tot1, tot2, tot3);
     mem_olist += b->olist_hp.size * sizeof(overlap_region);
 	for (i = 0; i < (int64_t)b->olist_hp.size; ++i) {
 		const overlap_region *r = &b->olist_hp.list[i];
@@ -627,6 +669,17 @@ static void worker_ovec(void *data, long i, int tid)
 	int fully_cov, abnormal;
     int e1, e2;
 
+    // shrink buffer when it is too large - most reads shouldn't have too many overlaps
+    // TODO: arbitrary is bad, find a way to determine when to realloc
+    // TODO: using asm_opt directly is not ideal
+    int realloc_thre = asm_opt.max_n_chain*16 > 64? asm_opt.max_n_chain*16 : 64 ;
+    if (b->olist.size>realloc_thre){
+        //fprintf(stderr, "[dbg::%s] thread %d, shrink: %d -> %d\n", __func__, 
+        //        tid, (int)b->olist.size, realloc_thre);
+        ha_ovec_simple_shrink_alloc(b, realloc_thre);
+    }
+
+
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 
     0.02, asm_opt.max_n_chain, 1, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,
     tid);
@@ -667,7 +720,7 @@ static void worker_ovec(void *data, long i, int tid)
     //     R_INF.trio_flag[i] += collect_hp_regions(&b->olist, &R_INF, &(b->k_flag), RESEED_HP_RATE, Get_READ_LENGTH(R_INF, i), NULL);
     // }
 
-    if (R_INF.trio_flag[i] != AMBIGU || b->save_ov) {
+    if (R_INF.trio_flag[i] != AMBIGU || b->save_ov) {  // save_ov: is set only in last ovlp round and the final round
 		int is_rev = (asm_opt.number_of_round % 2 == 0);
 		push_overlaps(&(R_INF.paf[i]), &b->olist, 1, &R_INF, is_rev);
 		push_overlaps(&(R_INF.reverse_paf[i]), &b->olist, 2, &R_INF, is_rev);
@@ -675,6 +728,8 @@ static void worker_ovec(void *data, long i, int tid)
     // char *debug = hamt_debug_get_phasing_variant(b, i);
     // fprintf(stderr, "%s", debug);
     // free(debug);
+    //fprintf(stderr, "[dbg::%s] read %d (%d): %f | ~\n", __func__, 
+    //        (int)i, (int)b->olist.length, Get_U());
 }
 
 
@@ -1500,6 +1555,17 @@ static void worker_ov_final(void *data, long i, int tid)
 {
     if (R_INF.mask_readnorm[i] & 1) return;  // meta hamt
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
+
+
+    // shrink buffer when it is too large - most reads shouldn't have too many overlaps
+    // TODO: arbitrary is bad, find a way to determine when to realloc
+    // TODO: using asm_opt directly is not ideal
+    int realloc_thre = asm_opt.max_n_chain*16 > 64? asm_opt.max_n_chain*16 : 64 ;
+    if (b->olist.size>realloc_thre){
+        //fprintf(stderr, "[dbg::%s] thread %d, shrink: %d -> %d\n", __func__, 
+        //        tid, (int)b->olist.size, realloc_thre);
+        ha_ovec_simple_shrink_alloc(b, realloc_thre);
+    }
 
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, 0.001, 
     asm_opt.max_n_chain, 0, &(b->k_flag), &b->r_buf, &(R_INF.paf[i]), &(R_INF.reverse_paf[i]), &(b->tmp_region), NULL,

@@ -12986,6 +12986,27 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
             }
         }
     }
+
+    // check if skipping tsne
+    if (nl.n - 1 < 3 * asm_opt.tsne_perplexity){
+        fprintf(stderr, "[M::%s] Too few contigs, skip tsne binning.\n", __func__);
+        // cleanup
+        kv_destroy(nl);
+        // (dummy output files)
+        char *fn = (char*)malloc(strlen(output_prefix)+20);
+        assert(fn);
+        sprintf(fn, "%s.bins.tsv", output_prefix);
+        FILE *fp = fopen(fn, "w"); 
+        assert(fp);
+        fclose(fp);
+        if (write_binning_fasta){
+            sprintf(fn, "%s.bins", output_prefix);
+            mkdir(fn, S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH);  // 755
+        }
+        free(fn);
+        return;
+    }
+
     fprintf(stderr, "[M::%s] Will try to bin on %d contigs (skipped %d because blacklist).\n", 
             __func__, (int)nl.n, (int)blacklist->n);
     radix_sort_ovhamt64(nl.a, nl.a+nl.n);

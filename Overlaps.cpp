@@ -30261,10 +30261,10 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
     asm_opt.get_specific_overlap_is_use_bf = 0; 
     //sort_paf_buffers_by_targetID(sources, n_read); sort_paf_buffers_by_targetID(reverse_sources, n_read);
-    //hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
-    //hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
-    hamt_normalize_paf(sources, pafidx_cis, n_read, asm_opt.thread_num);
-    hamt_normalize_paf(reverse_sources, pafidx_trans, n_read, asm_opt.thread_num);
+    hamt_normalize_ma_hit_t_single_side_advance(sources, n_read);
+    hamt_normalize_ma_hit_t_single_side_advance(reverse_sources, n_read);
+    //hamt_normalize_paf(sources, pafidx_cis, n_read, asm_opt.thread_num);
+    //hamt_normalize_paf(reverse_sources, pafidx_trans, n_read, asm_opt.thread_num);
     fprintf(stderr, "[M::%s] (peak RSS so far: %.1f GB)\n", __func__, Get_U());
 
     memset(R_INF.trio_flag, AMBIGU, R_INF.total_reads*sizeof(uint8_t));

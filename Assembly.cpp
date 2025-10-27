@@ -604,16 +604,6 @@ int64_t ha_ovec_mem(const ha_ovec_buf_t *b)
 	return mem;
 }
 
-static void worker_read_selection_by_est_ov(void *data, long i, int tid){
-    // collect the number of overlap targets for each read but don't do any alignment
-    // we want to limit ovec to an affordable volume, AND want to drop as less reads as possible
-    if (R_INF.mask_readnorm[i] & 1) return;   // hamt
-    UC_Read ucr;
-    init_UC_Read(&ucr);
-    recover_UC_Read(&ucr, &R_INF, i);
-    hamt_count_new_candidates(i, &ucr, &R_INF, 0);
-    destory_UC_Read(&ucr);
-}
 
 static void worker_read_selection_by_est_ov_v2(void *data, long i, int tid){
     // FUNC
@@ -662,7 +652,7 @@ void hamt_ovecinfo_workerpush(ovecinfo_v *v, long readID, overlap_region_alloc* 
 static void worker_ovec(void *data, long i, int tid)
 {
     /////////// meta ///////////////
-    if (R_INF.mask_readnorm[i] & 1) return;
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i] & 1) ) return;
     // (this relies on malloc_all_reads to ensure every location is accessible. I think there's no malloc happening in worker_ovec.)
     ////////////////////////////////
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
@@ -735,7 +725,7 @@ static void worker_ovec(void *data, long i, int tid)
 
 static void worker_ovec_related_reads(void *data, long i, int tid)
 {
-    if (R_INF.mask_readnorm[i] & 1){
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i] & 1) ){
         return;
     }
 
@@ -869,10 +859,7 @@ typedef struct {
 
 static void worker_ec_save(void *data, long i, int tid)
 {
-    /////////// meta ///////////////
-    if (R_INF.mask_readnorm[i] & 1) return;
-    // (this relies on malloc_all_reads to ensure every location is accessible. I think there's no malloc happening in worker_ovec.)
-    ////////////////////////////////
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i] & 1)) return;
 	ha_ecsave_buf_t *e = (ha_ecsave_buf_t*)data + tid;
 
 	Cigar_record cigar;
@@ -908,7 +895,7 @@ static void worker_ec_save(void *data, long i, int tid)
 	cigar.record = R_INF.second_round_cigar[i].record;
 	cigar.lost_base = R_INF.second_round_cigar[i].lost_base;
 
-    if (!(R_INF.mask_readnorm[i] & 1)){  ///// todo: commenting this out will break other hifiasm debug functions....
+    if (!R_INF.mask_readnorm || (!(R_INF.mask_readnorm[i] & 1))){ 
         get_corrected_read_from_cigar(&cigar, e->first_round_read, first_round_read_length, e->second_round_read, &second_round_read_length);
 
         new_read = e->second_round_read;
@@ -1033,7 +1020,7 @@ int hamt_pre_ovec_v2(int threshold){
         fprintf(stderr, "[prof::%s]     ~ done supervised: %.2f s\n", __func__, Get_T()-t_profiling); t_profiling = Get_T();
         ret = 0;
         for (int idx_read=0; idx_read<R_INF.total_reads; idx_read++){  // check if we've dropped any read
-            if (R_INF.mask_readnorm[idx_read]&1){
+            if (R_INF.mask_readnorm && (R_INF.mask_readnorm[idx_read]&1) ){
                 ret = 1;
                 break;
             }
@@ -1393,7 +1380,7 @@ void ha_print_ovlp_stat(ma_hit_t_alloc* paf, ma_hit_t_alloc* rev_paf, long long 
 
 	no_l_indel = forward = reverse = exact = strong = weak = 0;
 	for (i = 0; i < readNum; i++) {
-        if (R_INF.mask_readnorm[i] & 1) continue;
+        if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i] & 1) ) continue;
 		forward += paf[i].length;
 		reverse += rev_paf[i].length;
 		for (j = 0; j < paf[i].length; j++) {
@@ -1553,7 +1540,7 @@ UC_Read* g_read, UC_Read* overlap_read, uint8_t* c2n)
 
 static void worker_ov_final(void *data, long i, int tid)
 {
-    if (R_INF.mask_readnorm[i] & 1) return;  // meta hamt
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i] & 1) ) return;  // meta hamt
 	ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
 
@@ -1640,7 +1627,7 @@ void debug_affine_gap_alignment(overlap_region_alloc *overlap_list, UC_Read* g_r
 
 static void worker_ov_final_high_het(void *data, long i, int tid)
 {
-    if (R_INF.mask_readnorm[i] & 1) return;  // meta hamt
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i] & 1) ) return;  // meta hamt
     ha_ovec_buf_t *b = ((ha_ovec_buf_t**)data)[tid];
 
     ha_get_candidates_interface(b->ab, i, &b->self_read, &b->olist, &b->olist_hp, &b->clist, HIGH_HET_ERROR_RATE, 
@@ -2170,7 +2157,7 @@ int hamt_assemble(void)
 
             assert((!R_INF.is_has_nothing) && R_INF.is_has_lengths && (!R_INF.is_all_in_mem));
             // at this point we should have seq lengths, but not the reads (will be read by ha_pt_gen)
-            memset(R_INF.mask_readnorm, 0, R_INF.total_reads*1 );
+            //memset(R_INF.mask_readnorm, 0, R_INF.total_reads*1 );
         }else{  // read selection
             hamt_flt_withsorting(&asm_opt, &R_INF);
             fprintf(stderr, "[M::%s] read kmer stats collected.\n", __func__);

@@ -11,11 +11,13 @@ void hamt_dump_read_selection_mask_runtime(hifiasm_opt_t *asm_opt, All_reads *rs
 
     char *readname_s = (char*)malloc(100);
     int readname_l;
-    for (uint64_t i=0; i<rs->total_reads; i++){
-        readname_l = rs->name_index[i+1]-rs->name_index[i];
-        memcpy(readname_s, &rs->name[rs->name_index[i]], readname_l);
-        readname_s[readname_l] = '\0';
-        fprintf(fp, "%s\t%d\t%d\t%f\t%d\n", readname_s, (int)rs->mask_readnorm[i], (int)rs->median[i], rs->std[i], (int)rs->lowq[i]);
+    if (rs->mask_readnorm){
+        for (uint64_t i=0; i<rs->total_reads; i++){
+            readname_l = rs->name_index[i+1]-rs->name_index[i];
+            memcpy(readname_s, &rs->name[rs->name_index[i]], readname_l);
+            readname_s[readname_l] = '\0';
+            fprintf(fp, "%s\t%d\t%d\t%f\t%d\n", readname_s, (int)rs->mask_readnorm[i], (int)rs->median[i], rs->std[i], (int)rs->lowq[i]);
+        }
     }
 
     fclose(fp);
@@ -52,11 +54,13 @@ void hamt_dump_read_selection_mask(hifiasm_opt_t *asm_opt, All_reads *rs){
     char *readname_s = (char*)malloc(100);
     int readname_l;
     FILE *fp = fopen(output_file_name, "w");
-    for (uint64_t i=0; i<rs->total_reads; i++){
-        readname_l = rs->name_index[i+1]-rs->name_index[i];
-        memcpy(readname_s, &rs->name[rs->name_index[i]], readname_l);
-        readname_s[readname_l] = '\0';
-        fprintf(fp, "%s\t%d\t%d\t%f\n", readname_s, (int)rs->mask_readnorm[i], (int)rs->median[i], rs->std[i]);
+    if (rs->mask_readnorm){
+        for (uint64_t i=0; i<rs->total_reads; i++){
+            readname_l = rs->name_index[i+1]-rs->name_index[i];
+            memcpy(readname_s, &rs->name[rs->name_index[i]], readname_l);
+            readname_s[readname_l] = '\0';
+            fprintf(fp, "%s\t%d\t%d\t%f\n", readname_s, (int)rs->mask_readnorm[i], (int)rs->median[i], rs->std[i]);
+        }
     }
 
     fclose(fp);
@@ -71,7 +75,7 @@ void hamt_dump_selected_read_names(hifiasm_opt_t *asm_opt, All_reads *rs){
     FILE *fp = fopen(base_name, "w");
     int tot = 0;
     for (uint64_t i=0; i<rs->total_reads; i++){
-        if (rs->mask_readnorm[i]&1){continue;}
+        if (rs->mask_readnorm && (rs->mask_readnorm[i]&1) ) {continue;}
         fprintf(fp, "%.*s\n", (int)Get_NAME_LENGTH((*rs), i), Get_NAME((*rs), i));
         tot++;
     }

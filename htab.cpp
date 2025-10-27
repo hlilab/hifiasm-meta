@@ -540,7 +540,7 @@ KSEQ_INIT(gzFile, gzread)
 typedef struct { // global data structure for kt_pipeline()
 	const yak_copt_t *opt;
 	const void *flt_tab;
-	int flag, create_new, is_store;
+	int flag, create_new;
 	uint64_t n_seq; ///number of total reads
 	kseq_t *ks;
 	UC_Read ucr;
@@ -607,7 +607,7 @@ static void worker_count_step2sub_worker(void *data, long i, int tid){  // kt_fo
 	st_data_t *s = pp->s;
 
 	// handle read selection mask
-	if (p->flag & HAMTF_HAS_MARKS){
+	if (p->rs->mask_readnorm && (p->flag & HAMTF_HAS_MARKS) ){
 		uint64_t rid = s->n_seq0+i;
 		assert(rid<R_INF.total_reads);
 		assert(rid<p->rs->hamt_stat_buf_size);
@@ -631,7 +631,6 @@ static void worker_count_step2sub_worker(void *data, long i, int tid){  // kt_fo
 				ct_insert_buf(s->threaded_buf[tid], p->opt->pre, s->mz[i].a[j].x);
 		}
 	}
-	if (!p->is_store) free(s->seq[i]);
 }
 void worker_count_step2sub(pl_data_t *p, st_data_t *s, int nb_cpu){
 	int is_use_minimizer = !(p->opt->w==1);
@@ -1173,7 +1172,6 @@ typedef struct {  // global data structure for pipeline (pl_data_t)
 	kseq_t *ks;
 	ha_ct_t *h;  // counted kmer tables (equals to the h from 1st call of ha_count in vanilla hifiasm)
 	uint16_t *buf;  // for round 0; uint16 because yak_ct_t use 12 bits for counting
-	// int flag, create_new, is_store;
 	int round;
 	ha_ct_t *hd;// "hashtables for read drop": the runtime kmer counts
 
@@ -1229,7 +1227,7 @@ void worker_process_one_read_HPC(plmt_step_t *s, int idx_seq){
 		{rid = s->n_seq0+idx_seq;}
 	else  // TODO: is legacy
 		{rid = s->RIDs[idx_seq];}
-	uint16_t *buf = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // buffer used in the 0th round
+	uint16_t *buf = (uint16_t*)calloc(s->len[idx_seq], sizeof(uint16_t));  // buffer used in the 0th round
 	int k = s->p->opt->k;
 	ha_ct_t *h = s->p->h;
 
@@ -1263,17 +1261,19 @@ void worker_process_one_read_HPC(plmt_step_t *s, int idx_seq){
 		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
 	}
 
-	double mean = meanl(buf, idx);
-	double std = stdl(buf, idx, mean);
-	radix_sort_hamt16(buf, buf+idx);
-	uint16_t median = (uint16_t)buf[idx/2];
-	uint16_t lowq = (uint16_t)buf[idx/10];
-	// uint8_t code = decide_category(mean, std, buf, idx);
-	s->p->rs_out->mean[rid] = mean;
-	s->p->rs_out->median[rid] = median;
-	s->p->rs_out->lowq[rid] = lowq;
-	s->p->rs_out->std[rid] = std;
-	s->p->rs_out->mask_readtype[rid] = /*code*/ 0;
+	if (s->p->rs_out->mask_readtype){
+		double mean = meanl(buf, idx);
+		double std = stdl(buf, idx, mean);
+		radix_sort_hamt16(buf, buf+idx);
+		uint16_t median = (uint16_t)buf[idx/2];
+		uint16_t lowq = (uint16_t)buf[idx/10];
+		// uint8_t code = decide_category(mean, std, buf, idx);
+		s->p->rs_out->mean[rid] = mean;
+		s->p->rs_out->median[rid] = median;
+		s->p->rs_out->lowq[rid] = lowq;
+		s->p->rs_out->std[rid] = std;
+		s->p->rs_out->mask_readtype[rid] = /*code*/ 0;
+	}
 
 	free(buf);  // sequence will be freed by the caller	
 }
@@ -1324,11 +1324,13 @@ void worker_process_one_read_noHPC(plmt_step_t *s, int idx_seq){
 	uint16_t median = (uint16_t)buf[idx/2];
 	uint16_t lowq = (uint16_t)buf[idx/10];
 	// uint8_t code = decide_category(mean, std, buf, idx);
-	s->p->rs_out->mean[rid] = mean;
-	s->p->rs_out->median[rid] = median;
-	s->p->rs_out->lowq[rid] = lowq;
-	s->p->rs_out->std[rid] = std;
-	s->p->rs_out->mask_readtype[rid] = /*code*/ 0;
+	if (s->p->rs_out->mask_readtype){
+		s->p->rs_out->mean[rid] = mean;
+		s->p->rs_out->median[rid] = median;
+		s->p->rs_out->lowq[rid] = lowq;
+		s->p->rs_out->std[rid] = std;
+		s->p->rs_out->mask_readtype[rid] = /*code*/ 0;
+	}
 
 	free(buf);  // sequence will be freed by the caller	
 }
@@ -1350,126 +1352,11 @@ static void callback_worker_process_one_read_either(void *data, long i, int tid)
 		worker_process_one_read_noHPC(d->s, i);
 }
 
-
-// single thread version (deprecated)
-#if 0
-void worker_process_one_read_inclusive(plmt_step_t *s, int idx_seq, int round, int use_HPC){
-	// note: this function is not called by kt_for, it's linear
-	uint64_t rid = s->RIDs[idx_seq];
-	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
-		return;
-	}
-	// fprintf(stderr, "DEBUG: idx_seq is %d, rid is %d.\n", (int)idx_seq, (int)rid);
-	static int flag_round0_said_warning = 0;
-	static int flag_round1_said_warning = 0;
-
-	// early termination criteria
-	if (round==0){  // keep globally infrequent reads
-		// fprintf(stderr, "[process_one_read round0 dbg] read %d, median %d, lowq %d\n", (int)rid, (int) s->p->rs_in->median[rid] , (int)s->p->rs_in->lowq[rid]);
-		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
-			if (!flag_round0_said_warning){
-				fprintf(stderr, "[W::%s] read limit reached while recruiting lowq reads. continue anyway\n", __func__);
-				flag_round0_said_warning = 1;
-			}
-		}
-		if (s->p->rs_in->median[rid]>300 || s->p->rs_in->lowq[rid]>50){
-			// fprintf(stderr, "[debug::%s] round 0, median %d, lowq %d\n", __func__, 
-			// 							(int)s->p->rs_in->median[rid],
-			// 							(int)s->p->rs_in->lowq[rid]);
-			return ;
-		}
-		// fprintf(stderr, "[debug::%s] kept a read\n", __func__);
-	} else if (round==1){  // recruit remaining reads
-		// fprintf(stderr, "round1DEBUG: read %d, round %d, median %d, lowq %d.\n", (int)rid, round, (int)s->p->rs_in->median[rid], (int)s->p->rs_in->lowq[rid]);
-		if ((s->p->rs_in->mask_readnorm[rid] & 1)==0){  // this read is already kept
-			return ;
-		}
-		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
-			if (!flag_round1_said_warning){
-				fprintf(stderr, "[W::%s] read limit reached in round#2.\n", __func__);
-				flag_round1_said_warning = 1;
-			}
-			return ;
-		}
-	} else {
-		fprintf(stderr, "ERROR: %s invalid round.\n", __func__);
-		exit(1);
-	}
-
-	// collect kmers 
-	uint64_t *buf = (uint64_t*)malloc(sizeof(uint64_t)*s->len[idx_seq]);  
-	uint16_t *buf_norm = (uint16_t*)malloc(sizeof(uint16_t)*s->len[idx_seq]);  // runtime kmer frequency container
-	int idx_buf = 0;
-	int k = s->p->opt->k;  
-	ha_ct_t *hd = s->p->hd;
-
-	uint32_t idx = 0;  // index of kmer count in the buffer
-	khint_t key;
-	int i, l, last = -1;
-	uint64_t x[4], mask = (1ULL<<k) - 1, shift = k - 1;
-	hamt_ch_buf_t *b = 0;// uint64_t *b = 0;
-
-	for (i = l = 0, x[0] = x[1] = x[2] = x[3] = 0; i < s->len[idx_seq]; ++i) {
-		int c = seq_nt4_table[(uint8_t)s->seq[idx_seq][i]];
-		if (c < 4) { // not an "N" base
-			// if (c != last) {
-			if (c!=last || (!use_HPC)){
-				x[0] = (x[0] << 1 | (c&1))  & mask;
-				x[1] = (x[1] << 1 | (c>>1)) & mask;
-				x[2] = x[2] >> 1 | (uint64_t)(1 - (c&1))  << shift;
-				x[3] = x[3] >> 1 | (uint64_t)(1 - (c>>1)) << shift;
-				if (++l >= k){
-					uint64_t hash = yak_hash_long(x); 
-					buf[idx_buf++] = hash;
-					yak_ct_t *h_ = hd->h[hash & ((1<<hd->pre)-1)].h;  // runtime count hashtable
-					key = yak_ct_get(h_, hash>>hd->pre<<YAK_COUNTER_BITS1);
-					if (key!=kh_end(h_)){buf_norm[idx] = (kh_key(h_, key) & YAK_MAX_COUNT);}
-					else buf_norm[idx] = 1;  // because bf
-					idx++;
-				}
-				last = c;
-			}
-		} else l = 0, last = -1, x[0] = x[1] = x[2] = x[3] = 0; // if there is an "N", restart
-	}
-	
-	int flag_is_keep_read = 0;
-	if (round==0) {flag_is_keep_read = 1;}  // median has been checked upfront
-	else if (round==1){
-		radix_sort_hamt16(buf_norm, buf_norm+idx);
-		// if (buf_norm[idx/2]<=s->p->runtime_median_threshold || buf_norm[idx/10]<=150 || buf_norm[idx/20]<=80){
-		if (// buf_norm[idx/2]<=s->p->runtime_median_threshold || 
-			buf_norm[idx/10]<=s->p->asm_opt->lowq_thre_10 /*|| buf_norm[idx/20]<=s->p->asm_opt->lowq_thre_5*/){
-			flag_is_keep_read = 1;
-		}
-		// else{
-		// 	fprintf(stderr, "   debug: runtime median is %d, runtime lowq is %d, discarded. (readID %d) \n", (int)buf_norm[idx/2], (int)buf_norm[idx/10], (int)rid);
-		// }
-	}
-
-	// flip mask and update linear buffer
-	if (flag_is_keep_read){
-		s->p->rs_out->mask_readnorm[rid] = 0;
-		s->p->nb_reads_kept++;
-		for (i=0; i<idx_buf; i++){
-			b = &s->lnbuf[buf[i] & ((1<<hd->pre)-1)];// inert into linear buffer for kmer counting
-			if ((b->n+3)>=b->m){
-				b->m = b->m<16? 16 : b->m+((b->m)>>1);
-				REALLOC(b->a, b->m);
-				assert(b->a);
-			}
-			b->a[b->n++] = buf[i];
-		}
-	}
-	free(buf);
-	free(buf_norm);
-}
-#endif
-
 // threaded version of worker_process_one_read_inclusive
 void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, int use_HPC, int idx_cpu){
 	// no race, each thread has its own linear buffer.
 	uint64_t rid = s->RIDs[idx_seq];
-	if (s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
+	if (s->p->rs_in->mask_readnorm &&  s->p->rs_in->mask_readnorm[rid]==0){  // read is already kept
 		return;
 	}
 	static int flag_round0_said_warning = 0;
@@ -1487,7 +1374,7 @@ void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, 
 			return ;
 		}
 	} else if (round==1){  // recruit remaining reads
-		if ((s->p->rs_in->mask_readnorm[rid] & 1)==0){  // this read is already kept
+		if (s->p->rs_in->mask_readnorm &&  (s->p->rs_in->mask_readnorm[rid] & 1)==0){  // this read is already kept
 			return ;
 		}
 		if (s->p->nb_reads_kept>s->p->nb_reads_limit){
@@ -1560,7 +1447,9 @@ void worker_process_one_read_inclusive2(plmt_step_t *s, int idx_seq, int round, 
 
 	// flip mask and update linear buffer
 	if (flag_is_keep_read){
-		s->p->rs_out->mask_readnorm[rid] = 0;
+		if (s->p->rs_out->mask_readnorm){
+			s->p->rs_out->mask_readnorm[rid] = 0;
+		}
 		s->p->nb_reads_kept++;
 		for (i=0; i<idx_buf; i++){
 			// b = &s->lnbuf[buf[i] & ((1<<hd->pre)-1)];// inert into linear buffer for kmer counting
@@ -1820,15 +1709,17 @@ void *hamt_ft_gen(const hifiasm_opt_t *asm_opt, All_reads *rs, uint16_t coverage
 
 void debug_printstat_read_status(All_reads *rs){
 	int drp = 0, bcs_median=0, bcs_longlow=0, bcs_kmer=0, san_error = 0;
-	for (int i=0; i< (int)rs->total_reads; i++){
-		if (rs->mask_readnorm[i] & 1) drp++;
-		else{
-			if (rs->mask_readnorm[i] & HAMT_VIA_MEDIAN) bcs_median++;
-			else if (rs->mask_readnorm[i] & HAMT_VIA_LONGLOW)  bcs_longlow++;
-			else if (rs->mask_readnorm[i] & HAMT_VIA_KMER) bcs_kmer++;
-			else if (1) san_error++;
+	if (rs->mask_readnorm){
+		for (int i=0; i< (int)rs->total_reads; i++){
+			if (rs->mask_readnorm[i] & 1) drp++;
+			else{
+				if (rs->mask_readnorm[i] & HAMT_VIA_MEDIAN) bcs_median++;
+				else if (rs->mask_readnorm[i] & HAMT_VIA_LONGLOW)  bcs_longlow++;
+				else if (rs->mask_readnorm[i] & HAMT_VIA_KMER) bcs_kmer++;
+				else if (1) san_error++;
+			}
+			// printf("r#%d\t%" PRIu16 "\t%" PRIu8 "\n",i, rs->median[i], rs->mask_readnorm[i]);
 		}
-		// printf("r#%d\t%" PRIu16 "\t%" PRIu8 "\n",i, rs->median[i], rs->mask_readnorm[i]);
 	}
 	fprintf(stderr, "[DEBUGhamt::%s] total reads: %d, dropped %d.\n", __func__, (int)rs->total_reads, drp);
 	fprintf(stderr, "[DEBUGhamt::%s] retained via median: %d, via longlow: %d, via infrequent kmers %d.\n", __func__, bcs_median, bcs_longlow, bcs_kmer);
@@ -2327,7 +2218,7 @@ static void *worker_markinclude_lowq_reads(void *data, int step, void *in){  // 
 			int l;
 			readID = (uint64_t) ((uint32_t)p->rs_in->statpack[*p->n_seq]);
 
-			if ((p->rs_in->mask_readnorm[readID] & 1)==0){  // read already retained
+			if (p->rs_in->mask_readnorm && (p->rs_in->mask_readnorm[readID] & 1)==0){  // read already retained
 				*p->n_seq = *p->n_seq + 1;
 				continue;
 			}
@@ -2463,6 +2354,7 @@ void hamt_flt_withsorting(const hifiasm_opt_t *asm_opt, All_reads *rs){
 	radix_sort_hamt64(rs->statpack, rs->statpack+rs->total_reads);
 	fprintf(stderr, "[M::%s] Reads sorted. \n", __func__);
 	
+	assert(rs->mask_readnorm);
 	memset(rs->mask_readnorm, 0, rs->total_reads);
 	ha_ct_destroy(h);
 	
@@ -2472,6 +2364,7 @@ void hamt_flt_withsorting_supervised(const hifiasm_opt_t *asm_opt, All_reads *rs
 	// called by hamt_pre_ovec_v2
 	// all stats have been collected before this (global median etc + sorting by `hamt_flt_withsorting`)
 
+	assert(rs->mask_readnorm);
 	memset(R_INF.mask_readnorm, 1, R_INF.total_reads);  // we will be including reads, not excluding
 	double t_profiling = Get_T();
 
@@ -2546,11 +2439,13 @@ void hamt_flt_no_read_selection(hifiasm_opt_t *asm_opt, All_reads *rs){
 	init_All_reads(rs);
 	// exp_load_raw_reads(asm_opt, rs, 0);  // load sequences
 
-	memset(rs->mask_readnorm, 0, rs->hamt_stat_buf_size * sizeof(uint8_t));  
-	memset(rs->mask_readtype, 0, rs->hamt_stat_buf_size * sizeof(uint8_t));  
-	memset(rs->mean, 0, rs->hamt_stat_buf_size * sizeof(double));  
-	memset(rs->median, 0, rs->hamt_stat_buf_size * sizeof(uint16_t));  
-	memset(rs->std, 0, rs->hamt_stat_buf_size * sizeof(double));  
+	rs->hamt_stat_buf_size = 0;
+	free(rs->mask_readnorm); rs->mask_readnorm = 0;
+	free(rs->mask_readtype); rs->mask_readtype = 0;
+	free(rs->mean); rs->mean = 0;
+	free(rs->median); rs->median = 0;
+	free(rs->std); rs->std = 0;
+	free(rs->lowq); rs->lowq = 0;
 }
 
 void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_reads *rs){
@@ -2560,7 +2455,7 @@ void hamt_flt_no_read_selection_from_disk_sancheck(hifiasm_opt_t *asm_opt, All_r
 	//     Abort if so.
 	if (!asm_opt->is_disable_read_selection){return;}
 	for (uint64_t i=0; i<rs->total_reads; i++){
-		if (rs->mask_readnorm[i] & 1){
+		if (rs->mask_readnorm && (rs->mask_readnorm[i] & 1) ){
 			fprintf(stderr, "[E::%s] set to keep all reads, but in bin file read #%d was discarded. Aborting.\n", __func__, (int)i);
 			fflush(stderr);
 			exit(1);

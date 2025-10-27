@@ -3128,7 +3128,7 @@ static void hamt_hit_contained_drop_singleton_worker(void *data, long i_r, int t
 
     // early termination
     if (coverage_cut[i_r].del) {return;}
-    if (R_INF.mask_readnorm[i_r] & 1){return;}
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i_r] & 1)){return;}
     
     // aux
     ma_hit_t_alloc *h = &sources[i_r];
@@ -3282,7 +3282,7 @@ static void hamt_hit_contained_drop_singleton_worker_v2(void *data, long i_r, in
 
     // early termination
     if (coverage_cut[i_r].del) {return;}
-    if (R_INF.mask_readnorm[i_r] & 1){return;}
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i_r] & 1)){return;}
     if (sources[i_r].length>10) {return;}
     
     // aux
@@ -3518,7 +3518,7 @@ static void hamt_hit_contained_worker(void *data, long i_r, int tid){  // callba
     buf.n = 0;  // TODO: buffer reset, but this is ugly
     IDs_contained.n = 0;  // TODO: buffer reset, but this is ugly
 
-    if (R_INF.mask_readnorm[i_r] & 1){goto finish;}
+    if (R_INF.mask_readnorm && (R_INF.mask_readnorm[i_r] & 1)){goto finish;}
     if (verbose){
         sprintf(tmp_msg, "[debug::%s] at read %.*s, homo targets %d\n", 
                             __func__, (int)Get_NAME_LENGTH(R_INF, i_r), Get_NAME(R_INF, i_r),

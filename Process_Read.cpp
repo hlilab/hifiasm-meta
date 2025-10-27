@@ -43,7 +43,7 @@ void hamt_ovecinfo_init(){
     v->a = (ovecinfo_t*)calloc(R_INF.total_reads, sizeof(ovecinfo_t));   
 }
 void hamt_ovecinfo_destroy(ovecinfo_v *v){
-    for (int i=0; i<v->n; i++){
+    for (uint64_t i=0; i<v->n; i++){
         if (v->a[i].n>0){
             free(v->a[i].tn);
             free(v->a[i].is_match);
@@ -58,7 +58,7 @@ void hamt_ovecinfo_debugdump(hifiasm_opt_t *opt){
     FILE *fp = fopen(outname, "w");
     uint32_t qn, tn;
     uint8_t is_match;
-    for (int i=0; i<R_INF.total_reads; i++){
+    for (uint64_t i=0; i<R_INF.total_reads; i++){
         qn = (uint32_t) i;
         if (R_INF.OVEC_INF.a[i].n==0){continue;}
         for (int j=0; j<R_INF.OVEC_INF.a[i].n; j++){
@@ -79,10 +79,10 @@ void hamt_ovecinfo_write_to_disk(hifiasm_opt_t *opt){
     uint32_t qn, tn;
     uint8_t is_match;
     fwrite(&R_INF.total_reads, sizeof(R_INF.total_reads), 1, fp);
-    for (int i=0; i<R_INF.total_reads; i++){  // length of each block
+    for (uint64_t i=0; i<R_INF.total_reads; i++){  // length of each block
         fwrite(&R_INF.OVEC_INF.a[i].n, sizeof(R_INF.OVEC_INF.a[i].n), 1, fp);
     }
-    for (int i=0; i<R_INF.total_reads; i++){  // the blocks
+    for (uint64_t i=0; i<R_INF.total_reads; i++){  // the blocks
         qn = (uint32_t) i;
         if (R_INF.OVEC_INF.a[i].n==0){continue;}
         for (int j=0; j<R_INF.OVEC_INF.a[i].n; j++){
@@ -114,7 +114,7 @@ void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
 		if (opt->use_ha_bin){
 			fprintf(stderr, "[M::%s]   => ha bins, will use dummy\n", __func__);
 			R_INF.OVEC_INF.n = R_INF.OVEC_INF.m = R_INF.total_reads;
-			for (int i=0; i<R_INF.total_reads; i++){
+			for (uint64_t i=0; i<R_INF.total_reads; i++){
 				R_INF.OVEC_INF.a[i].n = 0;
 				R_INF.OVEC_INF.a[i].m = 1;
 				R_INF.OVEC_INF.a[i].tn = (uint32_t*)malloc(sizeof(uint32_t)*1);
@@ -132,13 +132,13 @@ void hamt_ovecinfo_load_from_disk(hifiasm_opt_t *opt){
 		}
 		R_INF.OVEC_INF.n = R_INF.OVEC_INF.m = total_reads;
 		flag = fread(b, sizeof(int), total_reads, fp);
-		for (int i=0; i<total_reads; i++){
+		for (uint64_t i=0; i<total_reads; i++){
 			R_INF.OVEC_INF.a[i].n = b[i];
 			R_INF.OVEC_INF.a[i].m = b[i];
 			R_INF.OVEC_INF.a[i].tn = (uint32_t*)malloc(sizeof(uint32_t)*b[i]);
 			R_INF.OVEC_INF.a[i].is_match = (uint8_t*)malloc(sizeof(uint8_t)*b[i]);
 		}
-		for (int i=0; i<total_reads; i++){
+		for (uint64_t i=0; i<total_reads; i++){
 			for (int j=0; j<b[i]; j++){
 				flag = fread(&R_INF.OVEC_INF.a[i].tn[j], sizeof(uint32_t), 1, fp);
 				flag = fread(&R_INF.OVEC_INF.a[i].is_match[j], sizeof(uint8_t), 1, fp);
@@ -164,11 +164,6 @@ void init_All_reads(All_reads* r)
 	// r->name = 0;
 	// meta
 	r->hamt_stat_buf_size = READ_INIT_NUMBER;
-	r->mean = 0;
-	r->median = 0;
-	r->std = 0;
-	r->mask_readnorm = 0;
-	r->mask_readtype = 0;
 	r->mean = (double*)calloc(r->hamt_stat_buf_size, sizeof(double));
 	r->median = (uint16_t*)calloc(r->hamt_stat_buf_size, sizeof(uint16_t));
 	r->lowq = (uint16_t*)calloc(r->hamt_stat_buf_size, sizeof(uint16_t));
@@ -228,22 +223,18 @@ void destory_All_reads(All_reads* r)
 	if (r->nb_error_corrected){
 		free(r->nb_error_corrected);
 	}
-	if (r->mean)
-		free(r->mean);
-	if (r->median)
-		free(r->median);
-	if (r->lowq)
-		free(r->lowq);
-	if (r->std)
-		free(r->std);
-	if (r->mask_readnorm)
+	if (r->mask_readnorm){  // did read selection
 		free(r->mask_readnorm);
-	if (r->mask_readtype)
 		free(r->mask_readtype);
+		free(r->mean);
+		free(r->median);
+		free(r->std);
+		free(r->lowq);
+	}
 	if (r->statpack)
 		free(r->statpack);	
 	if (r->subg_label_trail){
-		for (int i_read=0; i_read<r->total_reads; i_read++){
+		for (uint64_t i_read=0; i_read<r->total_reads; i_read++){
 			free(r->subg_label_trail->a[i_read].a);
 		}
 		free(r->subg_label_trail->a);
@@ -354,12 +345,27 @@ void write_All_reads(All_reads* r, char* read_file_name)
 
 	if (asm_opt.is_use_exp_graph_cleaning){
 		// hamt special
-		fwrite(r->mean, sizeof(double), r->total_reads, fp);
-		fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
-		fwrite(r->lowq, sizeof(uint16_t), r->total_reads, fp);
-		fwrite(r->std, sizeof(double), r->total_reads, fp);
-		fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
-		fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
+		if (r->mask_readnorm){
+			fwrite(r->mean, sizeof(double), r->total_reads, fp);
+			fwrite(r->median, sizeof(uint16_t), r->total_reads, fp);
+			fwrite(r->lowq, sizeof(uint16_t), r->total_reads, fp);
+			fwrite(r->std, sizeof(double), r->total_reads, fp);
+			fwrite(r->mask_readnorm, sizeof(uint8_t), r->total_reads, fp);
+			fwrite(r->mask_readtype, sizeof(uint8_t), r->total_reads, fp);
+		}else{  // didn't do read selection, theses buffer were deallocated, but to maintain bin file format we will write zeros (i.e. no read is dropped)
+			double *double_tmp = (double*)calloc(r->total_reads, sizeof(double));
+			uint16_t *u16_tmp = (uint16_t*)calloc(r->total_reads, sizeof(uint16_t));
+			uint8_t *u8_tmp = (uint8_t*)calloc(r->total_reads, sizeof(uint8_t));
+			fwrite(double_tmp, sizeof(double), r->total_reads, fp);
+			fwrite(u16_tmp, sizeof(uint16_t), r->total_reads, fp);
+			fwrite(u16_tmp, sizeof(uint16_t), r->total_reads, fp);
+			fwrite(double_tmp, sizeof(double), r->total_reads, fp);
+			fwrite(u8_tmp, sizeof(uint8_t), r->total_reads, fp);
+			fwrite(u8_tmp, sizeof(uint8_t), r->total_reads, fp);
+			free(double_tmp);
+			free(u16_tmp);
+			free(u8_tmp);
+		}
 
 		// hamt special 2: read error correction info
 		fwrite(r->nb_error_corrected, sizeof(uint16_t), r->total_reads, fp);
@@ -507,6 +513,10 @@ int load_All_reads(All_reads* r, char* read_file_name)
 
 	r->cigars = (Compressed_Cigar_record*)malloc(sizeof(Compressed_Cigar_record)*r->total_reads);
 	r->second_round_cigar = (Compressed_Cigar_record*)malloc(sizeof(Compressed_Cigar_record)*r->total_reads);
+	if ((!r->cigars) || (!r->second_round_cigar)){
+		fprintf(stderr, "[E::%s] failed to alloc cigars\n", __func__);
+		exit(1);
+	}
 	for (i = 0; i < r->total_reads; i++)
 	{
 		r->second_round_cigar[i].size = r->cigars[i].size = 0;
@@ -524,7 +534,8 @@ int load_All_reads(All_reads* r, char* read_file_name)
 	size_t ret = fread(&length_of_cmd, sizeof(uint16_t), 1, fp);
 	if (ret==1){
 		char* str_cmd = (char*)malloc(length_of_cmd+15);
-		fread(str_cmd, sizeof(char), length_of_cmd, fp);
+		ret = fread(str_cmd, sizeof(char), length_of_cmd, fp);
+		assert(ret);
 		str_cmd[length_of_cmd] = '\0';
 		fprintf(stderr, "%s\n", str_cmd);
 		free(str_cmd);
@@ -642,21 +653,15 @@ void ha_insert_read_len(All_reads *r, int read_len, int name_len)
 		// hamt-not-read-selection
 		// r->nb_error_corrected = (uint16_t*)realloc(r->nb_error_corrected, sizeof(uint16_t) * r->index_size);
 	}
-	if (r->hamt_stat_buf_size < r->total_reads + 2){  // because I'm doing multiple passes where only the 1st one will fill the buffers
-		// meta
+	if (r->mask_readnorm && r->hamt_stat_buf_size < r->total_reads + 2){
+		// meta, with read selection, first round of kmer counting will reach here
 		r->hamt_stat_buf_size = r->hamt_stat_buf_size * 2 + 2;
-		if (r->mean)
-			r->mean = (double*)realloc(r->mean, sizeof(double) * r->hamt_stat_buf_size);
-		if (r->median)
-			r->median = (uint16_t*)realloc(r->median, sizeof(uint16_t) * r->hamt_stat_buf_size);
-		if (r->lowq)
-			r->lowq = (uint16_t*)realloc(r->lowq, sizeof(uint16_t) * r->hamt_stat_buf_size);
-		if (r->std)
-			r->std = (double*)realloc(r->std, sizeof(double) * r->hamt_stat_buf_size);
-		if (r->mask_readnorm)
-			r->mask_readnorm = (uint8_t*)realloc(r->mask_readnorm, sizeof(uint8_t) * r->hamt_stat_buf_size);
-		if (r->mask_readtype)
-			r->mask_readtype = (uint8_t*)realloc(r->mask_readtype, sizeof(uint8_t) * r->hamt_stat_buf_size);
+		r->mean = (double*)realloc(r->mean, sizeof(double) * r->hamt_stat_buf_size);
+		r->median = (uint16_t*)realloc(r->median, sizeof(uint16_t) * r->hamt_stat_buf_size);
+		r->lowq = (uint16_t*)realloc(r->lowq, sizeof(uint16_t) * r->hamt_stat_buf_size);
+		r->std = (double*)realloc(r->std, sizeof(double) * r->hamt_stat_buf_size);
+		r->mask_readnorm = (uint8_t*)realloc(r->mask_readnorm, sizeof(uint8_t) * r->hamt_stat_buf_size);
+		r->mask_readtype = (uint8_t*)realloc(r->mask_readtype, sizeof(uint8_t) * r->hamt_stat_buf_size);
 	}
 
 	r->read_length[r->total_reads - 1] = read_len;

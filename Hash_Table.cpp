@@ -680,7 +680,7 @@ void calculate_overlap_region_by_chaining_back(Candidates_list* candidates, over
             continue;
         }
         // hamt
-        if (R_INF->mask_readnorm[current_ID] & 1) {
+        if (R_INF->mask_readnorm && (R_INF->mask_readnorm[current_ID] & 1) ) {
             hamtsan_nb_skip++;
             continue;
         }

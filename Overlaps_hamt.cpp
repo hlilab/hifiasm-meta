@@ -6440,6 +6440,8 @@ int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_lim
     float max_diff_ratio = 5;  // do no treat a pair if one of the unitig is significantly longer than the other one.
 
     asg_t *auxsg = ug->g;
+    if (auxsg->n_seq==0) return 0;
+
     uint32_t nv;
     asg_arc_t *av;
     stacku32_t *h;
@@ -6450,7 +6452,6 @@ int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_lim
     for (uint32_t i=0; i<auxsg->n_seq*2; i++){
         stacku32_init(&buf[i]);
     }
-
 
     while (ret && iter<50){
         ret = 0;
@@ -6501,6 +6502,7 @@ int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_lim
         //   we keep the one with higher coverage.
         // The requirements: (sub)equivalence, max length, max length diff ratio.
         for (uint32_t vu=0; vu<auxsg->n_seq*2-1; vu++){
+            if (buf[vu].n==0) continue;
             if (buf[vu].a[0]) continue;  // vu is ignored or has been removed
             // collect candidates            
             stacku32_reset(&candidates);
@@ -6535,6 +6537,7 @@ int hamt_ug_drop_redundant_nodes_bruteforce(asg_t *sg, ma_ug_t *ug, int size_lim
 
             for (int i_wu=0; i_wu<candidates.n; i_wu++){
                 uint32_t wu = candidates.a[i_wu];
+                if (buf[wu].n==0) continue;
                 if (buf[wu].a[0]) continue;  // wu is not considered (e.g. it's a tig) or has been removed
                 if ((vu>>1)==(wu>>1)) continue;   // skip, self comparison
                 if (verbose){
@@ -13007,7 +13010,7 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
         return;
     }
 
-    fprintf(stderr, "[M::%s] Will try to bin on %d contigs (skipped %d because blacklist).\n", 
+    fprintf(stderr, "[M::%s] May try to bin on %d contigs (skipped %d because blacklist).\n", 
             __func__, (int)nl.n, (int)blacklist->n);
     radix_sort_ovhamt64(nl.a, nl.a+nl.n);
 
@@ -13017,7 +13020,12 @@ void hamt_simple_binning(ma_ug_t *ug, vu32_t *blacklist, int n_threads,
     hamt_5NF_profile_gen(ug, nl.a, nl.n, n_threads, &pf);
 
     // call tSNE
-    double *emb = ts_fit(nl.n, 513, pf, 2, 0.5, asm_opt.tsne_perplexity, asm_opt.tsne_randomseed);
+    double *emb = 0;
+    if(nl.n < 3 * asm_opt.tsne_perplexity+1){
+        fprintf(stderr, "[M::%s] Too less nodes, skipped tSNE.\n", __func__);
+    }else{
+        emb = ts_fit(nl.n, 513, pf, 2, 0.5, asm_opt.tsne_perplexity, asm_opt.tsne_randomseed);
+    }
 
     // (debug: write embedding)
     if (verbose)

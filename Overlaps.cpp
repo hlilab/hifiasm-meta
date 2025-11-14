@@ -737,7 +737,8 @@ int hamt_read_is_contained_by_others(ma_hit_t_alloc* paf, uint32_t v, uint64_t v
     int ret = 0;
     ma_hit_t *h;
     uint32_t *buf;
-    int buf_size, buf_len;
+    int buf_size = 0;
+    int buf_len = 0;
     if (buf0) {
         buf = *buf0; 
         buf_size = *buf_size0;
@@ -2769,7 +2770,7 @@ int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, ma_hit_t_alloc *reverse_sourc
     //    Collect_sides_also_count touches only ideal hits (i.e. start is 0 or end is readlength),
     //    but here we might have to deal with erroneours reads that's not actually an end read & doesn't overlap well however.
     ma_hit_t_alloc *paf_of_read = &sources[i_read];
-    ma_hit_t_alloc *paf_of_read_rev;
+    ma_hit_t_alloc *paf_of_read_rev = 0;
     if (reverse_sources!=NULL) {paf_of_read_rev = &reverse_sources[i_read];}
     uint64_t readlength = readLen[i_read]; 
 
@@ -2813,6 +2814,7 @@ int hamt_ovlp_is_end_read(ma_hit_t_alloc* sources, ma_hit_t_alloc *reverse_sourc
         }
         // inter-haplotype
         if (reverse_sources!=NULL){
+            assert(paf_of_read_rev);
             for (int i=0; i<paf_of_read_rev->length; i++){
                 if (paf_of_read_rev->buffer[i].del) {continue;}
                 handle = &paf_of_read_rev->buffer[i];
@@ -30221,7 +30223,7 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
     int simplereport[5];
     int acc;
     int cleanID = 0;
-    vu32_t *long_tigs_in_resuce;
+    vu32_t *long_tigs_in_rescue;
     double T0;
 
     paf_ct_v *pafidx_cis, *pafidx_trans;
@@ -30482,7 +30484,6 @@ ma_sub_t **coverage_cut_ptr, int debug_g)
 
             time = Get_T();
             // cut dangling circles and inversion links
-            hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "HEYbefore_circle_cln", cleanID);
             hamt_circle_cleaning(sg, hamt_ug, 0);
             hamt_ug_regen(sg, &hamt_ug, coverage_cut, sources, ruIndex, 0);
             if (asm_opt.write_debug_gfa) {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "after_circle_cln", cleanID); cleanID++;}
@@ -30587,7 +30588,6 @@ probe:
             for (int round_resolve=0; round_resolve<5; ){
                 time = Get_T();
                 round_resolve++;
-                /*if (asm_opt.write_debug_gfa)*/ {hamtdebug_output_unitig_graph_ug(hamt_ug, asm_opt.output_file_name, "resolveTangle_before", cleanID); cleanID++;}
                 
                 time = Get_T();
                 nb_tangle_cut = hamt_ug_resolveTangles_threaded(sg, hamt_ug, asm_opt.thread_num, 0, round_resolve);
@@ -30749,13 +30749,14 @@ probe:
                 kv_init(new_rtg_edges.a);
                 ma_ug_seq(hamt_ug, sg, &R_INF, coverage_cut, 
                           sources, &new_rtg_edges, max_hang_length, mini_overlap_length);
-                long_tigs_in_resuce = hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
+                long_tigs_in_rescue = hamt_ug_opportunistic_elementary_circuits(sg, hamt_ug, asm_opt.thread_num);
                 kv_destroy(new_rtg_edges.a);
                 
                 // simple binning
-                hamt_simple_binning(hamt_ug, long_tigs_in_resuce, asm_opt.thread_num, 
+                hamt_simple_binning(hamt_ug, long_tigs_in_rescue, asm_opt.thread_num, 
                         asm_opt.output_file_name, asm_opt.write_binning_fasta);
-                kv_destroy(*long_tigs_in_resuce);
+                kv_destroy(*long_tigs_in_rescue);
+                free(long_tigs_in_rescue);
             }else{
                 fprintf(stderr, "[M::%s] skipped binning. \n", __func__);
             }

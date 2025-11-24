@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <zlib.h>
+#if defined(__linux__)
 #include <linux/types.h>
+#endif
 #include "Assembly.h"
 #include "Process_Read.h"
 #include "CommandLines.h"
